@@ -10,6 +10,14 @@ import { TILE_SIZE } from '../types'
 
 export type UnitState = 'idle' | 'moving' | 'attacking' | 'harvesting' | 'dying'
 
+/** Shift RGB channels by amount (positive = lighter, negative = darker) */
+function adjustBrightness(color: number, amount: number): number {
+  const r = Math.max(0, Math.min(255, ((color >> 16) & 0xff) + amount))
+  const g = Math.max(0, Math.min(255, ((color >> 8) & 0xff) + amount))
+  const b = Math.max(0, Math.min(255, (color & 0xff) + amount))
+  return (r << 16) | (g << 8) | b
+}
+
 // Minimal scene interface — Agent 1 will provide the concrete implementation
 export interface IRTSScene extends Phaser.Scene {
   findPath?: (from: TileCoord, to: TileCoord, playerId?: number) => TileCoord[]
@@ -566,52 +574,139 @@ export class Unit extends Phaser.GameObjects.Container {
   }
 
   private drawBody(): void {
-    this.bodyGraphic.clear()
+    const g = this.bodyGraphic
+    g.clear()
     const color = this.factionColor
+    const darker = adjustBrightness(color, -40)
+    const lighter = adjustBrightness(color, 30)
 
     if (this.def.category === 'infantry') {
-      // Small filled circle — 8px radius
-      this.bodyGraphic.fillStyle(color, 1)
-      this.bodyGraphic.fillCircle(0, 0, 8)
-      this.bodyGraphic.lineStyle(1, 0xffffff, 0.5)
-      this.bodyGraphic.strokeCircle(0, 0, 8)
+      // Legs
+      g.fillStyle(darker, 1)
+      g.fillRect(-3, 2, 2, 5)
+      g.fillRect(1, 2, 2, 5)
+      // Body (torso oval)
+      g.fillStyle(color, 1)
+      g.fillEllipse(0, 0, 10, 8)
+      // Head
+      g.fillStyle(lighter, 1)
+      g.fillCircle(0, -6, 3)
+      // Arms
+      g.lineStyle(1.5, darker, 1)
+      g.lineBetween(-5, -1, -8, 3)
+      g.lineBetween(5, -1, 8, 3)
+      // Outline
+      g.lineStyle(1, 0x000000, 0.3)
+      g.strokeEllipse(0, 0, 10, 8)
+
     } else if (this.def.category === 'aircraft') {
-      // Diamond shape for aircraft
-      this.bodyGraphic.fillStyle(color, 1)
-      this.bodyGraphic.fillTriangle(-8, 0, 0, -10, 8, 0)
-      this.bodyGraphic.fillTriangle(-8, 0, 0, 6, 8, 0)
+      // Shadow on ground
+      g.fillStyle(0x000000, 0.2)
+      g.fillEllipse(3, 5, 14, 6)
+      // Delta wing body
+      g.fillStyle(color, 1)
+      g.fillTriangle(0, -10, -10, 6, 10, 6)
+      // Fuselage
+      g.fillRect(-2, -8, 4, 12)
+      // Tail fin
+      g.fillStyle(darker, 1)
+      g.fillTriangle(-2, 4, 2, 4, 0, 8)
+      // Cockpit
+      g.fillStyle(0x88ccff, 0.7)
+      g.fillCircle(0, -4, 2)
+      // Wing edge highlight
+      g.lineStyle(1, lighter, 0.4)
+      g.lineBetween(0, -10, -10, 6)
+      g.lineBetween(0, -10, 10, 6)
+
     } else {
-      // Rectangle for vehicles / naval
-      const w = this.def.category === 'naval' ? 20 : 16
-      const h = 12
-      this.bodyGraphic.fillStyle(color, 1)
-      this.bodyGraphic.fillRect(-w / 2, -h / 2, w, h)
-      this.bodyGraphic.lineStyle(1, 0xffffff, 0.4)
-      this.bodyGraphic.strokeRect(-w / 2, -h / 2, w, h)
+      // Vehicles (tanks, APCs, harvester, naval)
+      const isHarvester = this.def.id.includes('harvester')
+      const w = isHarvester ? 22 : (this.def.category === 'naval' ? 20 : 18)
+      const h = isHarvester ? 16 : 14
+
+      // Treads
+      g.fillStyle(0x2a2a2a, 1)
+      g.fillRect(-w / 2, -h / 2, w, 3)
+      g.fillRect(-w / 2, h / 2 - 3, w, 3)
+      // Tread detail lines
+      g.lineStyle(1, 0x1a1a1a, 0.5)
+      for (let tx = -w / 2 + 3; tx < w / 2; tx += 4) {
+        g.lineBetween(tx, -h / 2, tx, -h / 2 + 3)
+        g.lineBetween(tx, h / 2 - 3, tx, h / 2)
+      }
+
+      // Main body
+      g.fillStyle(color, 1)
+      g.fillRect(-w / 2 + 2, -h / 2 + 3, w - 4, h - 6)
+      // Top highlight
+      g.lineStyle(1, lighter, 0.4)
+      g.lineBetween(-w / 2 + 2, -h / 2 + 3, w / 2 - 2, -h / 2 + 3)
+      // Bottom shadow
+      g.lineStyle(1, darker, 0.4)
+      g.lineBetween(-w / 2 + 2, h / 2 - 3, w / 2 - 2, h / 2 - 3)
+
+      if (isHarvester) {
+        // Cargo bay (dark open area in back)
+        g.fillStyle(0x1a1a1a, 0.8)
+        g.fillRect(2, -h / 2 + 4, w / 2 - 4, h - 8)
+      } else {
+        // Turret
+        g.fillStyle(lighter, 1)
+        g.fillRect(-4, -3, 8, 6)
+        // Gun barrel
+        g.fillStyle(0x3a3a3a, 1)
+        g.fillRect(-1, -8, 2, 5)
+      }
+
+      // Outline
+      g.lineStyle(1, 0x000000, 0.25)
+      g.strokeRect(-w / 2, -h / 2, w, h)
     }
   }
 
   private drawHealthBar(): void {
-    this.healthBar.clear()
+    const g = this.healthBar
+    g.clear()
     const pct = this.hp / this.def.stats.maxHp
-    const barW = 18
+    // Only show when damaged or selected
+    if (pct >= 1 && !this.isSelected) return
+    const barW = 20
     const barH = 3
     const barY = -16
 
+    // Black outline
+    g.fillStyle(0x000000, 0.9)
+    g.fillRect(-barW / 2 - 1, barY - 1, barW + 2, barH + 2)
     // Background
-    this.healthBar.fillStyle(0x333333, 0.8)
-    this.healthBar.fillRect(-barW / 2, barY, barW, barH)
-
-    // Fill
+    g.fillStyle(0x333333, 0.8)
+    g.fillRect(-barW / 2, barY, barW, barH)
+    // Gradient fill: green → yellow → red
     const barColor = pct > 0.6 ? 0x00ff44 : pct > 0.3 ? 0xffaa00 : 0xff2200
-    this.healthBar.fillStyle(barColor, 1)
-    this.healthBar.fillRect(-barW / 2, barY, barW * pct, barH)
+    g.fillStyle(barColor, 1)
+    g.fillRect(-barW / 2, barY, barW * pct, barH)
+
+    // Veterancy chevrons
+    if (this.veterancy > 0) {
+      const chevColor = this.veterancy >= 2 ? 0xffdd44 : 0x88bbff
+      g.lineStyle(1.5, chevColor, 1)
+      for (let r = 0; r < this.veterancy; r++) {
+        const ox = barW / 2 + 3 + r * 6
+        g.beginPath()
+        g.moveTo(ox, barY + barH)
+        g.lineTo(ox + 2.5, barY - 1)
+        g.lineTo(ox + 5, barY + barH)
+        g.strokePath()
+      }
+    }
   }
 
   private drawSelectionCircle(): void {
-    this.selectionCircle.clear()
+    const g = this.selectionCircle
+    g.clear()
     if (!this.isSelected) return
-    this.selectionCircle.lineStyle(2, 0x00ffff, 0.9)
-    this.selectionCircle.strokeCircle(0, 0, 14)
+    // Cyan dashed ellipse for 3/4 perspective
+    g.lineStyle(2, 0x00ffff, 0.85)
+    g.strokeEllipse(0, 2, 24, 12)
   }
 }

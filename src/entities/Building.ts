@@ -10,6 +10,13 @@ import { TILE_SIZE } from '../types'
 
 export type BuildingState = 'constructing' | 'active' | 'low_power' | 'dying'
 
+function adjustBrightness(color: number, amount: number): number {
+  const r = Math.max(0, Math.min(255, ((color >> 16) & 0xff) + amount))
+  const g = Math.max(0, Math.min(255, ((color >> 8) & 0xff) + amount))
+  const b = Math.max(0, Math.min(255, (color & 0xff) + amount))
+  return (r << 16) | (g << 8) | b
+}
+
 export class Building extends Phaser.GameObjects.Container {
   readonly id: string
   readonly playerId: number
@@ -34,6 +41,7 @@ export class Building extends Phaser.GameObjects.Container {
   private statusText: Phaser.GameObjects.Text
   private isSelected: boolean
   private factionColor: number
+  private smokeTimer = 0
 
   constructor(
     scene: Phaser.Scene,
@@ -170,8 +178,40 @@ export class Building extends Phaser.GameObjects.Container {
       return
     }
 
+    // Damage smoke when below 50% HP
+    const pct = this.hp / this.def.stats.maxHp
+    if (pct < 0.5 && pct > 0) {
+      this.smokeTimer += delta
+      const interval = pct < 0.25 ? 400 : 800
+      if (this.smokeTimer >= interval) {
+        this.smokeTimer = 0
+        this.spawnSmoke()
+      }
+    }
+
     // Production is handled by Production.ts via productionQueue
     this.updateProductionVisuals()
+  }
+
+  private spawnSmoke(): void {
+    const w = this.def.footprint.w * TILE_SIZE
+    const h = this.def.footprint.h * TILE_SIZE
+    const smoke = this.scene.add.graphics()
+    const rx = this.x + Phaser.Math.Between(-w / 3, w / 3)
+    const ry = this.y + Phaser.Math.Between(-h / 3, h / 3)
+    const size = Phaser.Math.Between(3, 7)
+    smoke.fillStyle(0x444444, 0.6)
+    smoke.fillCircle(rx, ry, size)
+    smoke.setDepth(45)
+    this.scene.tweens.add({
+      targets: smoke,
+      alpha: 0,
+      y: ry - 20,
+      scaleX: 1.5,
+      scaleY: 1.5,
+      duration: 600,
+      onComplete: () => smoke.destroy(),
+    })
   }
 
   // ── Death ────────────────────────────────────────────────────
@@ -267,23 +307,45 @@ export class Building extends Phaser.GameObjects.Container {
   // ── Private: visuals ─────────────────────────────────────────
 
   private drawBody(): void {
-    this.bodyGraphic.clear()
+    const g = this.bodyGraphic
+    g.clear()
     const w = this.def.footprint.w * TILE_SIZE
     const h = this.def.footprint.h * TILE_SIZE
     const color = this.state === 'low_power' ? 0x886644 : this.factionColor
+    const darker = adjustBrightness(color, -35)
+    const lighter = adjustBrightness(color, 25)
 
-    this.bodyGraphic.fillStyle(color, 1)
-    this.bodyGraphic.fillRect(-w / 2, -h / 2, w, h)
-    this.bodyGraphic.lineStyle(2, 0xffffff, 0.4)
-    this.bodyGraphic.strokeRect(-w / 2, -h / 2, w, h)
+    // Main body
+    g.fillStyle(color, 1)
+    g.fillRect(-w / 2, -h / 2, w, h)
 
-    // Category icon decoration
+    // 3D bevel — top and left edges lighter
+    g.lineStyle(2, lighter, 0.5)
+    g.beginPath()
+    g.moveTo(-w / 2, h / 2)
+    g.lineTo(-w / 2, -h / 2)
+    g.lineTo(w / 2, -h / 2)
+    g.strokePath()
+
+    // 3D bevel — bottom and right edges darker
+    g.lineStyle(2, darker, 0.5)
+    g.beginPath()
+    g.moveTo(w / 2, -h / 2)
+    g.lineTo(w / 2, h / 2)
+    g.lineTo(-w / 2, h / 2)
+    g.strokePath()
+
+    // Dark outline
+    g.lineStyle(1, 0x000000, 0.4)
+    g.strokeRect(-w / 2, -h / 2, w, h)
+
+    // Category icon
     this.drawCategoryIcon(w, h)
 
     // Low power indicator
     if (this.state === 'low_power') {
-      this.bodyGraphic.lineStyle(2, 0xff4400, 0.8)
-      this.bodyGraphic.strokeRect(-w / 2 + 2, -h / 2 + 2, w - 4, h - 4)
+      g.lineStyle(2, 0xff4400, 0.8)
+      g.strokeRect(-w / 2 + 2, -h / 2 + 2, w - 4, h - 4)
     }
   }
 
@@ -291,70 +353,136 @@ export class Building extends Phaser.GameObjects.Container {
     const g = this.bodyGraphic
     const hw = w / 2
     const hh = h / 2
+    const r = Math.min(w, h) * 0.2
 
     switch (this.def.category) {
       case 'power':
-        // Lightning bolt
-        g.lineStyle(2, 0xffff00, 0.9)
-        g.lineBetween(hw * 0.3, -hh * 0.5, -hw * 0.1, 0)
-        g.lineBetween(-hw * 0.1, 0, hw * 0.3, hh * 0.1)
-        g.lineBetween(hw * 0.3, hh * 0.1, -hw * 0.3, hh * 0.5)
+        // Lightning bolt ⚡
+        g.fillStyle(0xffff00, 0.85)
+        g.beginPath()
+        g.moveTo(hw * 0.15, -hh * 0.6)
+        g.lineTo(-hw * 0.2, -hh * 0.05)
+        g.lineTo(hw * 0.05, -hh * 0.05)
+        g.lineTo(-hw * 0.15, hh * 0.6)
+        g.lineTo(hw * 0.2, hh * 0.05)
+        g.lineTo(-hw * 0.05, hh * 0.05)
+        g.closePath()
+        g.fillPath()
         break
 
       case 'production':
-        // Gear-ish circle
-        g.lineStyle(1, 0xffffff, 0.5)
-        g.strokeCircle(0, 0, Math.min(w, h) * 0.2)
+        // Gear circle with teeth
+        g.lineStyle(2, 0xffffff, 0.5)
+        g.strokeCircle(0, 0, r)
+        for (let a = 0; a < 6; a++) {
+          const angle = (a / 6) * Math.PI * 2
+          const ox = Math.cos(angle) * (r + 3)
+          const oy = Math.sin(angle) * (r + 3)
+          g.fillStyle(0xffffff, 0.4)
+          g.fillRect(ox - 2, oy - 2, 4, 4)
+        }
         break
 
       case 'defense':
         // Crosshair
-        g.lineStyle(1, 0xff4444, 0.8)
+        g.lineStyle(2, 0xff4444, 0.85)
         g.lineBetween(-hw * 0.4, 0, hw * 0.4, 0)
         g.lineBetween(0, -hh * 0.4, 0, hh * 0.4)
-        g.strokeCircle(0, 0, Math.min(w, h) * 0.2)
+        g.strokeCircle(0, 0, r)
+        // Inner dot
+        g.fillStyle(0xff4444, 0.6)
+        g.fillCircle(0, 0, 2)
         break
 
       case 'tech':
-        // Antenna shape
+        // Radar dish
         g.lineStyle(2, 0x88aaff, 0.8)
-        g.lineBetween(0, 0, 0, -hh * 0.5)
-        g.lineBetween(-hw * 0.2, -hh * 0.3, hw * 0.2, -hh * 0.3)
+        g.lineBetween(0, hh * 0.1, 0, -hh * 0.5)
+        // Dish arc
+        g.beginPath()
+        g.arc(-hw * 0.25, -hh * 0.3, r, -0.8, 0.8)
+        g.strokePath()
+        // Signal lines
+        g.lineStyle(1, 0x88aaff, 0.4)
+        g.strokeCircle(hw * 0.15, -hh * 0.2, 3)
+        g.strokeCircle(hw * 0.15, -hh * 0.2, 6)
         break
 
       case 'superweapon':
-        // Star / diamond
+        // Radiation symbol
         g.lineStyle(2, 0xff8800, 0.9)
-        g.strokeCircle(0, 0, Math.min(w, h) * 0.25)
-        g.lineBetween(0, -hh * 0.45, 0, hh * 0.45)
-        g.lineBetween(-hw * 0.45, 0, hw * 0.45, 0)
+        g.strokeCircle(0, 0, r * 1.3)
+        g.fillStyle(0xff8800, 0.7)
+        g.fillCircle(0, 0, 3)
+        // Radiation segments
+        for (let a = 0; a < 3; a++) {
+          const angle = (a / 3) * Math.PI * 2 - Math.PI / 2
+          const sx = Math.cos(angle) * 5
+          const sy = Math.sin(angle) * 5
+          const ex = Math.cos(angle) * (r * 1.2)
+          const ey = Math.sin(angle) * (r * 1.2)
+          g.lineStyle(3, 0xff8800, 0.7)
+          g.lineBetween(sx, sy, ex, ey)
+        }
+        break
+
+      case 'base':
+        // Crane/gear icon
+        g.lineStyle(2, 0xffffff, 0.5)
+        g.lineBetween(-hw * 0.2, hh * 0.2, -hw * 0.2, -hh * 0.4)
+        g.lineBetween(-hw * 0.2, -hh * 0.4, hw * 0.2, -hh * 0.4)
+        g.lineBetween(hw * 0.2, -hh * 0.4, hw * 0.2, -hh * 0.1)
         break
     }
   }
 
   private drawHealthBar(): void {
-    this.healthBar.clear()
+    const g = this.healthBar
+    g.clear()
     const pct = this.hp / this.def.stats.maxHp
+    // Only show when damaged or selected
+    if (pct >= 1 && !this.isSelected) return
     const w = this.def.footprint.w * TILE_SIZE
     const barW = w - 4
     const barH = 4
-    const barY = -(this.def.footprint.h * TILE_SIZE) / 2 - 6
+    const barY = -(this.def.footprint.h * TILE_SIZE) / 2 - 8
 
-    this.healthBar.fillStyle(0x333333, 0.8)
-    this.healthBar.fillRect(-barW / 2, barY, barW, barH)
-
+    // Black outline
+    g.fillStyle(0x000000, 0.9)
+    g.fillRect(-barW / 2 - 1, barY - 1, barW + 2, barH + 2)
+    // Background
+    g.fillStyle(0x333333, 0.8)
+    g.fillRect(-barW / 2, barY, barW, barH)
+    // Fill with gradient color
     const barColor = pct > 0.6 ? 0x00ff44 : pct > 0.3 ? 0xffaa00 : 0xff2200
-    this.healthBar.fillStyle(barColor, 1)
-    this.healthBar.fillRect(-barW / 2, barY, barW * pct, barH)
+    g.fillStyle(barColor, 1)
+    g.fillRect(-barW / 2, barY, barW * pct, barH)
   }
 
   private drawSelectionOutline(): void {
-    this.selectionOutline.clear()
+    const g = this.selectionOutline
+    g.clear()
     if (!this.isSelected) return
     const w = this.def.footprint.w * TILE_SIZE + 4
     const h = this.def.footprint.h * TILE_SIZE + 4
-    this.selectionOutline.lineStyle(2, 0x00ffff, 0.9)
-    this.selectionOutline.strokeRect(-w / 2, -h / 2, w, h)
+    // Bright cyan outline
+    g.lineStyle(2, 0x00ffff, 0.9)
+    g.strokeRect(-w / 2, -h / 2, w, h)
+    // Corner accents
+    const c = 6
+    g.lineStyle(3, 0x00ffff, 1)
+    // Top-left
+    g.lineBetween(-w / 2, -h / 2 + c, -w / 2, -h / 2)
+    g.lineBetween(-w / 2, -h / 2, -w / 2 + c, -h / 2)
+    // Top-right
+    g.lineBetween(w / 2 - c, -h / 2, w / 2, -h / 2)
+    g.lineBetween(w / 2, -h / 2, w / 2, -h / 2 + c)
+    // Bottom-left
+    g.lineBetween(-w / 2, h / 2 - c, -w / 2, h / 2)
+    g.lineBetween(-w / 2, h / 2, -w / 2 + c, h / 2)
+    // Bottom-right
+    g.lineBetween(w / 2 - c, h / 2, w / 2, h / 2)
+    g.lineBetween(w / 2, h / 2, w / 2, h / 2 - c)
   }
 
   private updateProductionVisuals(): void {

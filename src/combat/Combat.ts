@@ -160,6 +160,9 @@ export class Combat extends Phaser.Events.EventEmitter {
         )
       }
     } else {
+      // Muzzle flash at attacker position
+      this.createMuzzleFlash(attacker.x, attacker.y, attack.damageType)
+
       // Spawn projectile
       this.spawnProjectile(
         attacker.x, attacker.y,
@@ -322,7 +325,7 @@ export class Combat extends Phaser.Events.EventEmitter {
         const px = Phaser.Math.Linear(p.fromX, p.toX, p.progress)
         const py = Phaser.Math.Linear(p.fromY, p.toY, p.progress)
         p.graphic.clear()
-        this.drawProjectileGraphic(p.graphic, px, py, p.attack.damageType)
+        this.drawProjectileGraphic(p.graphic, px, py, p.attack.damageType, p.fromX, p.fromY)
       }
     }
 
@@ -367,6 +370,8 @@ export class Combat extends Phaser.Events.EventEmitter {
     x: number,
     y: number,
     dmgType: DamageType,
+    fromX?: number,
+    fromY?: number,
   ): void {
     const colors: Record<DamageType, number> = {
       [DamageType.BULLET]: 0xffee00,
@@ -382,8 +387,76 @@ export class Combat extends Phaser.Events.EventEmitter {
       [DamageType.FIRE]: 5,
       [DamageType.ELECTRIC]: 3,
     }
-    g.fillStyle(colors[dmgType] ?? 0xffffff, 1)
-    g.fillCircle(x, y, sizes[dmgType] ?? 3)
+    const color = colors[dmgType] ?? 0xffffff
+    const size = sizes[dmgType] ?? 3
+
+    // Trail from movement direction
+    if (fromX !== undefined && fromY !== undefined) {
+      const dx = x - fromX
+      const dy = y - fromY
+      const dist = Math.sqrt(dx * dx + dy * dy)
+      if (dist > 1) {
+        const nx = -dx / dist
+        const ny = -dy / dist
+        const trailLen = Math.min(10, dist * 0.3)
+
+        if (dmgType === DamageType.ELECTRIC) {
+          // Tesla bolt — jagged line segments
+          g.lineStyle(2, color, 0.8)
+          const segs = 4
+          let sx = x, sy = y
+          for (let i = 0; i < segs; i++) {
+            const t = (i + 1) / segs
+            const ex = x + nx * trailLen * t + (Math.random() - 0.5) * 6
+            const ey = y + ny * trailLen * t + (Math.random() - 0.5) * 6
+            g.lineBetween(sx, sy, ex, ey)
+            sx = ex
+            sy = ey
+          }
+        } else {
+          // Standard trail line
+          g.lineStyle(size * 0.7, color, 0.4)
+          g.lineBetween(x, y, x + nx * trailLen, y + ny * trailLen)
+        }
+      }
+    }
+
+    // Main projectile body
+    if (dmgType === DamageType.FIRE) {
+      // Fire: wider shape with red edges
+      g.fillStyle(0xff6600, 0.7)
+      g.fillCircle(x, y, size + 1)
+      g.fillStyle(color, 1)
+      g.fillCircle(x, y, size - 1)
+    } else {
+      g.fillStyle(color, 1)
+      g.fillCircle(x, y, size)
+      // Bright core
+      g.fillStyle(0xffffff, 0.5)
+      g.fillCircle(x, y, size * 0.4)
+    }
+  }
+
+  private createMuzzleFlash(x: number, y: number, dmgType: DamageType): void {
+    const flashColors: Record<DamageType, number> = {
+      [DamageType.BULLET]: 0xffff44,
+      [DamageType.EXPLOSIVE]: 0xff8844,
+      [DamageType.MISSILE]: 0xff8844,
+      [DamageType.FIRE]: 0xff6600,
+      [DamageType.ELECTRIC]: 0x66aaff,
+    }
+    const flash = this.scene.add.graphics()
+    flash.fillStyle(flashColors[dmgType] ?? 0xffff44, 0.9)
+    flash.fillCircle(x, y, 4)
+    flash.setDepth(35)
+    this.scene.tweens.add({
+      targets: flash,
+      alpha: 0,
+      scaleX: 2,
+      scaleY: 2,
+      duration: 100,
+      onComplete: () => flash.destroy(),
+    })
   }
 
   private getTargetCategory(entity: Unit | Building): string {
