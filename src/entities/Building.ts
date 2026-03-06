@@ -355,6 +355,110 @@ export class Building extends Phaser.GameObjects.Container {
     const hh = h / 2
     const r = Math.min(w, h) * 0.2
 
+    // Per-building-id specifics first
+    switch (this.def.id) {
+      case 'construction_yard':
+        // Crane arm + dangling hook
+        g.lineStyle(2, 0xdddddd, 0.8)
+        g.lineBetween(-hw * 0.3, hh * 0.3, -hw * 0.3, -hh * 0.6)  // mast
+        g.lineBetween(-hw * 0.3, -hh * 0.6, hw * 0.4, -hh * 0.6)  // arm
+        g.lineBetween(hw * 0.4, -hh * 0.6, hw * 0.4, -hh * 0.1)   // cable
+        g.fillStyle(0xdddddd, 0.7)
+        g.fillRect(hw * 0.3, -hh * 0.1, 6, 4)                      // hook base
+        g.lineStyle(1.5, 0xdddddd, 0.8)
+        g.lineBetween(hw * 0.33, hh * 0.13, hw * 0.53, hh * 0.13) // hook curve
+        return
+      case 'barracks':
+        // Door arch + flag pole
+        g.fillStyle(0x000000, 0.4)
+        g.fillRect(-hw * 0.15, hh * 0.05, hw * 0.3, hh * 0.45)    // door
+        g.beginPath()
+        g.arc(0, hh * 0.05, hw * 0.15, Math.PI, 0)
+        g.fillPath()
+        // Flag pole
+        g.lineStyle(2, 0xaaaaaa, 0.9)
+        g.lineBetween(hw * 0.35, hh * 0.45, hw * 0.35, -hh * 0.5)
+        g.fillStyle(0xff3333, 0.9)
+        g.fillRect(hw * 0.35, -hh * 0.5, hw * 0.3, hh * 0.2)      // flag
+        return
+      case 'war_factory':
+        // Roll-up door (horizontal stripes) + smokestack
+        g.lineStyle(1.5, 0x000000, 0.5)
+        for (let dy = hh * 0.0; dy < hh * 0.55; dy += hh * 0.15) {
+          g.lineBetween(-hw * 0.6, dy, hw * 0.6, dy)
+        }
+        // Smokestack
+        g.fillStyle(0x444444, 0.8)
+        g.fillRect(hw * 0.5, -hh * 0.65, 6, hh * 0.5)
+        g.fillStyle(0x888888, 0.4)
+        g.fillCircle(hw * 0.53, -hh * 0.7, 5)
+        return
+      case 'ore_refinery':
+        // Hopper/funnel shape on top
+        g.fillStyle(0x885522, 0.7)
+        g.fillTriangle(-hw * 0.4, -hh * 0.1, hw * 0.4, -hh * 0.1, hw * 0.15, -hh * 0.65)
+        g.fillTriangle(-hw * 0.4, -hh * 0.1, -hw * 0.15, -hh * 0.65, hw * 0.4, -hh * 0.1)
+        // Ore spill dots
+        g.fillStyle(0xd4a017, 0.8)
+        g.fillRect(-5, hh * 0.15, 4, 3)
+        g.fillRect(2, hh * 0.25, 3, 3)
+        return
+      case 'tesla_coil':
+        // Tall spike with electric arc at top
+        g.fillStyle(0x444466, 1)
+        g.fillRect(-4, -hh * 0.75, 8, hh * 0.9)
+        g.lineStyle(2, 0x66aaff, 1)
+        g.lineBetween(0, -hh * 0.75, -6, -hh * 0.95)
+        g.lineBetween(-6, -hh * 0.95, 0, -hh * 0.85)
+        g.lineBetween(0, -hh * 0.85, 6, -hh * 0.95)
+        g.fillStyle(0xaaddff, 0.9)
+        g.fillCircle(0, -hh * 0.75, 3)
+        return
+      case 'prism_tower':
+        // Narrow mast + crystal prism at top
+        g.fillStyle(0x444455, 1)
+        g.fillRect(-3, -hh * 0.6, 6, hh * 0.75)
+        g.fillStyle(0xaaddff, 0.85)
+        g.fillTriangle(0, -hh * 0.95, -8, -hh * 0.6, 8, -hh * 0.6)
+        g.lineStyle(1, 0xffffff, 0.5)
+        g.lineBetween(0, -hh * 0.95, -2, -hh * 0.75)
+        g.lineBetween(0, -hh * 0.95, 2, -hh * 0.75)
+        return
+      case 'pillbox':
+      case 'sentry_gun':
+        // Small bunker + barrel
+        g.fillStyle(0x666666, 0.8)
+        g.fillCircle(0, 0, r * 1.2)
+        g.fillStyle(0x333333, 1)
+        g.fillRect(-1.5, -r * 1.2 - 8, 3, 9)
+        g.lineStyle(1.5, 0xff4444, 0.7)
+        g.strokeCircle(0, 0, r * 0.7)
+        return
+      case 'flak_cannon':
+      case 'patriot_system':
+      case 'flak_cannon_rd':
+        // AA gun: two upward barrels
+        g.fillStyle(0x666666, 0.8)
+        g.fillCircle(0, hh * 0.1, r)
+        g.fillStyle(0x333333, 1)
+        g.fillRect(-5, -hh * 0.7, 3, hh * 0.75)
+        g.fillRect(2, -hh * 0.7, 3, hh * 0.75)
+        return
+      case 'iron_curtain':
+      case 'chronosphere':
+        // Superweapon: large dome with beam
+        g.fillStyle(0x334455, 0.7)
+        g.fillCircle(0, hh * 0.1, r * 1.6)
+        g.lineStyle(2, 0xff8800, 0.9)
+        g.strokeCircle(0, hh * 0.1, r * 1.6)
+        g.lineStyle(3, 0xff8800, 0.7)
+        g.lineBetween(0, hh * 0.1, 0, -hh * 0.8)
+        g.fillStyle(0xffaa44, 0.9)
+        g.fillCircle(0, -hh * 0.8, 5)
+        return
+    }
+
+    // Category fallback icons
     switch (this.def.category) {
       case 'power':
         // Lightning bolt ⚡
@@ -389,7 +493,6 @@ export class Building extends Phaser.GameObjects.Container {
         g.lineBetween(-hw * 0.4, 0, hw * 0.4, 0)
         g.lineBetween(0, -hh * 0.4, 0, hh * 0.4)
         g.strokeCircle(0, 0, r)
-        // Inner dot
         g.fillStyle(0xff4444, 0.6)
         g.fillCircle(0, 0, 2)
         break
@@ -398,11 +501,9 @@ export class Building extends Phaser.GameObjects.Container {
         // Radar dish
         g.lineStyle(2, 0x88aaff, 0.8)
         g.lineBetween(0, hh * 0.1, 0, -hh * 0.5)
-        // Dish arc
         g.beginPath()
         g.arc(-hw * 0.25, -hh * 0.3, r, -0.8, 0.8)
         g.strokePath()
-        // Signal lines
         g.lineStyle(1, 0x88aaff, 0.4)
         g.strokeCircle(hw * 0.15, -hh * 0.2, 3)
         g.strokeCircle(hw * 0.15, -hh * 0.2, 6)
@@ -414,7 +515,6 @@ export class Building extends Phaser.GameObjects.Container {
         g.strokeCircle(0, 0, r * 1.3)
         g.fillStyle(0xff8800, 0.7)
         g.fillCircle(0, 0, 3)
-        // Radiation segments
         for (let a = 0; a < 3; a++) {
           const angle = (a / 3) * Math.PI * 2 - Math.PI / 2
           const sx = Math.cos(angle) * 5

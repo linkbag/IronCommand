@@ -580,56 +580,268 @@ export class Unit extends Phaser.GameObjects.Container {
     const darker = adjustBrightness(color, -40)
     const lighter = adjustBrightness(color, 30)
 
+    // ── Special full-override shapes ──────────────────────────
+    if (this.def.id === 'kirov') {
+      // Blimp/airship silhouette
+      g.fillStyle(0x000000, 0.25)
+      g.fillEllipse(4, 10, 36, 12)  // ground shadow
+      g.fillStyle(color, 1)
+      g.fillEllipse(0, -3, 36, 18)   // envelope
+      g.fillStyle(darker, 1)
+      g.fillRect(-7, 5, 14, 6)       // gondola
+      g.fillTriangle(-14, -2, -20, 6, -14, 6)  // left fin
+      g.fillTriangle(14, -2, 20, 6, 14, 6)     // right fin
+      g.fillStyle(0x333333, 1)
+      g.fillRect(-11, 9, 5, 3)       // engine pod L
+      g.fillRect(6, 9, 5, 3)         // engine pod R
+      g.lineStyle(1, lighter, 0.35)
+      g.strokeEllipse(0, -3, 36, 18)
+      return
+    }
+
+    if (this.def.id === 'attack_dog') {
+      // Low horizontal dog shape
+      g.fillStyle(adjustBrightness(0x8b4513, -20), 1)
+      g.fillEllipse(0, 2, 18, 9)     // body
+      g.fillEllipse(-8, -1, 9, 8)    // head
+      g.fillTriangle(-10, -4, -12, -9, -7, -4)  // ear
+      g.lineStyle(2, adjustBrightness(0x8b4513, -20), 1)
+      g.lineBetween(7, 1, 11, -4)    // tail
+      g.lineStyle(1.5, 0x2a1a0a, 1)
+      g.lineBetween(-5, 6, -5, 11)   // leg FL
+      g.lineBetween(-2, 6, -2, 11)   // leg FR
+      g.lineBetween(3, 6, 3, 11)     // leg BL
+      g.lineBetween(6, 6, 6, 11)     // leg BR
+      return
+    }
+
+    if (this.def.id === 'recon_drone') {
+      // Small quadcopter diamond
+      g.fillStyle(color, 1)
+      g.fillTriangle(0, -7, -5, 0, 0, 7)
+      g.fillTriangle(0, -7, 5, 0, 0, 7)
+      g.lineStyle(2, darker, 1)
+      g.lineBetween(-3, 0, -8, -5)
+      g.lineBetween(3, 0, 8, -5)
+      g.lineBetween(-3, 0, -8, 5)
+      g.lineBetween(3, 0, 8, 5)
+      g.lineStyle(1, lighter, 0.8)
+      g.strokeCircle(-8, -5, 3)
+      g.strokeCircle(8, -5, 3)
+      g.strokeCircle(-8, 5, 3)
+      g.strokeCircle(8, 5, 3)
+      return
+    }
+
+    // ── Infantry ─────────────────────────────────────────────
     if (this.def.category === 'infantry') {
+      // Tesla trooper: bulkier armored suit
+      const isTesla = this.def.id === 'tesla_trooper'
+      const isDesolator = this.def.id === 'desolator'
+      const bodyW = isTesla || isDesolator ? 13 : 10
+      const bodyH = isTesla || isDesolator ? 10 : 8
+
       // Legs
       g.fillStyle(darker, 1)
       g.fillRect(-3, 2, 2, 5)
       g.fillRect(1, 2, 2, 5)
-      // Body (torso oval)
+      // Torso
       g.fillStyle(color, 1)
-      g.fillEllipse(0, 0, 10, 8)
+      g.fillEllipse(0, 0, bodyW, bodyH)
       // Head
       g.fillStyle(lighter, 1)
-      g.fillCircle(0, -6, 3)
+      g.fillCircle(0, -6, isTesla || isDesolator ? 4 : 3)
       // Arms
       g.lineStyle(1.5, darker, 1)
       g.lineBetween(-5, -1, -8, 3)
       g.lineBetween(5, -1, 8, 3)
       // Outline
       g.lineStyle(1, 0x000000, 0.3)
-      g.strokeEllipse(0, 0, 10, 8)
+      g.strokeEllipse(0, 0, bodyW, bodyH)
 
+      // Per-id overlays
+      switch (this.def.id) {
+        case 'engineer':
+          // Wrench/tool cross at waist
+          g.lineStyle(2, 0xffaa00, 1)
+          g.lineBetween(0, 4, 0, 9)
+          g.lineBetween(-2, 6, 2, 6)
+          break
+        case 'spy':
+          // Fedora hat on head
+          g.fillStyle(0x222233, 1)
+          g.fillRect(-5, -10, 10, 3)   // brim
+          g.fillRect(-3, -13, 6, 4)    // crown
+          break
+        case 'tesla_trooper':
+          // Electric arc lines from arms
+          g.lineStyle(1.5, 0x66aaff, 0.9)
+          g.lineBetween(-8, 3, -11, -1)
+          g.lineBetween(-11, -1, -9, -4)
+          g.lineStyle(1.5, 0x66aaff, 0.9)
+          g.lineBetween(8, 3, 11, -1)
+          g.lineBetween(11, -1, 9, -4)
+          break
+        case 'crazy_ivan':
+          // Bomb in hand
+          g.fillStyle(0x333333, 1)
+          g.fillCircle(9, 2, 4)
+          g.lineStyle(1.5, 0xff6600, 1)
+          g.lineBetween(9, -1, 9, 2)   // fuse
+          break
+        case 'rocketeer':
+          // Jetpack wings
+          g.fillStyle(0x666677, 1)
+          g.fillTriangle(-9, -3, -5, 1, -12, 5)
+          g.fillTriangle(9, -3, 5, 1, 12, 5)
+          // Jet flames
+          g.fillStyle(0xff8800, 0.85)
+          g.fillTriangle(-10, 5, -7, 5, -8, 10)
+          g.fillTriangle(7, 5, 10, 5, 9, 10)
+          break
+        case 'sniper':
+          // Long rifle
+          g.lineStyle(2.5, 0x333333, 1)
+          g.lineBetween(5, -1, 18, -4)
+          g.lineStyle(1, 0x555555, 1)
+          g.lineBetween(13, -4, 16, -6)  // scope
+          break
+        case 'desolator':
+          // Hazmat visor overlay
+          g.fillStyle(0x44bb44, 0.4)
+          g.fillCircle(0, -6, 4)
+          // Sprayer hose from arm
+          g.lineStyle(2, 0x667744, 1)
+          g.lineBetween(-8, 3, -11, 6)
+          g.lineBetween(-11, 6, -13, 3)
+          break
+        case 'flak_trooper':
+          // Shoulder-mounted rocket tube
+          g.fillStyle(0x555555, 1)
+          g.fillRect(-12, -6, 9, 4)
+          g.lineStyle(1, 0x333333, 1)
+          g.strokeRect(-12, -6, 9, 4)
+          break
+        case 'terrorist':
+          // Vest with explosives strapped on
+          g.fillStyle(0xff4400, 0.75)
+          g.fillRect(-4, -1, 8, 5)
+          g.lineStyle(1, 0xffaa00, 0.8)
+          g.lineBetween(-3, 1, 3, 1)
+          g.lineBetween(-3, 3, 3, 3)
+          break
+      }
+
+    // ── Aircraft ─────────────────────────────────────────────
     } else if (this.def.category === 'aircraft') {
-      // Shadow on ground
-      g.fillStyle(0x000000, 0.2)
-      g.fillEllipse(3, 5, 14, 6)
-      // Delta wing body
-      g.fillStyle(color, 1)
-      g.fillTriangle(0, -10, -10, 6, 10, 6)
-      // Fuselage
-      g.fillRect(-2, -8, 4, 12)
-      // Tail fin
-      g.fillStyle(darker, 1)
-      g.fillTriangle(-2, 4, 2, 4, 0, 8)
-      // Cockpit
-      g.fillStyle(0x88ccff, 0.7)
-      g.fillCircle(0, -4, 2)
-      // Wing edge highlight
-      g.lineStyle(1, lighter, 0.4)
-      g.lineBetween(0, -10, -10, 6)
-      g.lineBetween(0, -10, 10, 6)
+      if (this.def.id === 'rocketeer') {
+        // Rocketeer in-air: infantry silhouette + jetpack
+        g.fillStyle(color, 1)
+        g.fillEllipse(0, 1, 10, 8)
+        g.fillStyle(lighter, 1)
+        g.fillCircle(0, -5, 3)
+        g.fillStyle(0x666677, 1)
+        g.fillRect(-4, 1, 8, 7)       // jetpack
+        g.fillStyle(0xff8800, 0.85)
+        g.fillTriangle(-3, 8, -1, 8, -2, 14)
+        g.fillTriangle(1, 8, 3, 8, 2, 14)
+      } else if (this.def.id === 'nighthawk') {
+        // Wide stealth shape (flat delta)
+        g.fillStyle(0x000000, 0.2)
+        g.fillEllipse(3, 6, 22, 6)
+        g.fillStyle(color, 1)
+        g.fillTriangle(0, -6, -16, 8, 16, 8)
+        g.fillRect(-2, -4, 4, 10)
+        g.fillStyle(darker, 1)
+        g.fillTriangle(-2, 6, 2, 6, 0, 10)
+        g.fillStyle(0x88ccff, 0.6)
+        g.fillCircle(0, -2, 2)
+      } else {
+        // Generic jet (harrier, black_eagle)
+        g.fillStyle(0x000000, 0.2)
+        g.fillEllipse(3, 5, 14, 6)
+        g.fillStyle(color, 1)
+        g.fillTriangle(0, -10, -10, 6, 10, 6)
+        g.fillRect(-2, -8, 4, 12)
+        g.fillStyle(darker, 1)
+        g.fillTriangle(-2, 4, 2, 4, 0, 8)
+        g.fillStyle(0x88ccff, 0.7)
+        g.fillCircle(0, -4, 2)
+        g.lineStyle(1, lighter, 0.4)
+        g.lineBetween(0, -10, -10, 6)
+        g.lineBetween(0, -10, 10, 6)
+        // Black Eagle: swept-back wings marker
+        if (this.def.id === 'black_eagle') {
+          g.lineStyle(1.5, lighter, 0.5)
+          g.lineBetween(-4, -2, -10, 4)
+          g.lineBetween(4, -2, 10, 4)
+        }
+      }
 
+    // ── Vehicles / Naval ─────────────────────────────────────
     } else {
-      // Vehicles (tanks, APCs, harvester, naval)
-      const isHarvester = this.def.id.includes('harvester')
-      const w = isHarvester ? 22 : (this.def.category === 'naval' ? 20 : 18)
-      const h = isHarvester ? 16 : 14
+      const isHarvester = this.def.category === 'harvester'
+      const isNaval = this.def.category === 'naval'
+
+      // Naval: boat hull instead of treads
+      if (isNaval) {
+        const nw = this.def.id === 'aircraft_carrier' ? 30 : this.def.id === 'dreadnought' ? 28 : 22
+        const nh = this.def.id === 'aircraft_carrier' ? 12 : 9
+        g.fillStyle(darker, 1)
+        g.fillEllipse(0, 2, nw + 2, nh + 2)  // hull shadow
+        g.fillStyle(color, 1)
+        g.fillEllipse(0, 0, nw, nh)
+        g.fillStyle(lighter, 1)
+        g.fillRect(-nw * 0.2, -nh * 0.3, nw * 0.4, nh * 0.3)  // superstructure
+        if (this.def.id === 'aircraft_carrier') {
+          // Flight deck
+          g.lineStyle(1, lighter, 0.5)
+          g.lineBetween(-12, -3, 12, -3)
+          g.lineBetween(-12, 0, 12, 0)
+        } else if (this.def.id === 'typhoon_sub' || this.def.id === 'giant_squid') {
+          // Submarine/squid — slightly submerged look
+          g.fillStyle(0x000033, 0.3)
+          g.fillEllipse(0, 3, nw, nh * 0.6)
+        } else {
+          // Gun barrel
+          g.fillStyle(0x3a3a3a, 1)
+          g.fillRect(-1, -nh / 2 - 5, 2, 6)
+        }
+        g.lineStyle(1, 0x000000, 0.25)
+        g.strokeEllipse(0, 0, nw, nh)
+        return
+      }
+
+      // Land vehicle dimensions and turret type based on unit id
+      type TurretKind = 'standard' | 'large' | 'dual' | 'small' | 'aa' | 'rocket' | 'crystal' | 'tesla' | 'none'
+      const vehicleProfiles: Record<string, { w: number; h: number; turret: TurretKind }> = {
+        grizzly_tank:       { w: 18, h: 14, turret: 'standard' },
+        ifv:                { w: 16, h: 12, turret: 'small' },
+        rhino_tank:         { w: 20, h: 15, turret: 'large' },
+        apocalypse_tank:    { w: 24, h: 16, turret: 'dual' },
+        flak_track:         { w: 18, h: 12, turret: 'aa' },
+        v3_launcher:        { w: 18, h: 14, turret: 'rocket' },
+        prism_tank:         { w: 18, h: 14, turret: 'crystal' },
+        tesla_tank:         { w: 18, h: 14, turret: 'tesla' },
+        mcv:                { w: 26, h: 18, turret: 'none' },
+        mecha_walker:       { w: 14, h: 18, turret: 'standard' },
+        dragon_tank:        { w: 20, h: 14, turret: 'none' },
+        tank_destroyer:     { w: 18, h: 13, turret: 'large' },
+        demo_truck:         { w: 18, h: 14, turret: 'none' },
+        brahmos_battery:    { w: 18, h: 14, turret: 'rocket' },
+        conquistador_mech:  { w: 16, h: 18, turret: 'standard' },
+        chrono_miner:       { w: 22, h: 16, turret: 'none' },
+        war_miner:          { w: 22, h: 16, turret: 'none' },
+      }
+      const profile = vehicleProfiles[this.def.id] ?? { w: 18, h: 14, turret: 'standard' as TurretKind }
+      const w = isHarvester ? 22 : profile.w
+      const h = isHarvester ? 16 : profile.h
+      const turret = isHarvester ? 'none' as TurretKind : profile.turret
 
       // Treads
       g.fillStyle(0x2a2a2a, 1)
       g.fillRect(-w / 2, -h / 2, w, 3)
       g.fillRect(-w / 2, h / 2 - 3, w, 3)
-      // Tread detail lines
       g.lineStyle(1, 0x1a1a1a, 0.5)
       for (let tx = -w / 2 + 3; tx < w / 2; tx += 4) {
         g.lineBetween(tx, -h / 2, tx, -h / 2 + 3)
@@ -639,24 +851,109 @@ export class Unit extends Phaser.GameObjects.Container {
       // Main body
       g.fillStyle(color, 1)
       g.fillRect(-w / 2 + 2, -h / 2 + 3, w - 4, h - 6)
-      // Top highlight
       g.lineStyle(1, lighter, 0.4)
       g.lineBetween(-w / 2 + 2, -h / 2 + 3, w / 2 - 2, -h / 2 + 3)
-      // Bottom shadow
       g.lineStyle(1, darker, 0.4)
       g.lineBetween(-w / 2 + 2, h / 2 - 3, w / 2 - 2, h / 2 - 3)
 
-      if (isHarvester) {
-        // Cargo bay (dark open area in back)
-        g.fillStyle(0x1a1a1a, 0.8)
-        g.fillRect(2, -h / 2 + 4, w / 2 - 4, h - 8)
-      } else {
-        // Turret
-        g.fillStyle(lighter, 1)
-        g.fillRect(-4, -3, 8, 6)
-        // Gun barrel
-        g.fillStyle(0x3a3a3a, 1)
-        g.fillRect(-1, -8, 2, 5)
+      // Turret / weapon system
+      switch (turret) {
+        case 'standard':
+          g.fillStyle(lighter, 1)
+          g.fillRect(-4, -3, 8, 6)
+          g.fillStyle(0x3a3a3a, 1)
+          g.fillRect(-1, -9, 2, 7)
+          break
+        case 'large':
+          g.fillStyle(lighter, 1)
+          g.fillRect(-5, -4, 10, 7)
+          g.fillStyle(0x3a3a3a, 1)
+          g.fillRect(-1.5, -12, 3, 9)
+          break
+        case 'dual':
+          g.fillStyle(lighter, 1)
+          g.fillRect(-6, -4, 12, 8)
+          g.fillStyle(0x3a3a3a, 1)
+          g.fillRect(-4, -12, 2.5, 9)
+          g.fillRect(1.5, -12, 2.5, 9)
+          break
+        case 'small':
+          g.fillStyle(lighter, 1)
+          g.fillRect(-3, -2, 6, 5)
+          g.fillStyle(0x3a3a3a, 1)
+          g.fillRect(-1, -7, 2, 6)
+          break
+        case 'aa':
+          // Anti-air: two vertical gun barrels sticking up
+          g.fillStyle(lighter, 1)
+          g.fillRect(-5, -2, 10, 5)
+          g.fillStyle(0x3a3a3a, 1)
+          g.fillRect(-4, -11, 2, 10)
+          g.fillRect(2, -11, 2, 10)
+          break
+        case 'rocket':
+          // V3/rocket: angled rocket on top
+          g.fillStyle(lighter, 1)
+          g.fillRect(-4, -2, 8, 5)
+          g.fillStyle(0xdd3333, 1)
+          g.fillTriangle(-1, -3, 1, -3, 0, -11)  // nose
+          g.fillStyle(0xaaaaaa, 1)
+          g.fillRect(-1, -9, 2, 7)  // body
+          g.fillStyle(0x888888, 1)
+          g.fillTriangle(-3, -3, -1, -3, -2, -1)  // fin L
+          g.fillTriangle(1, -3, 3, -3, 2, -1)     // fin R
+          break
+        case 'crystal':
+          // Prism: diamond crystal on top
+          g.fillStyle(lighter, 1)
+          g.fillRect(-4, -2, 8, 5)
+          g.fillStyle(0xaaddff, 0.9)
+          g.fillTriangle(0, -13, -4, -4, 4, -4)  // top prism
+          g.lineStyle(1, 0xffffff, 0.5)
+          g.lineBetween(0, -13, -1, -8)
+          g.lineBetween(0, -13, 1, -8)
+          break
+        case 'tesla':
+          // Tesla coil spike + arc
+          g.fillStyle(lighter, 1)
+          g.fillRect(-4, -3, 8, 6)
+          g.fillStyle(0x3a3a3a, 1)
+          g.fillRect(-1, -11, 2, 9)
+          g.lineStyle(1.5, 0x66aaff, 0.9)
+          g.lineBetween(-1, -11, -4, -14)
+          g.lineBetween(-4, -14, 0, -12)
+          g.lineBetween(1, -11, 4, -14)
+          g.lineBetween(4, -14, 0, -12)
+          break
+        case 'none':
+          if (isHarvester) {
+            // Scoop at front + cargo bay
+            g.fillStyle(0x1a1a1a, 0.8)
+            g.fillRect(2, -h / 2 + 4, w / 2 - 4, h - 8)
+            // Scoop V-shape at front
+            g.fillStyle(0x888888, 1)
+            g.fillTriangle(-w / 2 + 2, -2, -w / 2 - 2, 0, -w / 2 + 2, 2)
+          } else if (this.def.id === 'mcv') {
+            // Crane/antenna on top
+            g.lineStyle(2, 0x888888, 1)
+            g.lineBetween(-4, -h / 2 + 3, -4, -h / 2 - 8)
+            g.lineBetween(-4, -h / 2 - 8, 4, -h / 2 - 2)
+            g.fillStyle(0x666666, 1)
+            g.fillRect(-w / 2 + 4, -h / 2 + 4, 8, 6)  // cab
+          } else if (this.def.id === 'dragon_tank') {
+            // Flame nozzle at front
+            g.fillStyle(0x555555, 1)
+            g.fillRect(-w / 2 - 4, -3, 6, 6)
+            g.fillStyle(0xff6600, 0.7)
+            g.fillTriangle(-w / 2 - 4, -2, -w / 2 - 10, 0, -w / 2 - 4, 2)
+          } else if (this.def.id === 'demo_truck') {
+            // Barrel on back
+            g.fillStyle(0x555555, 1)
+            g.fillRect(2, -h / 2 + 4, w / 2 - 4, h - 8)
+            g.fillStyle(0xff2200, 0.7)
+            g.fillCircle(w / 2 - 6, 0, 4)
+          }
+          break
       }
 
       // Outline

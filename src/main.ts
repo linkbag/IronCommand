@@ -36,6 +36,9 @@ const config: Phaser.Types.Core.GameConfig = {
 
 const game = new Phaser.Game(config)
 
+// Prevent browser right-click context menu on game canvas
+document.addEventListener('contextmenu', (e) => e.preventDefault())
+
 // Handle window resize
 window.addEventListener('resize', () => {
   game.scale.resize(window.innerWidth, window.innerHeight)
