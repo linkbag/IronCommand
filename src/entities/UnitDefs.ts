@@ -29,7 +29,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2.5,
       sightRange: 5,
       cost: 200,
-      buildTime: 5,
+      buildTime: 3,
       prerequisites: ['barracks'],
     },
     attack: {
@@ -57,7 +57,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2,
       sightRange: 4,
       cost: 500,
-      buildTime: 10,
+      buildTime: 5,
       prerequisites: ['barracks'],
     },
     attack: null,
@@ -76,7 +76,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 5,
       sightRange: 6,
       cost: 600,
-      buildTime: 10,
+      buildTime: 6,
       prerequisites: ['barracks', 'air_force_command'],
     },
     attack: {
@@ -104,7 +104,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 3,
       sightRange: 6,
       cost: 1000,
-      buildTime: 15,
+      buildTime: 10,
       prerequisites: ['barracks', 'battle_lab'],
     },
     attack: null,
@@ -123,7 +123,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 4.5,
       sightRange: 7,
       cost: 200,
-      buildTime: 4,
+      buildTime: 3,
       prerequisites: ['barracks'],
     },
     attack: {
@@ -153,7 +153,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 3,
       sightRange: 6,
       cost: 700,
-      buildTime: 15,
+      buildTime: 7,
       prerequisites: ['war_factory'],
     },
     attack: {
@@ -181,7 +181,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 4,
       sightRange: 7,
       cost: 600,
-      buildTime: 12,
+      buildTime: 6,
       prerequisites: ['war_factory'],
     },
     attack: {
@@ -209,7 +209,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 1.5,
       sightRange: 4,
       cost: 1400,
-      buildTime: 20,
+      buildTime: 14,
       prerequisites: ['ore_refinery'],
     },
     attack: null,
@@ -228,7 +228,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 1,
       sightRange: 5,
       cost: 3000,
-      buildTime: 60,
+      buildTime: 30,
       prerequisites: ['war_factory', 'service_depot'],
     },
     attack: null,
@@ -249,7 +249,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 8,
       sightRange: 8,
       cost: 1200,
-      buildTime: 20,
+      buildTime: 12,
       prerequisites: ['air_force_command'],
     },
     attack: {
@@ -277,7 +277,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 6,
       sightRange: 6,
       cost: 1000,
-      buildTime: 18,
+      buildTime: 10,
       prerequisites: ['air_force_command'],
     },
     attack: {
@@ -363,7 +363,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 1.5,
       sightRange: 12,
       cost: 2000,
-      buildTime: 40,
+      buildTime: 20,
       prerequisites: ['naval_shipyard', 'battle_lab'],
     },
     attack: {
@@ -425,7 +425,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2.5,
       sightRange: 6,
       cost: 300,
-      buildTime: 6,
+      buildTime: 4,
       prerequisites: ['barracks'],
     },
     attack: {
@@ -453,7 +453,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2,
       sightRange: 5,
       cost: 500,
-      buildTime: 10,
+      buildTime: 5,
       prerequisites: ['barracks', 'radar_tower'],
     },
     attack: {
@@ -481,7 +481,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2.5,
       sightRange: 5,
       cost: 600,
-      buildTime: 10,
+      buildTime: 6,
       prerequisites: ['barracks', 'radar_tower'],
     },
     attack: {
@@ -511,7 +511,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2.5,
       sightRange: 6,
       cost: 900,
-      buildTime: 18,
+      buildTime: 9,
       prerequisites: ['war_factory'],
     },
     attack: {
@@ -539,7 +539,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 3.5,
       sightRange: 7,
       cost: 500,
-      buildTime: 10,
+      buildTime: 5,
       prerequisites: ['war_factory'],
     },
     attack: {
@@ -567,7 +567,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 1.5,
       sightRange: 5,
       cost: 800,
-      buildTime: 16,
+      buildTime: 8,
       prerequisites: ['war_factory', 'radar_tower'],
     },
     attack: {
@@ -595,7 +595,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 1.2,
       sightRange: 4,
       cost: 1400,
-      buildTime: 20,
+      buildTime: 14,
       prerequisites: ['ore_refinery'],
     },
     attack: {
@@ -623,7 +623,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 1.5,
       sightRange: 7,
       cost: 1750,
-      buildTime: 40,
+      buildTime: 18,
       prerequisites: ['war_factory', 'battle_lab'],
     },
     attack: {
@@ -653,7 +653,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 1.5,
       sightRange: 8,
       cost: 2000,
-      buildTime: 45,
+      buildTime: 20,
       prerequisites: ['war_factory', 'battle_lab'],
     },
     attack: {
@@ -777,7 +777,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 3.5,
       sightRange: 7,
       cost: 900,
-      buildTime: 16,
+      buildTime: 9,
       prerequisites: ['war_factory'],
     },
     attack: {
@@ -805,7 +805,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2,
       sightRange: 10,
       cost: 600,
-      buildTime: 12,
+      buildTime: 6,
       prerequisites: ['barracks', 'battle_lab'],
     },
     attack: {
@@ -861,7 +861,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2.5,
       sightRange: 7,
       cost: 1600,
-      buildTime: 25,
+      buildTime: 16,
       prerequisites: ['war_factory', 'battle_lab'],
     },
     attack: {
@@ -889,7 +889,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2.5,
       sightRange: 7,
       cost: 1200,
-      buildTime: 22,
+      buildTime: 12,
       prerequisites: ['war_factory', 'battle_lab'],
     },
     attack: {
@@ -917,7 +917,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 7,
       sightRange: 14,
       cost: 400,
-      buildTime: 8,
+      buildTime: 4,
       prerequisites: ['air_force_command'],
     },
     attack: null, // unarmed scout
@@ -938,7 +938,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2.5,
       sightRange: 6,
       cost: 1200,
-      buildTime: 20,
+      buildTime: 12,
       prerequisites: ['war_factory', 'radar_tower'],
     },
     attack: {
@@ -966,7 +966,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2.5,
       sightRange: 5,
       cost: 800,
-      buildTime: 14,
+      buildTime: 8,
       prerequisites: ['war_factory'],
     },
     attack: {
@@ -994,7 +994,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2,
       sightRange: 5,
       cost: 600,
-      buildTime: 12,
+      buildTime: 6,
       prerequisites: ['barracks', 'radar_tower'],
     },
     attack: {
@@ -1078,7 +1078,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 1,
       sightRange: 6,
       cost: 800,
-      buildTime: 18,
+      buildTime: 8,
       prerequisites: ['war_factory', 'radar_tower'],
     },
     attack: {
@@ -1106,7 +1106,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2,
       sightRange: 6,
       cost: 1800,
-      buildTime: 30,
+      buildTime: 18,
       prerequisites: ['war_factory', 'battle_lab'],
     },
     attack: {

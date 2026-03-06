@@ -69,6 +69,7 @@ export class GameScene extends Phaser.Scene {
   // ── Last alert position (for Space key) ────────────────────
   private lastAlertPos: Position | null = null
   private fogAnchorSources: Array<{ pos: TileCoord; range: number }> = []
+  private waypointMode = false
 
   constructor() {
     super({ key: 'GameScene' })
@@ -90,6 +91,7 @@ export class GameScene extends Phaser.Scene {
     this.cursorMode = 'normal'
     this.lastAlertPos = null
     this.fogAnchorSources = []
+    this.waypointMode = false
   }
 
   create() {
@@ -239,6 +241,9 @@ export class GameScene extends Phaser.Scene {
 
     console.log('[IC] Camera at:', this.camX, this.camY)
     console.log('[IC] Map world size:', this.gameMap.worldWidth, 'x', this.gameMap.worldHeight)
+
+    // Prevent browser context menu on the game canvas
+    this.game.canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault())
 
     this.cameras.main.fadeIn(500)
   }
@@ -440,9 +445,20 @@ export class GameScene extends Phaser.Scene {
 
     // Unit produced from HUD build panel
     this.events.on('unitProduced', (data: { defId: string }) => {
-      // Find appropriate production building
+      // Find appropriate production building based on unit category
+      const unitDef = this.entityMgr.getUnitDef(data.defId)
+      if (!unitDef) return
+
+      const producerMap: Record<string, string[]> = {
+        infantry: ['barracks'],
+        vehicle: ['war_factory'],
+        aircraft: ['air_force_command', 'war_factory'],
+        naval: ['naval_shipyard'],
+        harvester: ['ore_refinery', 'war_factory'],
+      }
+      const candidateIds = producerMap[unitDef.category] ?? ['barracks']
       const barracks = this.entityMgr.getBuildingsForPlayer(0)
-        .find(b => b.def.produces.includes(data.defId) && b.state === 'active')
+        .find(b => candidateIds.includes(b.def.id) && b.state === 'active')
       if (!barracks) return
 
       const spawnX = barracks.x + barracks.def.footprint.w * TILE_SIZE / 2 + TILE_SIZE
@@ -795,6 +811,24 @@ export class GameScene extends Phaser.Scene {
       if (this.selectedIds.size > 0) this.showUnitAck('Guard position')
     })
 
+    // D — deploy (GI/Conscript toggle fortified, MCV deploy/undeploy)
+    this.input.keyboard!.on('keydown-D', () => {
+      this.selectedIds.forEach(id => {
+        const unit = this.entityMgr.getUnit(id)
+        if (!unit || unit.playerId !== 0) return
+        // Toggle guard mode as "deploy" (fortified position: can't move, auto-engage)
+        if (unit.def.category === 'infantry' || unit.def.id === 'mcv') {
+          if (unit.state === 'idle') {
+            unit.giveOrder({ type: 'guard' })
+            this.showUnitAck('Deployed')
+          } else {
+            unit.giveOrder({ type: 'stop' })
+            this.showUnitAck('Undeployed')
+          }
+        }
+      })
+    })
+
     // X — scatter: units spread out (anti-splash)
     this.input.keyboard!.on('keydown-X', () => {
       this.selectedIds.forEach(id => {
@@ -813,6 +847,16 @@ export class GameScene extends Phaser.Scene {
         }
       })
       if (this.selectedIds.size > 0) this.showUnitAck('Scatter!')
+    })
+
+    // Z — waypoint mode: hold Z, click multiple points, units queue move orders
+    this.input.keyboard!.on('keydown-Z', () => {
+      if (this.selectedIds.size === 0) return
+      this.waypointMode = true
+      this.showUnitAck('Waypoint mode')
+    })
+    this.input.keyboard!.on('keyup-Z', () => {
+      this.waypointMode = false
     })
   }
 
@@ -882,45 +926,13 @@ export class GameScene extends Phaser.Scene {
     this.cursorMode = 'normal'
   }
 
-  private handleRightClick(ptr: Phaser.Input.Pointer): void {
-    // Right-click cancels any special cursor mode
+  private handleRightClick(_ptr: Phaser.Input.Pointer): void {
+    // RA2-style: right-click deselects all / cancels current mode
     if (this.cursorMode !== 'normal') {
       this.cursorMode = 'normal'
       return
     }
-
-    if (this.selectedIds.size === 0) return
-
-    const worldX = ptr.worldX
-    const worldY = ptr.worldY
-    const clickRadius = TILE_SIZE * 2
-
-    // Check for attackable enemies near click
-    const enemies = this.entityMgr.getEnemyUnitsInRange(worldX, worldY, clickRadius, 0)
-    const enemyBuilds = this.entityMgr.getEnemyBuildingsInRange(worldX, worldY, clickRadius, 0)
-    const attackTarget = enemies[0] ?? enemyBuilds[0]
-
-    const clickTile = this.gameMap.worldToTile(worldX, worldY)
-    const tile = this.gameMap.getTile(clickTile.col, clickTile.row)
-
-    let ackMsg = 'Moving out'
-
-    this.selectedIds.forEach(id => {
-      const unit = this.entityMgr.getUnit(id)
-      if (!unit || unit.playerId !== 0) return
-
-      if (attackTarget) {
-        unit.giveOrder({ type: 'attack', targetEntityId: attackTarget.id })
-        ackMsg = 'Attacking'
-      } else if (tile?.terrain === TerrainType.ORE && unit.def.category === 'harvester') {
-        unit.giveOrder({ type: 'harvest', target: { x: worldX, y: worldY } })
-        ackMsg = 'Harvesting'
-      } else {
-        unit.giveOrder({ type: 'move', target: { x: worldX, y: worldY } })
-      }
-    })
-
-    this.showUnitAck(ackMsg)
+    this.deselectAll()
   }
 
   // ── Unit acknowledgment text popup ─────────────────────────────
@@ -971,6 +983,20 @@ export class GameScene extends Phaser.Scene {
       return
     }
 
+    // Z held — waypoint mode: queue move orders without replacing existing ones
+    if (this.waypointMode && this.selectedIds.size > 0) {
+      const worldX = ptr.worldX
+      const worldY = ptr.worldY
+      this.selectedIds.forEach(id => {
+        const unit = this.entityMgr.getUnit(id)
+        if (unit && unit.playerId === 0) {
+          unit.giveOrder({ type: 'move', target: { x: worldX, y: worldY } }, true)
+        }
+      })
+      this.showUnitAck('Waypoint set')
+      return
+    }
+
     this.isDragging = true
     this.dragAnchorScreen = { x: ptr.x, y: ptr.y }
     this.dragAnchorWorld  = { x: ptr.worldX, y: ptr.worldY }
@@ -996,13 +1022,13 @@ export class GameScene extends Phaser.Scene {
     const h = Math.abs(ptr.worldY - this.dragAnchorWorld.y)
     const shiftHeld = !!(ptr.event as MouseEvent)?.shiftKey
 
-    if (w > 4 && h > 4) {
+    if (w > 5 || h > 5) {
+      // ── Box select ──
       const x1 = Math.min(this.dragAnchorWorld.x, ptr.worldX)
       const y1 = Math.min(this.dragAnchorWorld.y, ptr.worldY)
 
       if (!shiftHeld) this.deselectAll()
 
-      // Select player 0 units within the drag rect
       const units = this.entityMgr.getUnitsForPlayer(0)
       units.forEach(u => {
         if (u.x >= x1 && u.x <= x1 + w && u.y >= y1 && u.y <= y1 + h) {
@@ -1014,11 +1040,13 @@ export class GameScene extends Phaser.Scene {
       this.gameState.selectedEntityIds = Array.from(this.selectedIds)
       this.registry.set('selectedIds', this.gameState.selectedEntityIds)
     } else {
-      // Click-select nearest own unit
+      // ── Single click (< 5px drag) ──
       const clickX = ptr.worldX
       const clickY = ptr.worldY
       const hitRadius = TILE_SIZE * 0.75
+      const clickRadius = TILE_SIZE * 2
 
+      // Check if clicking on own unit
       let bestUnit: import('../entities/Unit').Unit | null = null
       let bestDist = Infinity
       for (const unit of this.entityMgr.getUnitsForPlayer(0)) {
@@ -1029,9 +1057,9 @@ export class GameScene extends Phaser.Scene {
         }
       }
 
-      if (!shiftHeld) this.deselectAll()
       if (bestUnit) {
-        // Shift+click toggles selection state
+        // Clicking on own unit → select it
+        if (!shiftHeld) this.deselectAll()
         if (shiftHeld && this.selectedIds.has(bestUnit.id)) {
           this.selectedIds.delete(bestUnit.id)
           bestUnit.setSelected(false)
@@ -1039,6 +1067,33 @@ export class GameScene extends Phaser.Scene {
           this.selectedIds.add(bestUnit.id)
           bestUnit.setSelected(true)
         }
+      } else if (this.selectedIds.size > 0) {
+        // RA2-style: left-click on ground/enemy with units selected → issue orders
+        const enemies = this.entityMgr.getEnemyUnitsInRange(clickX, clickY, clickRadius, 0)
+        const enemyBuilds = this.entityMgr.getEnemyBuildingsInRange(clickX, clickY, clickRadius, 0)
+        const attackTarget = enemies[0] ?? enemyBuilds[0]
+
+        const clickTile = this.gameMap.worldToTile(clickX, clickY)
+        const tile = this.gameMap.getTile(clickTile.col, clickTile.row)
+
+        let ackMsg = 'Moving out'
+
+        this.selectedIds.forEach(id => {
+          const unit = this.entityMgr.getUnit(id)
+          if (!unit || unit.playerId !== 0) return
+
+          if (attackTarget) {
+            unit.giveOrder({ type: 'attack', targetEntityId: attackTarget.id })
+            ackMsg = 'Attacking'
+          } else if (tile?.terrain === TerrainType.ORE && unit.def.category === 'harvester') {
+            unit.giveOrder({ type: 'harvest', target: { x: clickX, y: clickY } })
+            ackMsg = 'Harvesting'
+          } else {
+            unit.giveOrder({ type: 'move', target: { x: clickX, y: clickY } })
+          }
+        })
+
+        this.showUnitAck(ackMsg)
       }
 
       this.gameState.selectedEntityIds = Array.from(this.selectedIds)

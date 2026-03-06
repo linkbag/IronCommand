@@ -116,6 +116,10 @@ export class AI {
   // ── AI tick (decision making) ────────────────────────────────
 
   private tick(gameState: GameState): void {
+    // Skip if player has no CY and no buildings at all — they're defeated
+    const buildings = this.em.getBuildingsForPlayer(this.playerId)
+    if (buildings.length === 0) return
+
     this.updatePhase(gameState)
     this.ensureHarvesting(gameState)
     this.rebuildLostBuildings(gameState)
@@ -268,7 +272,12 @@ export class AI {
 
     // Deduct credits and place
     if (this.economy.deductCredits(this.playerId, def.stats.cost)) {
-      this.em.createBuilding(this.playerId, defId, placeTile.col, placeTile.row)
+      const building = this.em.createBuilding(this.playerId, defId, placeTile.col, placeTile.row)
+      // AI buildings are instantly active (no construction delay)
+      if (building) {
+        building.state = 'active'
+        building.setAlpha(1)
+      }
       return true
     }
     void cyard
@@ -284,17 +293,19 @@ export class AI {
     if (buildings.length === 0) return null
 
     const anchor = buildings[0]
-    const anchorCol = Math.floor((anchor.x - def.footprint.w * TILE_SIZE / 2) / TILE_SIZE)
-    const anchorRow = Math.floor((anchor.y - def.footprint.h * TILE_SIZE / 2) / TILE_SIZE)
+    const anchorCol = Math.floor(anchor.x / TILE_SIZE)
+    const anchorRow = Math.floor(anchor.y / TILE_SIZE)
 
-    // Spiral outward to find empty space
-    for (let radius = 1; radius <= 15; radius++) {
+    // Spiral outward to find empty space (step by footprint + gap)
+    const stepW = def.footprint.w + 1
+    const stepH = def.footprint.h + 1
+    for (let radius = 1; radius <= 10; radius++) {
       for (let dr = -radius; dr <= radius; dr++) {
         for (let dc = -radius; dc <= radius; dc++) {
           if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
-          const col = anchorCol + dc * (def.footprint.w + 1)
-          const row = anchorRow + dr * (def.footprint.h + 1)
-          if (col < 0 || row < 0) continue
+          const col = anchorCol + dc * stepW
+          const row = anchorRow + dr * stepH
+          if (col < 1 || row < 1 || col + def.footprint.w > 250 || row + def.footprint.h > 250) continue
           if (this.isTileFree(col, row, def.footprint.w, def.footprint.h)) {
             return { col, row }
           }
@@ -413,8 +424,10 @@ export class AI {
     const buildings = this.em.getBuildingsForPlayer(this.playerId)
 
     for (const bId of buildingIds) {
-      const found = buildings.find(b => b.def.id === bId && b.state === 'active')
-      if (found) return found
+      // Prefer buildings that aren't already producing (shorter queue)
+      const candidates = buildings.filter(b => b.def.id === bId && b.state === 'active')
+      const free = candidates.find(b => b.productionQueue.length === 0) ?? candidates[0]
+      if (free) return free
     }
     return null
   }
