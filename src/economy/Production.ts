@@ -52,6 +52,10 @@ export class Production extends Phaser.Events.EventEmitter {
       return false
     }
 
+    if (!this.canProducerCreateDef(producer.def.id, defId)) {
+      return false
+    }
+
     const def = unitDef ?? buildingDef!
     const cost = def.stats.cost
 
@@ -96,6 +100,7 @@ export class Production extends Phaser.Events.EventEmitter {
     queue.push(item)
     // Sync with building's queue
     producer.productionQueue = queue.slice()
+    console.log('[Pipeline] Production.queueProduction', { playerId, producerId, defId })
     this.emit('production_queued', producerId, defId, playerId)
     return true
   }
@@ -232,8 +237,8 @@ export class Production extends Phaser.Events.EventEmitter {
     const buildingDef = BUILDING_DEFS[defId]
 
     if (unitDef) {
-      // Spawn unit at rally point or producer exit
-      const spawnPos = producer.rallyPoint ?? {
+      // Spawn near producer exit so the unit is always visible and then move to rally point.
+      const spawnPos = {
         x: producer.x + producer.def.footprint.w * TILE_SIZE / 2 + TILE_SIZE,
         y: producer.y,
       }
@@ -246,7 +251,10 @@ export class Production extends Phaser.Events.EventEmitter {
           unit.emit('find_ore_field', unit.x, unit.y, (target: { x: number; y: number } | null) => {
             if (target) unit.giveOrder({ type: 'harvest', target })
           })
+        } else if (producer.rallyPoint) {
+          unit.giveOrder({ type: 'move', target: producer.rallyPoint })
         }
+        console.log('[Pipeline] Production.onProductionComplete unit', { producerId, defId, unitId: unit.id, playerId })
         this.emit('unit_produced', producerId, defId, unit.id, playerId)
       }
     } else if (buildingDef) {
@@ -264,5 +272,25 @@ export class Production extends Phaser.Events.EventEmitter {
   getProgressForBuilding(buildingId: string): BuildQueueItem | null {
     const queue = this.queues.get(buildingId)
     return queue?.[0] ?? null
+  }
+
+  private canProducerCreateDef(producerDefId: string, defId: string): boolean {
+    const unitDef = UNIT_DEFS[defId]
+    const buildingDef = BUILDING_DEFS[defId]
+
+    if (buildingDef) {
+      return producerDefId === 'construction_yard'
+    }
+    if (!unitDef) return false
+
+    const categoryToProducers: Record<string, string[]> = {
+      infantry: ['barracks'],
+      vehicle: ['war_factory'],
+      aircraft: ['air_force_command', 'war_factory'],
+      naval: ['naval_shipyard'],
+      harvester: ['ore_refinery', 'war_factory'],
+    }
+
+    return (categoryToProducers[unitDef.category] ?? []).includes(producerDefId)
   }
 }

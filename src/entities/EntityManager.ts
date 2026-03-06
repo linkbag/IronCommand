@@ -98,13 +98,27 @@ export class EntityManager extends Phaser.Events.EventEmitter {
       return null
     }
 
+    const safeX = Number.isFinite(worldX) ? worldX : 0
+    const safeY = Number.isFinite(worldY) ? worldY : 0
+    if (safeX !== worldX || safeY !== worldY) {
+      console.warn(`[EntityManager] Invalid spawn coordinates for ${defId}; using fallback`, { worldX, worldY })
+    }
+
     const id = this.generateId('u')
     const factionColor = this.getFactionColor(playerId)
-    const unit = new Unit(this.scene, id, playerId, def, factionColor, worldX, worldY)
+    const unit = new Unit(this.scene, id, playerId, def, factionColor, safeX, safeY)
+
+    // Safety: ensure produced units are in the scene and rendered above terrain/fog.
+    const maybeDisplayList = (unit as unknown as { displayList?: unknown }).displayList
+    if (!maybeDisplayList) {
+      this.scene.add.existing(unit)
+    }
+    unit.setDepth(Math.max(unit.depth, 12))
 
     this.units.set(id, unit)
     this.wireUnit(unit)
 
+    console.log('[Pipeline] EntityManager.createUnit', { id, playerId, defId, x: safeX, y: safeY, depth: unit.depth })
     this.emit('unit_created', { entityId: id, playerId })
     return unit
   }
