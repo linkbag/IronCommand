@@ -551,25 +551,42 @@ export class HUDScene extends Phaser.Scene {
     const isPending    = this.pendingPlace.has(item.id)
     const isBuilding   = this.buildProgress.has(item.id)
     const hasCredits   = !this.humanPlayer || this.humanPlayer.credits >= item.cost
+    const hasPrereqs   = this.checkPrerequisites(item.id)
 
     let fill   = HUD_PANEL
     let border = HUD_BORDER
+    let alpha  = 1.0
 
-    if (isPending)        { fill = 0x0a2a0a; border = HUD_GREEN }
-    else if (isBuilding)  { fill = 0x1a2a1a; border = 0x4ade80  }
-    else if (!hasCredits) { fill = 0x1a0a0a; border = 0x553333  }
+    if (!hasPrereqs) {
+      // Locked — grey out completely
+      fill = 0x0a0a0a; border = 0x222222; alpha = 0.4
+    } else if (isPending)   { fill = 0x0a2a0a; border = HUD_GREEN }
+    else if (isBuilding)    { fill = 0x1a2a1a; border = 0x4ade80  }
+    else if (!hasCredits)   { fill = 0x1a0a0a; border = 0x553333  }
 
-    g.fillStyle(fill, 1)
+    g.fillStyle(fill, alpha)
     g.fillRect(-BTN_W / 2, -BTN_H / 2, BTN_W, BTN_H)
+
+    if (!hasPrereqs) {
+      // Draw lock icon (small padlock shape)
+      g.fillStyle(0x555555, 0.8)
+      g.fillRect(-4, -6, 8, 8)           // lock body
+      g.lineStyle(2, 0x555555, 0.8)
+      g.strokeRect(-3, -12, 6, 6)        // lock shackle
+    }
+
     // Bevel top-left
-    g.lineStyle(1, 0x3a4a7e, 0.4)
+    g.lineStyle(1, 0x3a4a7e, hasPrereqs ? 0.4 : 0.1)
     g.beginPath()
     g.moveTo(-BTN_W / 2 + 1, BTN_H / 2 - 1)
     g.lineTo(-BTN_W / 2 + 1, -BTN_H / 2 + 1)
     g.lineTo(BTN_W / 2 - 1,  -BTN_H / 2 + 1)
     g.strokePath()
-    g.lineStyle(1, border, 0.8)
+    g.lineStyle(1, border, hasPrereqs ? 0.8 : 0.3)
     g.strokeRect(-BTN_W / 2, -BTN_H / 2, BTN_W, BTN_H)
+
+    // Set container alpha for all children (text, etc.)
+    btn.setAlpha(hasPrereqs ? 1.0 : 0.35)
   }
 
   private onBuildClick(item: BuildableItem) {

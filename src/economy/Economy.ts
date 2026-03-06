@@ -104,11 +104,16 @@ export class Economy extends Phaser.Events.EventEmitter {
     const ratio = generated === 0 ? 0 : generated / (generated + consumed)
     const isLow = consumed > 0 && ratio < POWER_LOW_THRESHOLD
 
+    const prev = this.powerState.get(playerId)
     this.powerState.set(playerId, { generated, consumed, isLow })
 
-    if (isLow !== wasLow) {
+    // Always emit so HUD stays in sync (not just on low-power toggle)
+    if (!prev || prev.generated !== generated || prev.consumed !== consumed) {
       this.emit('power_state_changed', playerId, isLow)
-      // Notify buildings of low power status
+    }
+
+    if (isLow !== wasLow) {
+      // Notify buildings of low power status change
       for (const b of buildings) {
         b.setLowPower(isLow)
       }
