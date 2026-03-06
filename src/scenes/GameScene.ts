@@ -306,6 +306,17 @@ export class GameScene extends Phaser.Scene {
     this.registry.set('economy', this.economy)
     this.registry.set('production', this.production)
     this.registry.set('entityMgr', this.entityMgr)
+    this.registry.set('canPlaceBuilding', (defId: string, col: number, row: number) => {
+      const def = BUILDING_DEFS[defId]
+      if (!def) return false
+      if (!this.isAdjacentToOwnBuildings(col, row, def.footprint.w, def.footprint.h, 0)) return false
+      for (let r = 0; r < def.footprint.h; r++) {
+        for (let c = 0; c < def.footprint.w; c++) {
+          if (!this.gameMap.isBuildable(col + c, row + r)) return false
+        }
+      }
+      return true
+    })
     this.registry.set('selectedIds', Array.from(this.selectedIds))
     this.registry.set('camX', this.camX)
     this.registry.set('camY', this.camY)
@@ -399,7 +410,10 @@ export class GameScene extends Phaser.Scene {
       // Adjacency check: must be within 3 tiles of existing building
       if (!this.isAdjacentToOwnBuildings(data.tileCol, data.tileRow, def.footprint.w, def.footprint.h, 0)) {
         const hud = this.scene.get('HUDScene')
-        if (hud) hud.events.emit('evaAlert', { message: 'Must build near existing structures', type: 'danger' })
+        if (hud) {
+          hud.events.emit('evaAlert', { message: 'Must build near existing structures', type: 'danger' })
+          hud.events.emit('placementRejected', { defId: data.defId })
+        }
         return
       }
 
@@ -408,7 +422,10 @@ export class GameScene extends Phaser.Scene {
         for (let c = 0; c < def.footprint.w; c++) {
           if (!this.gameMap.isBuildable(data.tileCol + c, data.tileRow + r)) {
             const hud = this.scene.get('HUDScene')
-            if (hud) hud.events.emit('evaAlert', { message: 'Cannot build here', type: 'danger' })
+            if (hud) {
+              hud.events.emit('evaAlert', { message: 'Cannot build here', type: 'danger' })
+              hud.events.emit('placementRejected', { defId: data.defId })
+            }
             return
           }
         }

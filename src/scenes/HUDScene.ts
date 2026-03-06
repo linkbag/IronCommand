@@ -1043,6 +1043,14 @@ export class HUDScene extends Phaser.Scene {
     const tileCol = Math.floor((ptr.x + camX) / 32)
     const tileRow = Math.floor((ptr.y + camY) / 32)
 
+    // Pre-check validity — don't exit placement if invalid
+    const canPlace = this.registry.get('canPlaceBuilding') as
+      ((defId: string, col: number, row: number) => boolean) | undefined
+    if (canPlace && !canPlace(this.placementDefId!, tileCol, tileRow)) {
+      this.showAlert('Cannot build here — too far from base', 'danger')
+      return  // Stay in placement mode — let player try another spot
+    }
+
     const gs = this.scene.get('GameScene')
     if (gs) gs.events.emit('placeBuilding', { defId: this.placementDefId, tileCol, tileRow })
 
@@ -1447,12 +1455,61 @@ export class HUDScene extends Phaser.Scene {
     const tileRow = Math.floor((ptr.y + camY) / 32)
     const snapX   = tileCol * 32 - camX
     const snapY   = tileRow * 32 - camY
-    const valid   = ptr.x < this.sidebarX - 16
+
+    // Check actual validity via GameScene
+    const canPlace = this.registry.get('canPlaceBuilding') as
+      ((defId: string, col: number, row: number) => boolean) | undefined
+    const valid = canPlace ? canPlace(this.placementDefId!, tileCol, tileRow) : true
 
     const g = this.ghost
     g.clear()
-    // 2×2 tile footprint ghost
-    const col = valid ? HUD_GREEN : HUD_ACCENT
+
+    // Show buildable range overlay (green tint around existing buildings)
+    const em = this.registry.get('entityMgr') as
+      { getBuildingsForPlayer(id: number): { occupiedTiles: { col: number; row: number }[]; state: string }[] } | undefined
+    if (em) {
+      const buildings = em.getBuildingsForPlayer(0)
+      const rangeTiles = new Set<string>()
+      for (const b of buildings) {
+        if (b.state === 'dying') continue
+        for (const tile of b.occupiedTiles) {
+          for (let dr = -3; dr <= 3; dr++) {
+            for (let dc = -3; dc <= 3; dc++) {
+              rangeTiles.add(`${tile.col + dc},${tile.row + dr}`)
+            }
+          }
+        }
+      }
+      // Draw range overlay
+      g.fillStyle(0x44ff44, 0.06)
+      for (const key of rangeTiles) {
+        const [tc, tr] = key.split(',').map(Number)
+        const rx = tc * 32 - camX
+        const ry = tr * 32 - camY
+        // Only draw tiles visible on screen
+        if (rx > -32 && rx < this.sidebarX && ry > -32 && ry < 720) {
+          g.fillRect(rx, ry, 32, 32)
+        }
+      }
+      // Draw range border
+      g.lineStyle(1, 0x44ff44, 0.15)
+      for (const key of rangeTiles) {
+        const [tc, tr] = key.split(',').map(Number)
+        // Check if edge tile (at least one neighbor not in range)
+        const isEdge = !rangeTiles.has(`${tc-1},${tr}`) || !rangeTiles.has(`${tc+1},${tr}`) ||
+                       !rangeTiles.has(`${tc},${tr-1}`) || !rangeTiles.has(`${tc},${tr+1}`)
+        if (isEdge) {
+          const rx = tc * 32 - camX
+          const ry = tr * 32 - camY
+          if (rx > -32 && rx < this.sidebarX && ry > -32 && ry < 720) {
+            g.strokeRect(rx, ry, 32, 32)
+          }
+        }
+      }
+    }
+
+    // Building footprint ghost — green if valid, red if invalid
+    const col = valid ? 0x44ff44 : 0xff4444
     g.fillStyle(col, 0.35)
     g.fillRect(snapX, snapY, 64, 64)
     g.lineStyle(2, col, 0.85)
@@ -1463,6 +1520,8 @@ export class HUDScene extends Phaser.Scene {
     g.lineBetween(snapX, snapY + 32, snapX + 64, snapY + 32)
 
     this.ghostLabel.setPosition(ptr.x + 14, ptr.y - 22)
+    this.ghostLabel.setText(valid ? 'Click to place' : '✗ Out of range')
+    this.ghostLabel.setColor(valid ? '#44ff44' : '#ff4444')
   }
 
   // ── Cursor mode ────────────────────────────────────────────────────
