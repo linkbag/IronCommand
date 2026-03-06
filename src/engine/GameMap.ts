@@ -285,22 +285,10 @@ export class GameMap {
     }
   }
 
-  /** Render fog of war layer — call after fog state changes */
-  renderFog(fullRedraw = false): void {
-    if (fullRedraw) {
-      this.renderFogFull()
-      return
-    }
-    const { tiles } = this.data
-    const g = this.fogLayer
-    for (const idx of this.dirtyFogCells) {
-      const col = idx % this.data.width
-      const row = Math.floor(idx / this.data.width)
-      const tile = tiles[row][col]
-      const alpha = FOG_ALPHA[tile.fogState]
-      g.fillStyle(0x000000, alpha)
-      g.fillRect(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-    }
+  /** Render fog of war layer — always does a full clear+redraw for correctness */
+  renderFog(_fullRedraw = false): void {
+    // Always full redraw — partial updates leave stale black tiles
+    this.renderFogFull()
     this.dirtyFogCells.clear()
   }
 

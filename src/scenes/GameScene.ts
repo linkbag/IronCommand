@@ -401,14 +401,21 @@ export class GameScene extends Phaser.Scene {
   // ── Fog of War ────────────────────────────────────────────────
 
   private updateFogOfWar(): void {
-    const humanPlayer = this.gameState.players[0]
     const sources: Array<{ pos: TileCoord; range: number }> = []
+    const localId = this.gameState.localPlayerId
 
-    for (const eid of humanPlayer.entities) {
-      const e = this.entityMgr.getEntity(eid)
-      if (!e) continue
-      const pos = this.gameMap.worldToTile(e.x, e.y)
-      sources.push({ pos, range: e.def.stats.sightRange })
+    // Scan all units + buildings belonging to human player
+    for (const u of this.entityMgr.getAllUnits()) {
+      if (u.playerId === localId && u.hp > 0) {
+        const pos = this.gameMap.worldToTile(u.x, u.y)
+        sources.push({ pos, range: u.def.stats.sightRange })
+      }
+    }
+    for (const b of this.entityMgr.getAllBuildings()) {
+      if (b.playerId === localId && b.hp > 0) {
+        const pos = this.gameMap.worldToTile(b.x, b.y)
+        sources.push({ pos, range: b.def.stats.sightRange })
+      }
     }
 
     if (sources.length > 0) {
