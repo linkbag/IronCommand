@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-05 19:38*
+*Last updated: 2026-03-05 20:35*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -69,3 +69,7 @@ Review passed — reviewer fixed issues (commit: 31c4de3 fix: remove duplicate w
 ### Update: 2026-03-05 19:38
 ### claude-ic-make-it-work — 2026-03-05 19:38
 Review passed — reviewer found no issues (work log updated, no fixes needed)
+
+### Update: 2026-03-05 20:35
+### claude-ic-ra2-overhaul — 2026-03-05 20:35
+Review passed — reviewer fixed issues (commit: c9e451f fix: force-reveal fog if no tiles visible (safety net), add spawn diagnostics)
