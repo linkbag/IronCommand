@@ -119,6 +119,10 @@ export class Unit extends Phaser.GameObjects.Container {
     this.setDepth(10)
   }
 
+  // ── Convenience getters (for HUDScene interop) ──────────────
+  get defId(): string { return this.def.id }
+  get maxHp(): number { return this.def.stats.maxHp }
+
   // ── Public API ───────────────────────────────────────────────
 
   giveOrder(order: Order, append = false): void {
