@@ -185,6 +185,7 @@ export class HUDScene extends Phaser.Scene {
   create() {
     const { width, height } = this.scale
     this.sidebarX = width - SIDEBAR_W
+    this.input.mouse?.disableContextMenu()
 
     // Compute layout Y anchors
     this.minimapY    = 4
@@ -501,12 +502,14 @@ export class HUDScene extends Phaser.Scene {
         g.strokeRect(-BTN_W / 2, -BTN_H / 2, BTN_W, BTN_H)
       })
       zone.on('pointerout',  () => this.drawItemBg(ctr))
-      zone.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-        if (pointer.rightButtonDown()) {
+      zone.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
+        const button = ptr.button ?? 0
+        if (button === 2) {
           this.onBuildRightClick(item)
-        } else {
-          this.onBuildClick(item)
+          return
         }
+        if (button !== 0) return
+        this.onBuildClick(item)
       })
     })
   }
@@ -623,6 +626,34 @@ export class HUDScene extends Phaser.Scene {
     if (gs) gs.events.emit('startProduction', { defId: item.id, type: item.tab === 'buildings' ? 'building' : 'unit' })
 
     this.showAlert(`Building: ${item.label}`, 'info')
+  }
+
+  private onBuildRightClick(item: BuildableItem) {
+    if (!this.buildProgress.has(item.id)) return
+
+    const refund = this.creditsPaid.get(item.id) ?? 0
+    if (this.humanPlayer && refund > 0) {
+      this.humanPlayer.credits += refund
+    }
+
+    this.buildProgress.delete(item.id)
+    this.buildTimers.delete(item.id)
+    this.creditsPaid.delete(item.id)
+    this.buildQueueCnt.delete(item.id)
+    this.pendingPlace.delete(item.id)
+
+    const gs = this.scene.get('GameScene')
+    if (gs) {
+      gs.events.emit('cancelProduction', {
+        defId: item.id,
+        type: item.tab === 'buildings' ? 'building' : 'unit',
+        refund,
+      })
+    }
+
+    const roundedRefund = Math.round(refund)
+    const refundMsg = roundedRefund > 0 ? ` (+$${roundedRefund})` : ''
+    this.showAlert(`${item.label} cancelled${refundMsg}`, 'warning')
   }
 
   /** Check tech prerequisites for an item against player's active buildings */
