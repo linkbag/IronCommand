@@ -804,7 +804,8 @@ export class HUDScene extends Phaser.Scene {
     }
 
     this.buildProgress.set(item.id, 0)
-    this.buildTimers.set(item.id, item.buildTime * 1000)
+    // 1.5x faster than default build times
+    this.buildTimers.set(item.id, item.buildTime * 1000 / 1.5)
     this.creditsPaid.set(item.id, 0)
 
     const gs = this.scene.get('GameScene')
