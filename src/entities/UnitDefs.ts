@@ -23,8 +23,8 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       armor: 0,
       speed: 2.5,
       sightRange: 6,
-      cost: 300,
-      buildTime: 8,
+      cost: 200,    // RA2: cheap expendable infantry
+      buildTime: 5,  // RA2: fast infantry production
       prerequisites: ['barracks'],
     },
     attack: {
@@ -50,8 +50,8 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       armor: 0,
       speed: 2,
       sightRange: 6,
-      cost: 450,
-      buildTime: 12,
+      cost: 400,    // RA2: slightly cheaper rockets
+      buildTime: 10,
       prerequisites: ['barracks'],
     },
     attack: {

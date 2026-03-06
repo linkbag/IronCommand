@@ -74,9 +74,11 @@ const BUILD_ITEMS: BuildableItem[] = [
   { id: 'turret',         label: 'Gun Turret',     abbrev: 'TU', cost: 600,  tab: 'buildings', buildTime: 15 },
   { id: 'aa_gun',         label: 'AA Gun',         abbrev: 'AA', cost: 700,  tab: 'buildings', buildTime: 15 },
   { id: 'wall',           label: 'Wall',           abbrev: 'WL', cost: 100,  tab: 'buildings', buildTime: 5  },
+  { id: 'advanced_power', label: 'Adv. Power',     abbrev: 'AP', cost: 1500, tab: 'buildings', buildTime: 30 },
+  { id: 'superweapon',    label: 'Superweapon',    abbrev: 'SW', cost: 5000, tab: 'buildings', buildTime: 120 },
   // Infantry
-  { id: 'rifle_soldier',  label: 'Rifle Soldier',  abbrev: 'RI', cost: 300,  tab: 'infantry',  buildTime: 8  },
-  { id: 'rocket_soldier', label: 'Rocket Soldier', abbrev: 'RK', cost: 450,  tab: 'infantry',  buildTime: 12 },
+  { id: 'rifle_soldier',  label: 'Rifle Soldier',  abbrev: 'RI', cost: 200,  tab: 'infantry',  buildTime: 5  },
+  { id: 'rocket_soldier', label: 'Rocket Soldier', abbrev: 'RK', cost: 400,  tab: 'infantry',  buildTime: 10 },
   { id: 'engineer',       label: 'Engineer',       abbrev: 'EN', cost: 600,  tab: 'infantry',  buildTime: 15 },
   { id: 'attack_dog',     label: 'Attack Dog',     abbrev: 'DG', cost: 200,  tab: 'infantry',  buildTime: 5  },
   // Vehicles
@@ -128,6 +130,7 @@ export class HUDScene extends Phaser.Scene {
   private buildTimers:    Map<string, number> = new Map()  // ms remaining
   private buildQueueCnt:  Map<string, number> = new Map()
   private pendingPlace:   Set<string>         = new Set()  // ready to place
+  private creditsPaid:    Map<string, number> = new Map()  // credits already deducted for item
 
   // ── Placement ghost ───────────────────────────────────────────────
   private placementMode  = false
@@ -514,27 +517,62 @@ export class HUDScene extends Phaser.Scene {
       return
     }
 
-    // Queue if already building
+    // RA2: One building at a time per Construction Yard
+    if (item.tab === 'buildings') {
+      const alreadyBuilding = BUILD_ITEMS.some(
+        bi => bi.tab === 'buildings' && bi.id !== item.id && this.buildProgress.has(bi.id)
+      )
+      if (alreadyBuilding) {
+        this.showAlert('Already constructing a building', 'danger')
+        return
+      }
+    }
+
+    // Queue if already building this item
     if (this.buildProgress.has(item.id)) {
+      if (item.tab === 'buildings') {
+        this.showAlert('Already constructing this building', 'danger')
+        return
+      }
       const q = (this.buildQueueCnt.get(item.id) ?? 0) + 1
       this.buildQueueCnt.set(item.id, q)
       this.showAlert(`${item.label} queued (+${q})`, 'info')
       return
     }
 
-    if (player.credits < item.cost) {
+    // RA2: Check tech prerequisites
+    if (!this.checkPrerequisites(item.id)) {
+      this.showAlert('Prerequisites not met', 'danger')
+      return
+    }
+
+    // RA2: Credits deducted gradually — just need enough to start (any credits > 0)
+    if (player.credits <= 0) {
       this.showAlert('Insufficient credits', 'danger')
       return
     }
 
-    player.credits -= item.cost
     this.buildProgress.set(item.id, 0)
     this.buildTimers.set(item.id, item.buildTime * 1000)
+    this.creditsPaid.set(item.id, 0)
 
     const gs = this.scene.get('GameScene')
     if (gs) gs.events.emit('startProduction', { defId: item.id, type: item.tab === 'buildings' ? 'building' : 'unit' })
 
     this.showAlert(`Building: ${item.label}`, 'info')
+  }
+
+  /** Check tech prerequisites for an item against player's active buildings */
+  private checkPrerequisites(defId: string): boolean {
+    type E = { getPlayerActiveBuildingIds(playerId: number): string[] }
+    const em = this.registry.get('entityMgr') as E | undefined
+    if (!em) return true  // No entity manager yet = allow
+    const activeIds = em.getPlayerActiveBuildingIds(0)
+    // Look up from BuildingDefs or UnitDefs via Production system
+    const prod = this.registry.get('production') as { checkPrerequisites(playerId: number, defId: string): boolean } | undefined
+    if (prod) return prod.checkPrerequisites(0, defId)
+    // Fallback: just check if construction_yard exists
+    return activeIds.includes('construction_yard')
   }
 
   // ── Selected entity panel ────────────────────────────────────────────
@@ -948,19 +986,42 @@ export class HUDScene extends Phaser.Scene {
     const done: string[] = []
 
     this.buildProgress.forEach((_, id) => {
-      const rem = (this.buildTimers.get(id) ?? 0) - delta
+      const item = BUILD_ITEMS.find(i => i.id === id)!
+      const totalTime = item.buildTime * 1000
+      const paid = this.creditsPaid.get(id) ?? 0
+      const remaining = item.cost - paid
+
+      // RA2: Gradual credit deduction — pause if broke
+      if (remaining > 0) {
+        const creditRate = item.cost / (item.buildTime) // credits per second
+        const creditChunk = creditRate * (delta / 1000)
+        const toPay = Math.min(remaining, creditChunk)
+
+        if (this.humanPlayer && this.humanPlayer.credits < toPay) {
+          // Paused — no credits
+          return
+        }
+
+        // Deduct credits
+        if (this.humanPlayer) this.humanPlayer.credits -= toPay
+        this.creditsPaid.set(id, paid + toPay)
+      }
+
+      // Apply power speed modifier
+      const powerMult = this.getPowerSpeedMultiplier()
+      const rem = (this.buildTimers.get(id) ?? 0) - delta * powerMult
       if (rem <= 0) {
         done.push(id)
       } else {
         this.buildTimers.set(id, rem)
-        const item = BUILD_ITEMS.find(i => i.id === id)!
-        this.buildProgress.set(id, 1 - rem / (item.buildTime * 1000))
+        this.buildProgress.set(id, 1 - rem / totalTime)
       }
     })
 
     done.forEach(id => {
       this.buildProgress.delete(id)
       this.buildTimers.delete(id)
+      this.creditsPaid.delete(id)
       const item = BUILD_ITEMS.find(i => i.id === id)!
 
       // Process queue
@@ -1108,5 +1169,13 @@ export class HUDScene extends Phaser.Scene {
     // Emit to game scene so it can change cursor behavior
     const gs = this.scene.get('GameScene')
     if (gs) gs.events.emit('cursorModeChanged', { mode })
+  }
+
+  /** RA2: Production slows to 50% when power is low */
+  private getPowerSpeedMultiplier(): number {
+    if (!this.humanPlayer) return 1
+    const { powerGenerated, powerConsumed } = this.humanPlayer
+    if (powerGenerated <= 0) return 0.5
+    return powerConsumed > powerGenerated ? 0.5 : 1.0
   }
 }

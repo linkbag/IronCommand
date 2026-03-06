@@ -1,6 +1,7 @@
 // ============================================================
-// IRON COMMAND — GameScene (Core Overhaul)
+// IRON COMMAND — GameScene (RA2 Mechanics Overhaul)
 // Wires real engine + entity + economy + combat + AI modules
+// Full HUD ↔ GameScene event integration
 // ============================================================
 
 import Phaser from 'phaser'
@@ -11,10 +12,19 @@ import { Combat } from '../combat/Combat'
 import { Economy } from '../economy/Economy'
 import { Production } from '../economy/Production'
 import { AI } from '../combat/AI'
+import { BUILDING_DEFS } from '../entities/BuildingDefs'
 import type { Position, TileCoord, GameState, Player, GamePhase, FactionId } from '../types'
 import { TILE_SIZE, STARTING_CREDITS, TerrainType } from '../types'
 import { FACTIONS } from '../data/factions'
 import type { SkirmishConfig } from './SetupScene'
+
+// Unit acknowledgment lines
+const ACK_LINES: Record<string, string[]> = {
+  infantry: ['Yes sir!', 'Affirmative', 'Moving out', 'On it!', 'Copy that'],
+  vehicle: ['Rolling out', 'Moving', 'Acknowledged', 'On the way'],
+  aircraft: ['Airborne!', 'Wilco', 'Roger that'],
+  harvester: ['Returning', 'Harvesting', 'On my way'],
+}
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
@@ -49,10 +59,14 @@ export class GameScene extends Phaser.Scene {
   private isDragging = false
   private dragAnchorScreen = { x: 0, y: 0 }
   private dragAnchorWorld = { x: 0, y: 0 }
+  private cursorMode: string = 'normal'
 
   // ── Selection ───────────────────────────────────────────────
   private selectionRect!: Phaser.GameObjects.Graphics
   private selectedIds: Set<string> = new Set()
+
+  // ── Last alert position (for Space key) ────────────────────
+  private lastAlertPos: Position | null = null
 
   constructor() {
     super({ key: 'GameScene' })
@@ -71,6 +85,8 @@ export class GameScene extends Phaser.Scene {
     this.selectedIds = new Set()
     this.camX = 0
     this.camY = 0
+    this.cursorMode = 'normal'
+    this.lastAlertPos = null
   }
 
   create() {
@@ -155,6 +171,8 @@ export class GameScene extends Phaser.Scene {
     this.wireEntityEvents()
     this.wireOreEvents()
     this.wireEconomyEvents()
+    this.wireHUDEvents()
+    this.wireProductionEvents()
 
     // ── 11. Spawn starting entities ───────────────────────────
     this.spawnStartingEntities()
@@ -196,6 +214,9 @@ export class GameScene extends Phaser.Scene {
     if (this.gameState.phase !== 'playing') return
 
     this.gameState.tick++
+
+    // Handle camera target from HUD (minimap click, H key)
+    this.handleCameraTarget()
 
     // Camera scroll + clamp to map bounds
     this.handleCameraScroll(delta)
@@ -245,6 +266,19 @@ export class GameScene extends Phaser.Scene {
     this.registry.set('camY', this.camY)
   }
 
+  // ── Camera target from registry (minimap click, H key) ──────
+
+  private handleCameraTarget(): void {
+    const tx = this.registry.get('camTargetX') as number | undefined
+    const ty = this.registry.get('camTargetY') as number | undefined
+    if (tx !== undefined && ty !== undefined) {
+      this.camX = tx
+      this.camY = ty
+      this.registry.remove('camTargetX')
+      this.registry.remove('camTargetY')
+    }
+  }
+
   // ── Entity event wiring ───────────────────────────────────────
 
   private wireEntityEvents(): void {
@@ -262,11 +296,30 @@ export class GameScene extends Phaser.Scene {
     this.entityMgr.on('unit_destroyed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p) p.entities = p.entities.filter(id => id !== entityId)
+      // Notify HUD
+      if (playerId === 0) {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'Unit lost', type: 'danger' })
+      }
     })
 
     this.entityMgr.on('building_destroyed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p) p.entities = p.entities.filter(id => id !== entityId)
+      if (playerId === 0) {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('buildingLost', { defId: entityId })
+      }
+    })
+
+    // Building under attack — alert if player's building
+    this.entityMgr.on('building_died', (b: { playerId: number; x: number; y: number }) => {
+      if (b.playerId === 0) {
+        this.lastAlertPos = { x: b.x, y: b.y }
+        this.registry.set('lastAlertPos', this.lastAlertPos)
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('underAttack')
+      }
     })
   }
 
@@ -286,6 +339,131 @@ export class GameScene extends Phaser.Scene {
         p.powerGenerated = ps.generated
         p.powerConsumed = ps.consumed
         p.power = ps.generated - ps.consumed
+      }
+    })
+  }
+
+  // ── HUD → GameScene event wiring ──────────────────────────────
+
+  private wireHUDEvents(): void {
+    // Place building from HUD placement mode
+    this.events.on('placeBuilding', (data: { defId: string; tileCol: number; tileRow: number }) => {
+      const def = BUILDING_DEFS[data.defId]
+      if (!def) return
+
+      // Adjacency check: must be within 3 tiles of existing building
+      if (!this.isAdjacentToOwnBuildings(data.tileCol, data.tileRow, def.footprint.w, def.footprint.h, 0)) {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'Must build near existing structures', type: 'danger' })
+        return
+      }
+
+      // Check tiles are buildable
+      for (let r = 0; r < def.footprint.h; r++) {
+        for (let c = 0; c < def.footprint.w; c++) {
+          if (!this.gameMap.isBuildable(data.tileCol + c, data.tileRow + r)) {
+            const hud = this.scene.get('HUDScene')
+            if (hud) hud.events.emit('evaAlert', { message: 'Cannot build here', type: 'danger' })
+            return
+          }
+        }
+      }
+
+      const building = this.entityMgr.createBuilding(0, data.defId, data.tileCol, data.tileRow)
+      if (building) {
+        // Mark tiles as occupied
+        for (const tile of building.occupiedTiles) {
+          this.gameMap.setOccupied(tile.col, tile.row, building.id)
+        }
+
+        const hud = this.scene.get('HUDScene')
+        if (hud) {
+          hud.events.emit('evaAlert', { message: 'Construction complete', type: 'success' })
+          hud.events.emit('productionComplete', { defId: data.defId })
+        }
+
+        // RA2: Refinery spawns a free harvester
+        if (data.defId === 'ore_refinery') {
+          this.spawnFreeHarvester(building)
+        }
+      }
+    })
+
+    // Sell building
+    this.events.on('sellBuilding', (data: { entityId: string }) => {
+      const building = this.entityMgr.getBuilding(data.entityId)
+      if (!building || building.playerId !== 0) return
+      const refund = building.sell()
+      if (refund > 0) {
+        this.economy.addCredits(0, refund)
+        // Free occupied tiles
+        for (const tile of building.occupiedTiles) {
+          this.gameMap.setOccupied(tile.col, tile.row, null)
+        }
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: `Building sold ($${refund})`, type: 'warning' })
+      }
+    })
+
+    // Unit produced from HUD build panel
+    this.events.on('unitProduced', (data: { defId: string }) => {
+      // Find appropriate production building
+      const barracks = this.entityMgr.getBuildingsForPlayer(0)
+        .find(b => b.def.produces.includes(data.defId) && b.state === 'active')
+      if (!barracks) return
+
+      const spawnX = barracks.x + barracks.def.footprint.w * TILE_SIZE / 2 + TILE_SIZE
+      const spawnY = barracks.y
+      const unit = this.entityMgr.createUnit(0, data.defId, spawnX, spawnY)
+      if (unit) {
+        // Auto-harvest if harvester
+        if (unit.def.category === 'harvester') {
+          const refinery = this.entityMgr.getNearestRefinery(unit.x, unit.y, 0)
+          if (refinery) unit.setRefineryId(refinery.id)
+          unit.emit('find_ore_field', unit.x, unit.y, (target: Position | null) => {
+            if (target) unit.giveOrder({ type: 'harvest', target })
+          })
+        }
+
+        // Rally point
+        if (barracks.rallyPoint) {
+          unit.giveOrder({ type: 'move', target: barracks.rallyPoint })
+        }
+
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'Unit ready', type: 'success' })
+      }
+    })
+
+    // Issue order from HUD (guard, stop, etc.)
+    this.events.on('issueOrder', (data: { ids: string[]; type: string; target?: Position }) => {
+      for (const id of data.ids) {
+        const unit = this.entityMgr.getUnit(id)
+        if (!unit || unit.playerId !== 0) continue
+        unit.giveOrder({ type: data.type as any, target: data.target })
+      }
+    })
+
+    // Cursor mode changed from HUD
+    this.events.on('cursorModeChanged', (data: { mode: string }) => {
+      this.cursorMode = data.mode
+    })
+
+    // Start production event from HUD (for build queue tracking)
+    this.events.on('startProduction', (_data: { defId: string; type: string }) => {
+      // HUDScene handles its own build progress tracking
+    })
+  }
+
+  // ── Production system event wiring ─────────────────────────────
+
+  private wireProductionEvents(): void {
+    this.production.on('unit_produced', (
+      _producerId: string, defId: string, _unitId: string, playerId: number
+    ) => {
+      if (playerId === 0) {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'Unit ready', type: 'success' })
       }
     })
   }
@@ -350,6 +528,63 @@ export class GameScene extends Phaser.Scene {
 
       cb(foundPos)
     })
+  }
+
+  // ── Building adjacency check ────────────────────────────────────
+
+  private isAdjacentToOwnBuildings(
+    col: number, row: number, w: number, h: number, playerId: number
+  ): boolean {
+    const maxDist = 3  // tiles
+    const buildings = this.entityMgr.getBuildingsForPlayer(playerId)
+    if (buildings.length === 0) return true  // first building can go anywhere
+
+    for (const b of buildings) {
+      if (b.state === 'dying') continue
+      for (const tile of b.occupiedTiles) {
+        for (let r = 0; r < h; r++) {
+          for (let c = 0; c < w; c++) {
+            const dc = Math.abs(tile.col - (col + c))
+            const dr = Math.abs(tile.row - (row + r))
+            if (dc <= maxDist && dr <= maxDist) return true
+          }
+        }
+      }
+    }
+    return false
+  }
+
+  // ── Free harvester on refinery placement (RA2 authentic) ────────
+
+  private spawnFreeHarvester(refinery: import('../entities/Building').Building): void {
+    const { tiles, width, height } = this.gameMap.data
+    const spawnX = refinery.x + refinery.def.footprint.w * TILE_SIZE / 2 + TILE_SIZE
+    const spawnY = refinery.y
+    const hv = this.entityMgr.createUnit(refinery.playerId, 'harvester', spawnX, spawnY)
+    if (hv) {
+      hv.setRefineryId(refinery.id)
+      // Find nearest ore
+      const origin = this.gameMap.worldToTile(hv.x, hv.y)
+      let sent = false
+      for (let radius = 1; radius <= 40 && !sent; radius++) {
+        for (let dr = -radius; dr <= radius && !sent; dr++) {
+          for (let dc = -radius; dc <= radius && !sent; dc++) {
+            if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
+            const tc = origin.col + dc, tr = origin.row + dr
+            if (tc < 0 || tc >= width || tr < 0 || tr >= height) continue
+            if ((tiles[tr]?.[tc]?.oreAmount ?? 0) > 100) {
+              hv.giveOrder({ type: 'harvest', target: this.gameMap.tileToWorld(tc, tr) })
+              sent = true
+            }
+          }
+        }
+      }
+
+      if (refinery.playerId === 0) {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'Harvester deployed', type: 'info' })
+      }
+    }
   }
 
   // ── Spawn starting entities ───────────────────────────────────
@@ -518,6 +753,20 @@ export class GameScene extends Phaser.Scene {
       if (ptr.rightButtonDown()) {
         this.handleRightClick(ptr)
       } else if (ptr.leftButtonDown()) {
+        // Sell/repair cursor modes
+        if (this.cursorMode === 'sell') {
+          this.handleSellClick(ptr)
+          return
+        }
+        if (this.cursorMode === 'repair') {
+          this.handleRepairClick(ptr)
+          return
+        }
+        // Ctrl+click = force fire
+        if ((ptr.event as MouseEvent)?.ctrlKey && this.selectedIds.size > 0) {
+          this.handleForceAttack(ptr)
+          return
+        }
         this.startDragSelect(ptr)
       }
     })
@@ -551,21 +800,117 @@ export class GameScene extends Phaser.Scene {
       }
     })
 
-    // A — attack-move selected units to cursor
+    // A — attack-move: enter attack-move cursor mode
     this.input.keyboard!.on('keydown-A', () => {
-      const ptr = this.input.activePointer
-      const worldX = ptr.worldX
-      const worldY = ptr.worldY
+      if (this.selectedIds.size === 0) return
+      this.cursorMode = 'attackMove'
+    })
+
+    // G — guard mode: units hold position and auto-engage
+    this.input.keyboard!.on('keydown-G', () => {
       this.selectedIds.forEach(id => {
-        this.entityMgr.getUnit(id)?.giveOrder({
-          type: 'attackMove',
-          target: { x: worldX, y: worldY },
-        })
+        const unit = this.entityMgr.getUnit(id)
+        if (unit && unit.playerId === 0) {
+          unit.giveOrder({ type: 'guard' })
+        }
       })
+      if (this.selectedIds.size > 0) this.showUnitAck('Guard position')
+    })
+
+    // X — scatter: units spread out (anti-splash)
+    this.input.keyboard!.on('keydown-X', () => {
+      this.selectedIds.forEach(id => {
+        const unit = this.entityMgr.getUnit(id)
+        if (unit && unit.playerId === 0) {
+          // Move to a random nearby position
+          const angle = Math.random() * Math.PI * 2
+          const dist = TILE_SIZE * 2 + Math.random() * TILE_SIZE * 2
+          unit.giveOrder({
+            type: 'move',
+            target: {
+              x: unit.x + Math.cos(angle) * dist,
+              y: unit.y + Math.sin(angle) * dist,
+            },
+          })
+        }
+      })
+      if (this.selectedIds.size > 0) this.showUnitAck('Scatter!')
     })
   }
 
+  // ── Ctrl+click force fire ──────────────────────────────────────
+
+  private handleForceAttack(ptr: Phaser.Input.Pointer): void {
+    const worldX = ptr.worldX
+    const worldY = ptr.worldY
+
+    // Find ANY entity near click (friendly or enemy)
+    const allUnits = this.entityMgr.getUnitsInRange(worldX, worldY, TILE_SIZE * 2)
+    const allBuildings = this.entityMgr.getBuildingsInRange(worldX, worldY, TILE_SIZE * 2)
+    const target = allUnits[0] ?? allBuildings[0]
+
+    this.selectedIds.forEach(id => {
+      const unit = this.entityMgr.getUnit(id)
+      if (!unit || unit.playerId !== 0) return
+      if (target) {
+        unit.giveOrder({ type: 'attack', targetEntityId: target.id })
+      }
+    })
+    this.showUnitAck('Attacking')
+  }
+
+  // ── Sell mode click ──────────────────────────────────────────────
+  private handleSellClick(ptr: Phaser.Input.Pointer): void {
+    const worldX = ptr.worldX
+    const worldY = ptr.worldY
+    const buildings = this.entityMgr.getBuildingsInRange(worldX, worldY, TILE_SIZE * 2)
+      .filter(b => b.playerId === 0 && b.state !== 'dying')
+
+    if (buildings.length > 0) {
+      const building = buildings[0]
+      const refund = building.sell()
+      if (refund > 0) {
+        this.economy.addCredits(0, refund)
+        for (const tile of building.occupiedTiles) {
+          this.gameMap.setOccupied(tile.col, tile.row, null)
+        }
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: `Building sold ($${refund})`, type: 'warning' })
+      }
+    }
+    this.cursorMode = 'normal'
+  }
+
+  // ── Repair mode click ─────────────────────────────────────────────
+  private handleRepairClick(ptr: Phaser.Input.Pointer): void {
+    const worldX = ptr.worldX
+    const worldY = ptr.worldY
+    const buildings = this.entityMgr.getBuildingsInRange(worldX, worldY, TILE_SIZE * 2)
+      .filter(b => b.playerId === 0 && b.state !== 'dying')
+
+    if (buildings.length > 0) {
+      const building = buildings[0]
+      const credits = this.economy.getCredits(0)
+      const cost = building.repair(credits)
+      if (cost > 0) {
+        this.economy.deductCredits(0, cost)
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: `Repaired ($${cost})`, type: 'success' })
+      } else {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'No repairs needed', type: 'info' })
+      }
+    }
+    this.cursorMode = 'normal'
+  }
+
   private handleRightClick(ptr: Phaser.Input.Pointer): void {
+    // Right-click cancels any special cursor mode
+    if (this.cursorMode !== 'normal') {
+      this.cursorMode = 'normal'
+      return
+    }
+
     if (this.selectedIds.size === 0) return
 
     const worldX = ptr.worldX
@@ -580,21 +925,74 @@ export class GameScene extends Phaser.Scene {
     const clickTile = this.gameMap.worldToTile(worldX, worldY)
     const tile = this.gameMap.getTile(clickTile.col, clickTile.row)
 
+    let ackMsg = 'Moving out'
+
     this.selectedIds.forEach(id => {
       const unit = this.entityMgr.getUnit(id)
       if (!unit || unit.playerId !== 0) return
 
       if (attackTarget) {
         unit.giveOrder({ type: 'attack', targetEntityId: attackTarget.id })
+        ackMsg = 'Attacking'
       } else if (tile?.terrain === TerrainType.ORE && unit.def.category === 'harvester') {
         unit.giveOrder({ type: 'harvest', target: { x: worldX, y: worldY } })
+        ackMsg = 'Harvesting'
       } else {
         unit.giveOrder({ type: 'move', target: { x: worldX, y: worldY } })
       }
     })
+
+    this.showUnitAck(ackMsg)
+  }
+
+  // ── Unit acknowledgment text popup ─────────────────────────────
+
+  private showUnitAck(msg: string): void {
+    if (this.selectedIds.size === 0) return
+
+    // Show near first selected unit
+    const firstId = Array.from(this.selectedIds)[0]
+    const unit = this.entityMgr.getUnit(firstId)
+    if (!unit) return
+
+    // Pick a random ack line or use the provided message
+    const category = unit.def.category
+    const lines = ACK_LINES[category] ?? ACK_LINES['infantry']
+    const line = msg || lines[Math.floor(Math.random() * lines.length)]
+
+    const text = this.add.text(unit.x, unit.y - 24, line, {
+      fontFamily: 'monospace',
+      fontSize: '8px',
+      color: '#ffffff',
+      stroke: '#000000',
+      strokeThickness: 2,
+    }).setOrigin(0.5).setDepth(100)
+
+    this.tweens.add({
+      targets: text,
+      y: text.y - 20,
+      alpha: 0,
+      duration: 1200,
+      onComplete: () => text.destroy(),
+    })
   }
 
   private startDragSelect(ptr: Phaser.Input.Pointer): void {
+    // If in attack-move mode, left-click issues the attack-move order
+    if (this.cursorMode === 'attackMove') {
+      const worldX = ptr.worldX
+      const worldY = ptr.worldY
+      this.selectedIds.forEach(id => {
+        this.entityMgr.getUnit(id)?.giveOrder({
+          type: 'attackMove',
+          target: { x: worldX, y: worldY },
+        })
+      })
+      this.cursorMode = 'normal'
+      this.showUnitAck('Attack-moving')
+      return
+    }
+
     this.isDragging = true
     this.dragAnchorScreen = { x: ptr.x, y: ptr.y }
     this.dragAnchorWorld  = { x: ptr.worldX, y: ptr.worldY }

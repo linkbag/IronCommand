@@ -4,7 +4,7 @@
 // ============================================================
 
 import Phaser from 'phaser'
-import type { Unit } from '../entities/Unit'
+import { Unit } from '../entities/Unit'
 import type { Building } from '../entities/Building'
 import type { EntityManager } from '../entities/EntityManager'
 import type { AttackStats } from '../types'
@@ -130,15 +130,24 @@ export class Combat extends Phaser.Events.EventEmitter {
     if (!attacker.def.attack) return
 
     const attack = attacker.def.attack
+    // RA2 Veterancy: damage multiplier for units
+    const vetMult = (attacker instanceof Unit) ? attacker.getVeterancyDamageMultiplier() : 1.0
 
     if (attack.projectileSpeed <= 0) {
       // Hitscan — instant damage
-      const dmg = this.calculateDamage(
+      const baseDmg = this.calculateDamage(
         attack,
         this.getTargetCategory(target),
         target.def.stats.armor,
       )
+      const dmg = Math.ceil(baseDmg * vetMult)
+      const hpBefore = target.hp
       target.takeDamage(dmg, attacker.playerId)
+
+      // Track kill for veterancy
+      if (hpBefore > 0 && target.hp <= 0 && attacker instanceof Unit) {
+        attacker.recordKill()
+      }
 
       if (attack.splash > 0) {
         this.dealSplashDamage(
@@ -159,12 +168,19 @@ export class Combat extends Phaser.Events.EventEmitter {
         attacker.playerId,
         () => {
           if (target.hp > 0) {
-            const dmg = this.calculateDamage(
+            const baseDmg = this.calculateDamage(
               attack,
               this.getTargetCategory(target),
               target.def.stats.armor,
             )
+            const dmg = Math.ceil(baseDmg * vetMult)
+            const hpBefore = target.hp
             target.takeDamage(dmg, attacker.playerId)
+
+            // Track kill for veterancy
+            if (hpBefore > 0 && target.hp <= 0 && attacker instanceof Unit) {
+              attacker.recordKill()
+            }
 
             if (attack.splash > 0) {
               this.dealSplashDamage(
