@@ -2,6 +2,7 @@
 // IRON COMMAND — Unit Definitions (RA2-Style Asymmetric Rosters)
 // Iron Alliance vs Red Collective — different shared units per side
 // Each country gets ONE special unit via factionExclusive
+// Build time formula: Math.ceil(cost / 100), min 3, max 45 seconds
 // ============================================================
 
 import type { UnitDef, FactionId, FactionSide } from '../types'
@@ -77,14 +78,14 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       sightRange: 6,
       cost: 600,
       buildTime: 6,
-      prerequisites: ['barracks', 'air_force_command'],
+      prerequisites: ['barracks'],
     },
     attack: {
       damage: 25,
       range: 5,
       fireRate: 1.2,
       projectileSpeed: 500,
-      damageType: DamageType.BULLET,
+      damageType: DamageType.MISSILE,
       canAttackAir: true,
       canAttackGround: true,
       splash: 0,
@@ -132,6 +133,62 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       fireRate: 2,
       projectileSpeed: 0,
       damageType: DamageType.BULLET,
+      canAttackAir: false,
+      canAttackGround: true,
+      splash: 0,
+    },
+  },
+
+  tanya: {
+    id: 'tanya',
+    name: 'Tanya',
+    category: 'infantry',
+    side: 'alliance',
+    factionExclusive: null,
+    spriteKey: 'unit_tanya',
+    stats: {
+      maxHp: 150,
+      armor: 0,
+      speed: 3.5,
+      sightRange: 7,
+      cost: 1500,
+      buildTime: 15,
+      prerequisites: ['barracks', 'battle_lab'],
+    },
+    attack: {
+      damage: 200, // dual pistols — instant kill vs infantry; C4 vs buildings
+      range: 3,
+      fireRate: 2,
+      projectileSpeed: 0,
+      damageType: DamageType.BULLET,
+      canAttackAir: false,
+      canAttackGround: true,
+      splash: 0,
+    },
+  },
+
+  chrono_legionnaire: {
+    id: 'chrono_legionnaire',
+    name: 'Chrono Legionnaire',
+    category: 'infantry',
+    side: 'alliance',
+    factionExclusive: null,
+    spriteKey: 'unit_chrono_legionnaire',
+    stats: {
+      maxHp: 100,
+      armor: 0,
+      speed: 4,
+      sightRange: 6,
+      cost: 1500,
+      buildTime: 15,
+      prerequisites: ['barracks', 'battle_lab'],
+    },
+    attack: {
+      damage: 50, // erases units from timeline — slow but guaranteed kill
+      range: 7,
+      fireRate: 0.2,
+      projectileSpeed: 0, // hitscan chrono beam
+      damageType: DamageType.ELECTRIC,
       canAttackAir: false,
       canAttackGround: true,
       splash: 0,
@@ -193,6 +250,34 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       canAttackAir: true,
       canAttackGround: true,
       splash: 0,
+    },
+  },
+
+  mirage_tank: {
+    id: 'mirage_tank',
+    name: 'Mirage Tank',
+    category: 'vehicle',
+    side: 'alliance',
+    factionExclusive: null,
+    spriteKey: 'unit_mirage_tank',
+    stats: {
+      maxHp: 200,
+      armor: 0.15,
+      speed: 2.5,
+      sightRange: 7,
+      cost: 1000,
+      buildTime: 10,
+      prerequisites: ['war_factory', 'air_force_command'],
+    },
+    attack: {
+      damage: 110,
+      range: 7,
+      fireRate: 0.6,
+      projectileSpeed: 600,
+      damageType: DamageType.EXPLOSIVE,
+      canAttackAir: false,
+      canAttackGround: true,
+      splash: 0.5,
     },
   },
 
@@ -280,16 +365,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       buildTime: 10,
       prerequisites: ['air_force_command'],
     },
-    attack: {
-      damage: 20,
-      range: 5,
-      fireRate: 1,
-      projectileSpeed: 500,
-      damageType: DamageType.BULLET,
-      canAttackAir: false,
-      canAttackGround: true,
-      splash: 0,
-    },
+    attack: null, // stealth transport — unarmed, carries up to 5 infantry
   },
 
   // ── Alliance Naval ─────────────────────────────────────────
@@ -307,7 +383,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2.5,
       sightRange: 8,
       cost: 1000,
-      buildTime: 20,
+      buildTime: 10,
       prerequisites: ['naval_shipyard'],
     },
     attack: {
@@ -335,7 +411,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2,
       sightRange: 10,
       cost: 1200,
-      buildTime: 25,
+      buildTime: 12,
       prerequisites: ['naval_shipyard'],
     },
     attack: {
@@ -425,7 +501,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2.5,
       sightRange: 6,
       cost: 300,
-      buildTime: 4,
+      buildTime: 3,
       prerequisites: ['barracks'],
     },
     attack: {
@@ -496,6 +572,34 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
     },
   },
 
+  yuri: {
+    id: 'yuri',
+    name: 'Yuri',
+    category: 'infantry',
+    side: 'collective',
+    factionExclusive: null,
+    spriteKey: 'unit_yuri',
+    stats: {
+      maxHp: 100,
+      armor: 0,
+      speed: 2.5,
+      sightRange: 6,
+      cost: 1200,
+      buildTime: 12,
+      prerequisites: ['barracks', 'battle_lab'],
+    },
+    attack: {
+      damage: 1, // mind control — permanently seizes one enemy unit
+      range: 6,
+      fireRate: 0.3,
+      projectileSpeed: 0, // psychic beam
+      damageType: DamageType.ELECTRIC,
+      canAttackAir: false,
+      canAttackGround: true,
+      splash: 0,
+    },
+  },
+
   // ── Collective Vehicles ────────────────────────────────────
 
   rhino_tank: {
@@ -551,6 +655,34 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       canAttackAir: true,
       canAttackGround: true,
       splash: 0.5,
+    },
+  },
+
+  terror_drone: {
+    id: 'terror_drone',
+    name: 'Terror Drone',
+    category: 'vehicle',
+    side: 'collective',
+    factionExclusive: null,
+    spriteKey: 'unit_terror_drone',
+    stats: {
+      maxHp: 50,
+      armor: 0,
+      speed: 6,
+      sightRange: 5,
+      cost: 500,
+      buildTime: 5,
+      prerequisites: ['war_factory'],
+    },
+    attack: {
+      damage: 10, // burrows into vehicles and destroys from inside
+      range: 1,
+      fireRate: 2,
+      projectileSpeed: 0,
+      damageType: DamageType.EXPLOSIVE,
+      canAttackAir: false,
+      canAttackGround: true,
+      splash: 0,
     },
   },
 
@@ -683,7 +815,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 2.5,
       sightRange: 6,
       cost: 1000,
-      buildTime: 20,
+      buildTime: 10,
       prerequisites: ['naval_shipyard'],
     },
     attack: {
@@ -711,7 +843,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 1.5,
       sightRange: 10,
       cost: 1500,
-      buildTime: 30,
+      buildTime: 15,
       prerequisites: ['naval_shipyard', 'battle_lab'],
     },
     attack: {
@@ -739,7 +871,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 3,
       sightRange: 6,
       cost: 1000,
-      buildTime: 18,
+      buildTime: 10,
       prerequisites: ['naval_shipyard'],
     },
     attack: {
@@ -806,7 +938,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       sightRange: 10,
       cost: 600,
       buildTime: 6,
-      prerequisites: ['barracks', 'battle_lab'],
+      prerequisites: ['barracks'],
     },
     attack: {
       damage: 150,
@@ -833,7 +965,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 10,
       sightRange: 9,
       cost: 1200,
-      buildTime: 20,
+      buildTime: 12,
       prerequisites: ['air_force_command'],
     },
     attack: {
@@ -1050,7 +1182,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       speed: 4,
       sightRange: 4,
       cost: 200,
-      buildTime: 5,
+      buildTime: 3,
       prerequisites: ['barracks'],
     },
     attack: {
