@@ -209,6 +209,37 @@ function generateMapData(
     }
   }
 
+  // Guarantee a reachable ore field near each spawn so the opening harvester loop
+  // is reliable regardless of random ore cluster generation.
+  for (const sp of startPositions) {
+    const spCol = Math.floor(sp.x / TILE_SIZE)
+    const spRow = Math.floor(sp.y / TILE_SIZE)
+    const centerMapCol = Math.floor(width / 2)
+    const centerMapRow = Math.floor(height / 2)
+
+    const dirCol = spCol <= centerMapCol ? 1 : -1
+    const dirRow = spRow <= centerMapRow ? 1 : -1
+
+    const oreCol = Phaser.Math.Clamp(spCol + dirCol * 12, 4, width - 5)
+    const oreRow = Phaser.Math.Clamp(spRow + dirRow * 10, 4, height - 5)
+
+    const oreRadius = 3
+    for (let dr = -oreRadius; dr <= oreRadius; dr++) {
+      for (let dc = -oreRadius; dc <= oreRadius; dc++) {
+        if (dc * dc + dr * dr > oreRadius * oreRadius) continue
+        const tc = oreCol + dc
+        const tr = oreRow + dr
+        if (tc < 0 || tc >= width || tr < 0 || tr >= height) continue
+
+        const t = tiles[tr][tc]
+        t.terrain = TerrainType.ORE
+        t.oreAmount = 1800 + Math.floor(rng() * 1200)
+        t.passable = true
+        t.buildable = false
+      }
+    }
+  }
+
   return {
     name: `Procedural Map ${seed}`,
     width,
