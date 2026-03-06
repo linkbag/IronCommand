@@ -5,12 +5,11 @@
 // Scene implementations are in src/scenes/
 
 import Phaser from 'phaser'
-// Scenes will be imported here by the UI/Scenes agent:
-// import { BootScene } from './scenes/BootScene'
-// import { MenuScene } from './scenes/MenuScene'
-// import { SetupScene } from './scenes/SetupScene'
-// import { GameScene } from './scenes/GameScene'
-// import { HUDScene } from './scenes/HUDScene'
+import { BootScene } from './scenes/BootScene'
+import { MenuScene } from './scenes/MenuScene'
+import { SetupScene } from './scenes/SetupScene'
+import { GameScene } from './scenes/GameScene'
+import { HUDScene } from './scenes/HUDScene'
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -22,8 +21,7 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  // scenes will be added here
-  scene: [],
+  scene: [BootScene, MenuScene, SetupScene, GameScene, HUDScene],
   physics: {
     default: 'arcade',
     arcade: {
