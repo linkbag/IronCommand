@@ -416,6 +416,10 @@ export class GameScene extends Phaser.Scene {
 
       const building = this.entityMgr.createBuilding(0, data.defId, data.tileCol, data.tileRow)
       if (building) {
+        // HUD already handled the build timer — building is ready, set active immediately
+        building.state = 'active'
+        building.setAlpha(1)
+
         // Mark tiles as occupied
         for (const tile of building.occupiedTiles) {
           this.gameMap.setOccupied(tile.col, tile.row, building.id)
