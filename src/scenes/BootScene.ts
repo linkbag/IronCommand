@@ -139,6 +139,16 @@ export class BootScene extends Phaser.Scene {
     tasks.push(() => this.genTile('pixel_white', 0xffffff, 1, 1))
     tasks.push(() => this.genSelectionCircle())
 
+    // ── HUD / UI extras ────────────────────────────────────────────
+    tasks.push(() => this.genGhostTile('ghost_valid',   0x4ade80, 0.35))
+    tasks.push(() => this.genGhostTile('ghost_invalid', 0xe94560, 0.35))
+    tasks.push(() => this.genCursorIcon('cursor_sell',   0xffd700))
+    tasks.push(() => this.genCursorIcon('cursor_repair', 0x4488ff))
+    tasks.push(() => this.genAttackMoveCursor())
+    tasks.push(() => this.genAlertPanel())
+    tasks.push(() => this.genVetChevron('vet_rank1', 1))
+    tasks.push(() => this.genVetChevron('vet_rank2', 2))
+
     this.tasks = tasks
   }
 
@@ -278,6 +288,85 @@ export class BootScene extends Phaser.Scene {
     g.lineStyle(2, 0x00ff00, 0.9)
     g.strokeEllipse(size / 2, size / 2, size - 4, (size - 4) * 0.4)
     g.generateTexture('selection_circle', size, size)
+    g.destroy()
+  }
+
+  // ── HUD / UI extras ──────────────────────────────────────────────────
+
+  /** Semi-transparent coloured tile for building placement ghost */
+  private genGhostTile(key: string, color: number, alpha: number) {
+    const size = 64
+    const g    = this.make.graphics({ x: 0, y: 0 }, false)
+    g.fillStyle(color, alpha)
+    g.fillRect(0, 0, size, size)
+    g.lineStyle(2, color, 0.85)
+    g.strokeRect(0, 0, size, size)
+    g.lineStyle(1, color, 0.25)
+    g.lineBetween(32, 0, 32, 64)
+    g.lineBetween(0, 32, 64, 32)
+    g.generateTexture(key, size, size)
+    g.destroy()
+  }
+
+  /** Small square cursor icon ($ or wrench placeholder) */
+  private genCursorIcon(key: string, color: number) {
+    const size = 16
+    const g    = this.make.graphics({ x: 0, y: 0 }, false)
+    g.fillStyle(color, 1)
+    g.fillCircle(size / 2, size / 2, size / 2 - 1)
+    g.fillStyle(0x000000, 0.5)
+    g.fillRect(size / 2 - 2, 2, 4, size - 4)
+    g.generateTexture(key, size, size)
+    g.destroy()
+  }
+
+  /** Attack-move cursor: crosshair with 'A' badge */
+  private genAttackMoveCursor() {
+    const size = 24
+    const g    = this.make.graphics({ x: 0, y: 0 }, false)
+    const cx   = size / 2
+    const cy   = size / 2
+    const r    = size / 2 - 2
+    g.lineStyle(2, 0xff4444, 1)
+    g.strokeCircle(cx, cy, r)
+    g.lineBetween(cx - r - 2, cy, cx + r + 2, cy)
+    g.lineBetween(cx, cy - r - 2, cx, cy + r + 2)
+    // Inner red dot
+    g.fillStyle(0xff4444, 1)
+    g.fillCircle(cx, cy, 2)
+    g.generateTexture('cursor_attack_move', size, size)
+    g.destroy()
+  }
+
+  /** Semi-transparent dark rectangle for EVA alert panel background */
+  private genAlertPanel() {
+    const w = 240
+    const h = 28
+    const g = this.make.graphics({ x: 0, y: 0 }, false)
+    g.fillStyle(0x0a0a1a, 0.92)
+    g.fillRect(0, 0, w, h)
+    g.lineStyle(1, 0x4466aa, 0.7)
+    g.strokeRect(0, 0, w, h)
+    g.generateTexture('eva_alert_panel', w, h)
+    g.destroy()
+  }
+
+  /** Veterancy chevron strip (rank 1 = one, rank 2 = two chevrons) */
+  private genVetChevron(key: string, rank: number) {
+    const w  = 12 * rank + 2
+    const h  = 8
+    const g  = this.make.graphics({ x: 0, y: 0 }, false)
+    const col = rank === 2 ? 0xffdd44 : 0x88bbff
+    g.lineStyle(2, col, 1)
+    for (let r = 0; r < rank; r++) {
+      const ox = r * 12 + 1
+      g.beginPath()
+      g.moveTo(ox,     h - 1)
+      g.lineTo(ox + 5, 1)
+      g.lineTo(ox + 10, h - 1)
+      g.strokePath()
+    }
+    g.generateTexture(key, Math.max(1, w), Math.max(1, h))
     g.destroy()
   }
 }

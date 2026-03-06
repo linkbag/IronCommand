@@ -1,19 +1,24 @@
 // ============================================================
 // IRON COMMAND — SelectionBox
-// Green translucent drag-selection rectangle
+// Green translucent drag-selection rectangle + attack-move cursor
 // ============================================================
 
 import Phaser from 'phaser'
 
 export class SelectionBox {
   private graphics: Phaser.GameObjects.Graphics
-  private active = false
-  private startX = 0
-  private startY = 0
+  private cursor:   Phaser.GameObjects.Graphics
+  private active  = false
+  private startX  = 0
+  private startY  = 0
 
   constructor(scene: Phaser.Scene) {
     this.graphics = scene.add.graphics()
     this.graphics.setDepth(100)
+
+    // Cursor overlay (for attack-move etc.)
+    this.cursor = scene.add.graphics()
+    this.cursor.setDepth(101)
   }
 
   startDrag(worldX: number, worldY: number) {
@@ -33,20 +38,22 @@ export class SelectionBox {
     this.graphics.clear()
     this.graphics.setPosition(-camOffX, -camOffY)
 
-    this.graphics.fillStyle(0x00ff00, 0.08)
+    // Fill
+    this.graphics.fillStyle(0x00ff00, 0.07)
     this.graphics.fillRect(x1, y1, x2 - x1, y2 - y1)
 
-    this.graphics.lineStyle(1, 0x00ff00, 0.85)
+    // Border
+    this.graphics.lineStyle(1, 0x00ff00, 0.8)
     this.graphics.strokeRect(x1, y1, x2 - x1, y2 - y1)
 
-    // Corner ticks for RA2 style
-    const tickSize = 6
+    // Corner ticks (RA2 style)
+    const tick = 7
     this.graphics.lineStyle(2, 0x44ff44, 1)
-    const corners = [
-      [x1, y1, x1 + tickSize, y1, x1, y1 + tickSize],
-      [x2, y1, x2 - tickSize, y1, x2, y1 + tickSize],
-      [x1, y2, x1 + tickSize, y2, x1, y2 - tickSize],
-      [x2, y2, x2 - tickSize, y2, x2, y2 - tickSize],
+    const corners: [number, number, number, number, number, number][] = [
+      [x1, y1, x1 + tick, y1, x1, y1 + tick],
+      [x2, y1, x2 - tick, y1, x2, y1 + tick],
+      [x1, y2, x1 + tick, y2, x1, y2 - tick],
+      [x2, y2, x2 - tick, y2, x2, y2 - tick],
     ]
     corners.forEach(([ax, ay, bx, by, cx, cy]) => {
       this.graphics.lineBetween(ax, ay, bx, by)
@@ -59,13 +66,44 @@ export class SelectionBox {
     this.active = false
     this.graphics.clear()
 
-    const { startX, startY } = this
-    return {
-      x: startX,
-      y: startY,
-      width: 0,
-      height: 0,
-    }
+    return { x: this.startX, y: this.startY, width: 0, height: 0 }
+  }
+
+  /**
+   * Draw the attack-move crosshair cursor at screen coordinates.
+   * Call this every frame in update() when in attack-move mode.
+   */
+  drawAttackMoveCursor(screenX: number, screenY: number) {
+    const g  = this.cursor
+    g.clear()
+    const r  = 12
+    const cx = screenX
+    const cy = screenY
+
+    // Outer circle
+    g.lineStyle(2, 0xff4444, 1)
+    g.strokeCircle(cx, cy, r)
+
+    // Crosshair lines (gap around centre)
+    const gap = 4
+    g.lineBetween(cx - r - 3, cy, cx - gap, cy)
+    g.lineBetween(cx + gap,   cy, cx + r + 3, cy)
+    g.lineBetween(cx, cy - r - 3, cx, cy - gap)
+    g.lineBetween(cx, cy + gap,   cx, cy + r + 3)
+
+    // Centre dot
+    g.fillStyle(0xff4444, 1)
+    g.fillCircle(cx, cy, 2)
+
+    // 'A' badge (top-right)
+    g.fillStyle(0xff4444, 0.85)
+    g.fillRect(cx + r - 2, cy - r - 10, 10, 10)
+    g.lineStyle(1, 0xff8888, 1)
+    g.strokeRect(cx + r - 2, cy - r - 10, 10, 10)
+  }
+
+  clearCursor() {
+    this.cursor.clear()
   }
 
   clear() {
@@ -75,5 +113,6 @@ export class SelectionBox {
 
   destroy() {
     this.graphics.destroy()
+    this.cursor.destroy()
   }
 }
