@@ -119,9 +119,9 @@ export class Economy extends Phaser.Events.EventEmitter {
 
   private wireEntityManager(): void {
     this.em.on('ore_dumped', (playerId: number, amount: number) => {
-      // Convert ore load to credits
-      // Each ore unit = 2 credits
-      const credits = Math.floor(amount * 2)
+      // Convert ore load to credits (RA2-authentic pacing)
+      // Each ore unit = 1 credit (full harvester dump = ~$1500)
+      const credits = Math.floor(amount)
       this.addCredits(playerId, credits)
       this.emit('ore_converted', playerId, amount, credits)
     })

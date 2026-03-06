@@ -16,13 +16,6 @@ export type AIDifficulty = 'easy' | 'medium' | 'hard'
 
 type AIPhase = 'early' | 'mid' | 'late'
 
-interface BuildStep {
-  type: 'building' | 'unit'
-  defId: string
-  /** building ID that should produce this (for units) */
-  producerId?: string
-}
-
 // Build order: what to build and in what order
 const BUILD_ORDER: Record<AIDifficulty, string[]> = {
   easy: [
@@ -129,11 +122,16 @@ export class AI {
   private tick(gameState: GameState): void {
     this.updatePhase(gameState)
     this.ensureHarvesting(gameState)
+    this.rebuildLostBuildings(gameState)
     this.updateBuildOrder(gameState)
     this.buildArmy(gameState)
     this.considerAttacking(gameState)
     if (this.phase === 'mid' || this.phase === 'late') {
       this.considerScouting(gameState)
+    }
+    // Hard AI uses multi-prong attacks
+    if (this.difficulty === 'hard' && this.isAttacking) {
+      this.considerMultiProng(gameState)
     }
   }
 
@@ -187,6 +185,33 @@ export class AI {
             h.giveOrder({ type: 'harvest', target })
           }
         })
+      }
+    }
+  }
+
+  // ── Rebuild lost buildings ──────────────────────────────────
+
+  private rebuildLostBuildings(_gameState: GameState): void {
+    // RA2: AI rebuilds critical structures that were destroyed
+    const essentialBuildings = ['power_plant', 'barracks', 'ore_refinery', 'war_factory']
+    const activeIds = this.em.getPlayerActiveBuildingIds(this.playerId)
+    const hasCY = activeIds.includes('construction_yard')
+    if (!hasCY) return  // can't rebuild without CY
+
+    for (const defId of essentialBuildings) {
+      if (!activeIds.includes(defId)) {
+        // Check if we previously had it (build order index past it)
+        const orderIdx = BUILD_ORDER[this.difficulty].indexOf(defId)
+        if (orderIdx >= 0 && orderIdx < this.buildOrderIndex) {
+          // Prerequisites still met?
+          const def = BUILDING_DEFS[defId]
+          if (!def) continue
+          const prereqsMet = def.stats.prerequisites.every(req => activeIds.includes(req))
+          if (prereqsMet) {
+            this.tryBuildBuilding(defId)
+            return  // one rebuild per tick
+          }
+        }
       }
     }
   }
@@ -354,12 +379,20 @@ export class AI {
       return hasBarracks ? 'rifle_soldier' : null
     }
 
-    // Late game
+    // Late game — mix heavy tanks, artillery, and rocket soldiers
     if (hasWarFactory) {
-      if (vehicleCount < 6) return 'heavy_tank'
-      return 'light_tank'
+      if (vehicleCount < 4) return 'heavy_tank'
+      const artilleryCount = units.filter(u => u.def.id === 'artillery').length
+      if (artilleryCount < 2) return 'artillery'
+      if (vehicleCount < 8) return 'heavy_tank'
+      return Math.random() < 0.5 ? 'heavy_tank' : 'light_tank'
     }
-    return hasBarracks ? 'rifle_soldier' : null
+    if (hasBarracks) {
+      const rocketCount = units.filter(u => u.def.id === 'rocket_soldier').length
+      if (rocketCount < infantryCount * 0.4) return 'rocket_soldier'
+      return 'rifle_soldier'
+    }
+    return null
   }
 
   private findProducerFor(unitDefId: string): import('../entities/Building').Building | null {

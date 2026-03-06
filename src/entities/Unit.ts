@@ -49,6 +49,11 @@ export class Unit extends Phaser.GameObjects.Container {
   private attackCooldown: number
   private target: IEntityRef | null
 
+  // RA2 Veterancy: 0 = rookie, 1 = veteran (3 kills), 2 = elite (7 kills)
+  kills = 0
+  veterancy = 0
+  private guardPosition: Position | null = null
+
   // Harvest state
   private harvestTimer: number
   private cargoAmount: number
@@ -158,6 +163,36 @@ export class Unit extends Phaser.GameObjects.Container {
     this.cargoAmount = amount
   }
 
+  /** RA2 Veterancy: record a kill and rank up if threshold met */
+  recordKill(): void {
+    this.kills++
+    const oldRank = this.veterancy
+    if (this.kills >= 7) this.veterancy = 2       // elite
+    else if (this.kills >= 3) this.veterancy = 1  // veteran
+
+    if (this.veterancy > oldRank) {
+      this.emit('unit_promoted', this, this.veterancy)
+    }
+  }
+
+  /** RA2 Veterancy damage multiplier: 1.0 / 1.2 / 1.5 */
+  getVeterancyDamageMultiplier(): number {
+    return this.veterancy >= 2 ? 1.5 : this.veterancy >= 1 ? 1.2 : 1.0
+  }
+
+  /** RA2 Veterancy fire rate multiplier: 1.0 / 1.1 / 1.2 */
+  getVeterancyFireRateMultiplier(): number {
+    return this.veterancy >= 2 ? 1.2 : this.veterancy >= 1 ? 1.1 : 1.0
+  }
+
+  get maxHp(): number {
+    return this.def.stats.maxHp
+  }
+
+  get isAlive(): boolean {
+    return this.state !== 'dying' && this.hp > 0
+  }
+
   // ── Main update loop ─────────────────────────────────────────
 
   update(delta: number): void {
@@ -257,10 +292,19 @@ export class Unit extends Phaser.GameObjects.Container {
         }
         break
 
+      case 'guard':
+        // RA2 Guard: hold position, auto-engage, return to position
+        this.guardPosition = { x: this.x, y: this.y }
+        this.state = 'idle'
+        this.path = []
+        this.target = null
+        break
+
       case 'stop':
         this.state = 'idle'
         this.path = []
         this.target = null
+        this.guardPosition = null
         break
 
       default:
@@ -395,9 +439,9 @@ export class Unit extends Phaser.GameObjects.Container {
       return
     }
 
-    // In range — fire
+    // In range — fire (veterancy boosts fire rate)
     if (this.attackCooldown <= 0) {
-      const cooldown = 1 / this.def.attack.fireRate
+      const cooldown = 1 / (this.def.attack.fireRate * this.getVeterancyFireRateMultiplier())
       this.attackCooldown = cooldown
       this.emit('fire_at_target', this, this.target)
     }
@@ -486,12 +530,21 @@ export class Unit extends Phaser.GameObjects.Container {
   // ── Private: idle ────────────────────────────────────────────
 
   private updateIdle(): void {
-    // Auto-acquire targets if in guard mode (no explicit orders)
+    // Auto-acquire targets when idle (all units auto-engage by default)
     if (this.def.attack && this.orders.length === 0) {
       const nearbyEnemy = this.findNearbyEnemy()
       if (nearbyEnemy) {
         this.target = nearbyEnemy
         this.state = 'attacking'
+        return
+      }
+    }
+
+    // RA2 Guard: return to guard position if we drifted away
+    if (this.guardPosition && this.orders.length === 0) {
+      const dist = Phaser.Math.Distance.Between(this.x, this.y, this.guardPosition.x, this.guardPosition.y)
+      if (dist > TILE_SIZE * 2) {
+        this.startMoveTo(this.guardPosition)
       }
     }
   }
