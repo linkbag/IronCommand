@@ -257,14 +257,14 @@ export class EntityManager extends Phaser.Events.EventEmitter {
   /** Check if a player has a specific building type active */
   playerHasBuilding(playerId: number, defId: string): boolean {
     return Array.from(this.buildings.values()).some(
-      b => b.playerId === playerId && b.def.id === defId && b.state === 'active'
+      b => b.playerId === playerId && b.def.id === defId && (b.state === 'active' || b.state === 'low_power')
     )
   }
 
   /** Get all building defIds that a player currently has active */
   getPlayerActiveBuildingIds(playerId: number): string[] {
     return Array.from(this.buildings.values())
-      .filter(b => b.playerId === playerId && b.state === 'active')
+      .filter(b => b.playerId === playerId && (b.state === 'active' || b.state === 'low_power'))
       .map(b => b.def.id)
   }
 
