@@ -68,6 +68,7 @@ export class GameScene extends Phaser.Scene {
 
   // ── Last alert position (for Space key) ────────────────────
   private lastAlertPos: Position | null = null
+  private fogAnchorSources: Array<{ pos: TileCoord; range: number }> = []
 
   constructor() {
     super({ key: 'GameScene' })
@@ -88,6 +89,7 @@ export class GameScene extends Phaser.Scene {
     this.camY = 0
     this.cursorMode = 'normal'
     this.lastAlertPos = null
+    this.fogAnchorSources = []
   }
 
   create() {
@@ -200,6 +202,25 @@ export class GameScene extends Phaser.Scene {
     console.log('[IC] Units:', this.entityMgr.getAllUnits().length,
                 'Buildings:', this.entityMgr.getAllBuildings().length)
     console.log('[IC] StartPos[0]:', this.gameMap.data.startPositions[0])
+    console.log('[IC] TERRAIN rendered:', (this.gameMap as any)['renderedTiles'])
+    console.log('[IC] Fog layer depth:', (this.gameMap as any)['fogLayer']?.depth)
+    console.log('[IC] Terrain depth:', (this.gameMap as any)['terrainGraphics']?.depth)
+
+    // Keep a visible "home sector" so the opening view is playable on large monitors.
+    // Without this, the initial revealed area can be too small and appear as a black screen.
+    const localSpawn = this.gameMap.data.startPositions[this.gameState.localPlayerId]
+      ?? this.gameMap.data.startPositions[0]
+    if (localSpawn) {
+      const anchorRange = Math.max(
+        16,
+        Math.ceil(Math.hypot(this.scale.width, this.scale.height) / (TILE_SIZE * 3)),
+      )
+      this.fogAnchorSources = [{
+        pos: this.gameMap.worldToTile(localSpawn.x, localSpawn.y),
+        range: anchorRange,
+      }]
+      console.log('[IC] Fog anchor set:', this.fogAnchorSources[0])
+    }
 
     // Reveal fog around player entities
     this.updateFogOfWar()
@@ -689,6 +710,7 @@ export class GameScene extends Phaser.Scene {
         sources.push({ pos, range: b.def.stats.sightRange })
       }
     }
+    sources.push(...this.fogAnchorSources)
 
     // Always call updateFog — even with 0 sources, it resets VISIBLE→EXPLORED
     // and re-renders. Skipping it when sources=0 would leave stale full-black fog.
@@ -972,12 +994,13 @@ export class GameScene extends Phaser.Scene {
     this.isDragging = false
     const w = Math.abs(ptr.worldX - this.dragAnchorWorld.x)
     const h = Math.abs(ptr.worldY - this.dragAnchorWorld.y)
+    const shiftHeld = !!(ptr.event as MouseEvent)?.shiftKey
 
     if (w > 4 && h > 4) {
       const x1 = Math.min(this.dragAnchorWorld.x, ptr.worldX)
       const y1 = Math.min(this.dragAnchorWorld.y, ptr.worldY)
 
-      if (!(ptr.event as MouseEvent)?.shiftKey) this.deselectAll()
+      if (!shiftHeld) this.deselectAll()
 
       // Select player 0 units within the drag rect
       const units = this.entityMgr.getUnitsForPlayer(0)
@@ -987,6 +1010,36 @@ export class GameScene extends Phaser.Scene {
           u.setSelected(true)
         }
       })
+
+      this.gameState.selectedEntityIds = Array.from(this.selectedIds)
+      this.registry.set('selectedIds', this.gameState.selectedEntityIds)
+    } else {
+      // Click-select nearest own unit
+      const clickX = ptr.worldX
+      const clickY = ptr.worldY
+      const hitRadius = TILE_SIZE * 0.75
+
+      let bestUnit: import('../entities/Unit').Unit | null = null
+      let bestDist = Infinity
+      for (const unit of this.entityMgr.getUnitsForPlayer(0)) {
+        const dist = Phaser.Math.Distance.Between(clickX, clickY, unit.x, unit.y)
+        if (dist <= hitRadius && dist < bestDist) {
+          bestUnit = unit
+          bestDist = dist
+        }
+      }
+
+      if (!shiftHeld) this.deselectAll()
+      if (bestUnit) {
+        // Shift+click toggles selection state
+        if (shiftHeld && this.selectedIds.has(bestUnit.id)) {
+          this.selectedIds.delete(bestUnit.id)
+          bestUnit.setSelected(false)
+        } else {
+          this.selectedIds.add(bestUnit.id)
+          bestUnit.setSelected(true)
+        }
+      }
 
       this.gameState.selectedEntityIds = Array.from(this.selectedIds)
       this.registry.set('selectedIds', this.gameState.selectedEntityIds)
