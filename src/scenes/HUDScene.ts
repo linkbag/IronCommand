@@ -158,6 +158,8 @@ export class HUDScene extends Phaser.Scene {
 
   // ── Minimap ───────────────────────────────────────────────────────
   private mmGfx!: Phaser.GameObjects.Graphics
+  private mmTerrainGfx!: Phaser.GameObjects.Graphics
+  private mmTerrainDrawn = false
   private mmW = SIDEBAR_W - 8
   private mmH = MINIMAP_H
 
@@ -235,13 +237,17 @@ export class HUDScene extends Phaser.Scene {
   private buildSidebarBg(width: number, height: number) {
     const x = this.sidebarX
     const g = this.add.graphics()
-    g.fillStyle(HUD_BG, 0.97)
+    // Darker, more military sidebar background
+    g.fillStyle(0x0c0c18, 0.97)
     g.fillRect(x, 0, SIDEBAR_W, height)
     // Left border (2px bevel effect)
     g.lineStyle(2, HUD_BORDER, 1)
     g.lineBetween(x, 0, x, height)
     g.lineStyle(1, 0x3a5a8e, 0.25)
     g.lineBetween(x + 2, 0, x + 2, height)
+    // Red accent line on left edge
+    g.lineStyle(1, HUD_ACCENT, 0.3)
+    g.lineBetween(x + 1, 0, x + 1, height)
     void width
   }
 
@@ -268,6 +274,7 @@ export class HUDScene extends Phaser.Scene {
       fontFamily: 'monospace', fontSize: '8px', color: '#2a4a6a',
     }).setDepth(51)
 
+    this.mmTerrainGfx = this.add.graphics().setDepth(49)
     this.mmGfx = this.add.graphics().setDepth(50)
 
     // Click-to-scroll zone
@@ -569,6 +576,9 @@ export class HUDScene extends Phaser.Scene {
     // RA2: Credits deducted gradually — just need enough to start (any credits > 0)
     if (player.credits <= 0) {
       this.showAlert('Insufficient credits', 'danger')
+      // Flash credits red
+      this.creditsText.setColor('#ff4444')
+      this.time.delayedCall(400, () => this.creditsText.setColor('#ffd700'))
       return
     }
 
@@ -942,6 +952,7 @@ export class HUDScene extends Phaser.Scene {
   // ════════════════════════════════════════════════════════════════════
 
   private tickCredits(delta: number) {
+    const prevDisplayed = this.displayedCredits
     const diff = this.targetCredits - this.displayedCredits
     if (Math.abs(diff) < 0.5) {
       this.displayedCredits = this.targetCredits
@@ -949,6 +960,12 @@ export class HUDScene extends Phaser.Scene {
       this.displayedCredits += diff * Math.min(1, delta / 150)
     }
     this.creditsText.setText(`$ ${Math.max(0, Math.floor(this.displayedCredits)).toLocaleString()}`)
+
+    // Flash green when credits increase significantly
+    if (this.displayedCredits - prevDisplayed > 5) {
+      this.creditsText.setColor('#44ff66')
+      this.time.delayedCall(200, () => this.creditsText.setColor('#ffd700'))
+    }
   }
 
   private tickPower() {
@@ -975,6 +992,38 @@ export class HUDScene extends Phaser.Scene {
     const ox     = this.sidebarX + 4
     const oy     = this.minimapY
 
+    // Draw terrain once (cached)
+    if (!this.mmTerrainDrawn && map.tiles) {
+      this.mmTerrainDrawn = true
+      const tg = this.mmTerrainGfx
+      const terrainColors: Record<number, number> = {
+        0: 0x3a6a30, // grass
+        1: 0x1a5a90, // water
+        2: 0xc49010, // ore
+        3: 0x666666, // rock
+        4: 0xb09868, // sand
+        5: 0x4a4a4a, // road
+        6: 0x7a5510, // bridge
+        7: 0x1a4a18, // forest
+      }
+      // Sample every Nth tile for performance
+      const step = Math.max(1, Math.floor(1 / Math.max(scaleX, scaleY)))
+      for (let row = 0; row < map.height; row += step) {
+        for (let col = 0; col < map.width; col += step) {
+          const tile = map.tiles[row]?.[col]
+          if (!tile) continue
+          const color = terrainColors[tile.terrain] ?? 0x333333
+          tg.fillStyle(color, 1)
+          tg.fillRect(
+            ox + col * scaleX,
+            oy + row * scaleY,
+            Math.ceil(scaleX * step),
+            Math.ceil(scaleY * step),
+          )
+        }
+      }
+    }
+
     type E = { id: string; playerId: number; type: string; x: number; y: number; isAlive: boolean }
     const em = this.registry.get('entityMgr') as { getAllEntities(): E[] } | undefined
     if (em) {
@@ -982,7 +1031,8 @@ export class HUDScene extends Phaser.Scene {
         if (!e.isAlive) return
         const player = this.gameState.players.find(p => p.id === e.playerId)
         const isHuman = !player?.isAI
-        const color   = isHuman ? 0x4ade80 : (e.playerId > 0 ? 0xe94560 : 0x888888)
+        // Green for friendly, red for enemy, yellow for neutral
+        const color = isHuman ? 0x4ade80 : (e.playerId > 0 ? 0xe94560 : 0xdddd44)
         const mx = ox + (e.x / 32) * scaleX
         const my = oy + (e.y / 32) * scaleY
         const sz = e.type === 'building' ? 3 : 2
@@ -991,14 +1041,14 @@ export class HUDScene extends Phaser.Scene {
       })
     }
 
-    // Camera viewport rectangle
+    // Camera viewport rectangle (white)
     const camX = (this.registry.get('camX') as number) ?? 0
     const camY = (this.registry.get('camY') as number) ?? 0
     const vw   = (this.sidebarX / 32) * scaleX
     const vh   = (this.scale.height / 32) * scaleY
     const vx   = ox + (camX / 32) * scaleX
     const vy   = oy + (camY / 32) * scaleY
-    g.lineStyle(1, 0xffffff, 0.55)
+    g.lineStyle(1, 0xffffff, 0.6)
     g.strokeRect(vx, vy, vw, vh)
   }
 

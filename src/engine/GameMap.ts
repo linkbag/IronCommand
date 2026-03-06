@@ -245,13 +245,19 @@ export class GameMap {
   private scene: Phaser.Scene
   private dirtyFogCells: Set<number> = new Set()
   private renderedTiles = false
+  private animLayer: Phaser.GameObjects.Graphics
+  private waterTiles: { col: number; row: number }[] = []
+  private oreTiles: { col: number; row: number }[] = []
+  private animFrame = 0
 
   constructor(scene: Phaser.Scene, width?: number, height?: number, seed?: number) {
     this.scene = scene
     this.data = generateMapData(width, height, seed)
     this.terrainGraphics = scene.add.graphics()
+    this.animLayer = scene.add.graphics()
     this.fogLayer = scene.add.graphics()
     this.terrainGraphics.setDepth(0)
+    this.animLayer.setDepth(1)
     this.fogLayer.setDepth(10)
   }
 
@@ -264,25 +270,48 @@ export class GameMap {
     const g = this.terrainGraphics
     g.clear()
     const { tiles, width, height } = this.data
+    this.waterTiles = []
+    this.oreTiles = []
+
     for (let row = 0; row < height; row++) {
       for (let col = 0; col < width; col++) {
         const tile = tiles[row][col]
         const color = this.tileColor(tile.terrain, col, row)
+        const px = col * TILE_SIZE
+        const py = row * TILE_SIZE
+
         g.fillStyle(color)
-        g.fillRect(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-        // Ore sparkle: tiny dot
-        if (tile.terrain === TerrainType.ORE) {
-          g.fillStyle(0xffffff, 0.5)
-          g.fillCircle(col * TILE_SIZE + 16, row * TILE_SIZE + 16, 3)
-        }
-        // Forest: darker dot cluster
-        if (tile.terrain === TerrainType.FOREST) {
-          g.fillStyle(0x0d2b0a, 0.7)
-          g.fillCircle(col * TILE_SIZE + 10, row * TILE_SIZE + 10, 5)
-          g.fillCircle(col * TILE_SIZE + 22, row * TILE_SIZE + 18, 4)
+        g.fillRect(px, py, TILE_SIZE, TILE_SIZE)
+
+        switch (tile.terrain) {
+          case TerrainType.GRASS:
+            this.drawGrassDetail(g, px, py, col, row)
+            break
+          case TerrainType.WATER:
+            this.waterTiles.push({ col, row })
+            this.drawWaterEdge(g, px, py, col, row)
+            break
+          case TerrainType.ORE:
+            this.oreTiles.push({ col, row })
+            this.drawOreDetail(g, px, py, col, row)
+            break
+          case TerrainType.FOREST:
+            this.drawForestDetail(g, px, py, col, row)
+            break
+          case TerrainType.BRIDGE:
+            this.drawBridgeDetail(g, px, py)
+            break
+          case TerrainType.SAND:
+            this.drawSandDetail(g, px, py, col, row)
+            break
+          case TerrainType.ROCK:
+            this.drawRockDetail(g, px, py, col, row)
+            break
         }
       }
     }
+
+    this.setupAnimations()
   }
 
   /** Render fog of war layer — always does a full clear+redraw for correctness */
@@ -311,6 +340,173 @@ export class GameMap {
   private tileColor(terrain: TerrainType, col: number, row: number): number {
     const colors = TERRAIN_COLORS[terrain]
     return colors[(col + row) % colors.length]
+  }
+
+  /** Deterministic hash for per-tile details */
+  private tileHash(col: number, row: number, salt = 0): number {
+    let h = ((col * 374761393 + row * 668265263 + salt) | 0) >>> 0
+    h = Math.imul(h ^ (h >>> 13), 1274126177)
+    h = (h ^ (h >>> 16)) >>> 0
+    return h / 0xffffffff
+  }
+
+  private drawGrassDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
+    // Pebbles: 2-3 small darker spots
+    const pebbleCount = 2 + Math.floor(this.tileHash(col, row, 1) * 2)
+    for (let i = 0; i < pebbleCount; i++) {
+      const dx = this.tileHash(col, row, 10 + i) * 26 + 3
+      const dy = this.tileHash(col, row, 20 + i) * 26 + 3
+      g.fillStyle(0x2d5a25, 0.5)
+      g.fillRect(px + dx, py + dy, 2, 2)
+    }
+    // Occasional grass tuft
+    if (this.tileHash(col, row, 30) > 0.5) {
+      const tx = this.tileHash(col, row, 31) * 22 + 5
+      const ty = this.tileHash(col, row, 32) * 18 + 10
+      g.lineStyle(1, 0x2d5a25, 0.6)
+      g.lineBetween(px + tx, py + ty, px + tx - 1, py + ty - 4)
+      g.lineBetween(px + tx + 3, py + ty, px + tx + 4, py + ty - 3)
+    }
+  }
+
+  private drawWaterEdge(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
+    const { tiles, width, height } = this.data
+    const edgeColor = 0x4499cc
+    // Lighter border where water meets land
+    if (row > 0 && tiles[row - 1][col].terrain !== TerrainType.WATER) {
+      g.fillStyle(edgeColor, 0.45)
+      g.fillRect(px, py, TILE_SIZE, 3)
+    }
+    if (row < height - 1 && tiles[row + 1][col].terrain !== TerrainType.WATER) {
+      g.fillStyle(edgeColor, 0.45)
+      g.fillRect(px, py + TILE_SIZE - 3, TILE_SIZE, 3)
+    }
+    if (col > 0 && tiles[row][col - 1].terrain !== TerrainType.WATER) {
+      g.fillStyle(edgeColor, 0.45)
+      g.fillRect(px, py, 3, TILE_SIZE)
+    }
+    if (col < width - 1 && tiles[row][col + 1].terrain !== TerrainType.WATER) {
+      g.fillStyle(edgeColor, 0.45)
+      g.fillRect(px + TILE_SIZE - 3, py, 3, TILE_SIZE)
+    }
+  }
+
+  private drawOreDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
+    // Metallic veins
+    g.lineStyle(1, 0xb8860b, 0.5)
+    const vx = this.tileHash(col, row, 110) * 14 + 4
+    const vy = this.tileHash(col, row, 111) * 14 + 4
+    g.lineBetween(px + vx, py + vy, px + vx + 10, py + vy + 6)
+    // Small nugget shapes
+    g.fillStyle(0xe8c020, 0.7)
+    const nx = this.tileHash(col, row, 112) * 22 + 5
+    const ny = this.tileHash(col, row, 113) * 22 + 5
+    g.fillRect(px + nx, py + ny, 3, 2)
+    g.fillRect(px + nx + 8, py + ny + 4, 2, 3)
+  }
+
+  private drawForestDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
+    const treeCount = 2 + Math.floor(this.tileHash(col, row, 40) * 2)
+    for (let i = 0; i < treeCount; i++) {
+      const tx = this.tileHash(col, row, 50 + i) * 18 + 7
+      const ty = this.tileHash(col, row, 60 + i) * 14 + 9
+      // Shadow underneath
+      g.fillStyle(0x0a1a08, 0.35)
+      g.fillEllipse(px + tx, py + ty + 4, 8, 4)
+      // Tree canopy
+      g.fillStyle(0x1a4a16, 1)
+      g.fillCircle(px + tx, py + ty, 5)
+      // Highlight on top-left
+      g.fillStyle(0x2a6a22, 0.5)
+      g.fillCircle(px + tx - 1, py + ty - 2, 2)
+    }
+  }
+
+  private drawBridgeDetail(g: Phaser.GameObjects.Graphics, px: number, py: number): void {
+    // Plank lines
+    g.lineStyle(1, 0x5a4010, 0.5)
+    for (let y = 4; y < TILE_SIZE; y += 6) {
+      g.lineBetween(px + 3, py + y, px + TILE_SIZE - 3, py + y)
+    }
+    // Railings on sides
+    g.lineStyle(2, 0x4a3010, 0.7)
+    g.lineBetween(px + 1, py, px + 1, py + TILE_SIZE)
+    g.lineBetween(px + TILE_SIZE - 1, py, px + TILE_SIZE - 1, py + TILE_SIZE)
+  }
+
+  private drawSandDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
+    const dotCount = 4 + Math.floor(this.tileHash(col, row, 70) * 4)
+    for (let i = 0; i < dotCount; i++) {
+      const dx = this.tileHash(col, row, 80 + i) * 28 + 2
+      const dy = this.tileHash(col, row, 90 + i) * 28 + 2
+      g.fillStyle(0xb8986a, 0.35)
+      g.fillRect(px + dx, py + dy, 1, 1)
+    }
+  }
+
+  private drawRockDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
+    // Cracks
+    g.lineStyle(1, 0x555555, 0.4)
+    const cx = this.tileHash(col, row, 100) * 18 + 6
+    const cy = this.tileHash(col, row, 101) * 18 + 6
+    g.lineBetween(px + cx, py + cy, px + cx + 8, py + cy + 5)
+    // Lighter highlight spot
+    g.fillStyle(0x999999, 0.25)
+    const hx = this.tileHash(col, row, 102) * 22 + 5
+    const hy = this.tileHash(col, row, 103) * 22 + 5
+    g.fillRect(px + hx, py + hy, 3, 3)
+  }
+
+  // ── Terrain Animation ──────────────────────────────────────────
+
+  private setupAnimations(): void {
+    this.scene.time.addEvent({
+      delay: 500,
+      loop: true,
+      callback: () => {
+        this.animFrame = (this.animFrame + 1) % 3
+        this.renderAnimatedTiles()
+      },
+    })
+  }
+
+  private renderAnimatedTiles(): void {
+    const g = this.animLayer
+    g.clear()
+
+    // Water shimmer
+    const shimmerAlpha = [0.12, 0.0, 0.08][this.animFrame]
+    for (const { col, row } of this.waterTiles) {
+      const px = col * TILE_SIZE
+      const py = row * TILE_SIZE
+      // Shimmer overlay
+      if (shimmerAlpha > 0) {
+        g.fillStyle(0xffffff, shimmerAlpha)
+        g.fillRect(px, py, TILE_SIZE, TILE_SIZE)
+      }
+      // Sun reflection dots
+      if (this.animFrame !== 1) {
+        const dx = ((this.animFrame * 11 + col * 7) % 22) + 5
+        const dy = ((this.animFrame * 13 + row * 5) % 22) + 5
+        g.fillStyle(0xffffff, 0.3)
+        g.fillRect(px + dx, py + dy, 2, 2)
+      }
+    }
+
+    // Ore sparkle
+    for (const { col, row } of this.oreTiles) {
+      const px = col * TILE_SIZE
+      const py = row * TILE_SIZE
+      const sx = ((this.animFrame * 9 + col * 13) % 24) + 4
+      const sy = ((this.animFrame * 7 + row * 11) % 24) + 4
+      g.fillStyle(0xffffff, 0.75)
+      g.fillCircle(px + sx, py + sy, 1.5)
+      // Second sparkle
+      const sx2 = ((this.animFrame * 17 + col * 3) % 20) + 6
+      const sy2 = ((this.animFrame * 19 + row * 7) % 20) + 6
+      g.fillStyle(0xffff88, 0.5)
+      g.fillCircle(px + sx2, py + sy2, 1)
+    }
   }
 
   // ── Fog of War ────────────────────────────────────────────────
