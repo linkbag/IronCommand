@@ -22,15 +22,18 @@ export type FactionId =
   | 'mexico' | 'france' | 'uk' | 'germany' | 'india'
   | 'iraq' | 'south_africa' | 'spain' | 'italy' | 'korea'
 
+export type FactionSide = 'alliance' | 'collective'
+
 export interface FactionDef {
   id: FactionId
   name: string
+  side: FactionSide       // Iron Alliance or Red Collective
   color: number          // hex color for units/buildings
   colorStr: string       // CSS color string
   flag: string           // emoji flag
   bonus: string          // faction bonus description
   superweapon: string    // superweapon name
-  uniqueUnits: string[]  // names of faction-unique units
+  uniqueUnits: string[]  // names of faction-unique units (one per country)
 }
 
 // ── Terrain ───────────────────────────────────────────────────
@@ -109,9 +112,10 @@ export interface UnitDef {
   id: string
   name: string
   category: UnitCategory
+  side: FactionSide | null    // null = available to both sides (e.g. Engineer, MCV)
   stats: EntityStats
   attack: AttackStats | null  // null = non-combat (e.g. harvester)
-  factionExclusive: FactionId | null  // null = available to all
+  factionExclusive: FactionId | null  // null = available to all of that side
   spriteKey: string
 }
 
@@ -119,6 +123,7 @@ export interface BuildingDef {
   id: string
   name: string
   category: BuildingCategory
+  side: FactionSide | null    // null = available to both sides
   stats: EntityStats
   attack: AttackStats | null  // null = non-defensive
   footprint: { w: number; h: number }  // in tiles

@@ -4,8 +4,10 @@
 // ============================================================
 
 import Phaser from 'phaser'
-import type { Player, GameState } from '../types'
+import type { Player, GameState, FactionSide } from '../types'
 import { FACTIONS } from '../data/factions'
+import { UNIT_DEFS, getAvailableUnitIds } from '../entities/UnitDefs'
+import { BUILDING_DEFS, getAvailableBuildingIds } from '../entities/BuildingDefs'
 
 // ── Layout constants ───────────────────────────────────────────────────
 const SIDEBAR_W       = 220
@@ -61,36 +63,46 @@ interface BuildBtn extends Phaser.GameObjects.Container {
   _readyTxt: Phaser.GameObjects.Text
 }
 
-// ── Build catalogue ────────────────────────────────────────────────────
-const BUILD_ITEMS: BuildableItem[] = [
-  // Buildings (matching BuildingDefs.ts costs/times)
-  { id: 'power_plant',    label: 'Power Plant',    abbrev: 'PP', cost: 500,  tab: 'buildings', buildTime: 15 },
-  { id: 'barracks',       label: 'Barracks',       abbrev: 'BK', cost: 500,  tab: 'buildings', buildTime: 20 },
-  { id: 'war_factory',    label: 'War Factory',    abbrev: 'WF', cost: 2000, tab: 'buildings', buildTime: 40 },
-  { id: 'ore_refinery',   label: 'Ore Refinery',   abbrev: 'OR', cost: 2000, tab: 'buildings', buildTime: 30 },
-  { id: 'airfield',       label: 'Airfield',       abbrev: 'AF', cost: 2000, tab: 'buildings', buildTime: 35 },
-  { id: 'radar_tower',    label: 'Radar Tower',    abbrev: 'RT', cost: 1000, tab: 'buildings', buildTime: 25 },
-  { id: 'tech_center',    label: 'Tech Center',    abbrev: 'TC', cost: 2500, tab: 'buildings', buildTime: 50 },
-  { id: 'turret',         label: 'Gun Turret',     abbrev: 'TU', cost: 600,  tab: 'buildings', buildTime: 15 },
-  { id: 'aa_gun',         label: 'AA Gun',         abbrev: 'AA', cost: 700,  tab: 'buildings', buildTime: 15 },
-  { id: 'wall',           label: 'Wall',           abbrev: 'WL', cost: 100,  tab: 'buildings', buildTime: 5  },
-  { id: 'advanced_power', label: 'Adv. Power',     abbrev: 'AP', cost: 1500, tab: 'buildings', buildTime: 30 },
-  { id: 'superweapon',    label: 'Superweapon',    abbrev: 'SW', cost: 5000, tab: 'buildings', buildTime: 120 },
-  // Infantry
-  { id: 'rifle_soldier',  label: 'Rifle Soldier',  abbrev: 'RI', cost: 200,  tab: 'infantry',  buildTime: 5  },
-  { id: 'rocket_soldier', label: 'Rocket Soldier', abbrev: 'RK', cost: 400,  tab: 'infantry',  buildTime: 10 },
-  { id: 'engineer',       label: 'Engineer',       abbrev: 'EN', cost: 600,  tab: 'infantry',  buildTime: 15 },
-  { id: 'attack_dog',     label: 'Attack Dog',     abbrev: 'DG', cost: 200,  tab: 'infantry',  buildTime: 5  },
-  // Vehicles
-  { id: 'light_tank',     label: 'Light Tank',     abbrev: 'LT', cost: 800,  tab: 'vehicles',  buildTime: 15 },
-  { id: 'heavy_tank',     label: 'Heavy Tank',     abbrev: 'HT', cost: 1500, tab: 'vehicles',  buildTime: 25 },
-  { id: 'artillery',      label: 'Artillery',      abbrev: 'AR', cost: 1200, tab: 'vehicles',  buildTime: 22 },
-  { id: 'apc',            label: 'APC',            abbrev: 'AP', cost: 800,  tab: 'vehicles',  buildTime: 15 },
-  { id: 'harvester',      label: 'Harvester',      abbrev: 'HV', cost: 1400, tab: 'vehicles',  buildTime: 20 },
-  // Aircraft
-  { id: 'fighter_jet',    label: 'Fighter Jet',    abbrev: 'FJ', cost: 1200, tab: 'aircraft',  buildTime: 20 },
-  { id: 'bomber',         label: 'Bomber',         abbrev: 'BM', cost: 1800, tab: 'aircraft',  buildTime: 30 },
-]
+// ── Dynamic build catalogue based on faction side ──────────────────────
+function getBuildItems(factionId: string): BuildableItem[] {
+  const items: BuildableItem[] = []
+
+  // Buildings available to this faction
+  const buildingIds = getAvailableBuildingIds(factionId)
+  for (const id of buildingIds) {
+    const def = BUILDING_DEFS[id]
+    if (!def || id === 'construction_yard') continue // CY is never built from panel
+    items.push({
+      id: def.id,
+      label: def.name,
+      abbrev: def.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
+      cost: def.stats.cost,
+      tab: 'buildings',
+      buildTime: def.stats.buildTime,
+    })
+  }
+
+  // Units available to this faction
+  const unitIds = getAvailableUnitIds(factionId)
+  for (const id of unitIds) {
+    const def = UNIT_DEFS[id]
+    if (!def) continue
+    const tab: BuildTab =
+      def.category === 'infantry' ? 'infantry' :
+      def.category === 'aircraft' ? 'aircraft' :
+      'vehicles' // vehicle, harvester, naval all go under vehicles tab
+    items.push({
+      id: def.id,
+      label: def.name,
+      abbrev: def.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
+      cost: def.stats.cost,
+      tab,
+      buildTime: def.stats.buildTime,
+    })
+  }
+
+  return items
+}
 
 // ── HUDScene ───────────────────────────────────────────────────────────
 export class HUDScene extends Phaser.Scene {
@@ -149,6 +161,9 @@ export class HUDScene extends Phaser.Scene {
   private mmW = SIDEBAR_W - 8
   private mmH = MINIMAP_H
 
+  // ── Dynamic build catalogue ──────────────────────────────────────
+  private buildItems: BuildableItem[] = []
+
   // ── Selection groups ──────────────────────────────────────────────
   private selGroups: Map<number, string[]> = new Map()
 
@@ -189,6 +204,11 @@ export class HUDScene extends Phaser.Scene {
     this.buildGhost()
     this.setupKeys()
     this.setupEvents()
+
+    // Populate dynamic build items based on human player's faction
+    const factionId = this.gameState?.players?.find(p => !p.isAI)?.faction ?? 'usa'
+    this.buildItems = getBuildItems(factionId)
+
     this.switchTab('buildings')
   }
 
@@ -415,7 +435,7 @@ export class HUDScene extends Phaser.Scene {
     this.buildBtns  = []
     this.buildZones = []
 
-    const items    = BUILD_ITEMS.filter(i => i.tab === this.activeTab)
+    const items    = this.buildItems.filter(i => i.tab === this.activeTab)
     const x        = this.sidebarX
     const startY   = this.buildGridY
     const maxH     = this.selectedY - startY - 4
@@ -519,7 +539,7 @@ export class HUDScene extends Phaser.Scene {
 
     // RA2: One building at a time per Construction Yard
     if (item.tab === 'buildings') {
-      const alreadyBuilding = BUILD_ITEMS.some(
+      const alreadyBuilding = this.buildItems.some(
         bi => bi.tab === 'buildings' && bi.id !== item.id && this.buildProgress.has(bi.id)
       )
       if (alreadyBuilding) {
@@ -759,7 +779,7 @@ export class HUDScene extends Phaser.Scene {
     this.placementDefId = defId
     this.ghost.setVisible(true)
     this.ghostLabel.setVisible(true)
-    const item = BUILD_ITEMS.find(i => i.id === defId)
+    const item = this.buildItems.find(i => i.id === defId)
     if (item) this.ghostLabel.setText(`[${item.label}] LMB=place  RMB=cancel`)
     this.input.on('pointerdown', this.onPlacementPointer, this)
   }
@@ -767,7 +787,7 @@ export class HUDScene extends Phaser.Scene {
   private exitPlacement(refund: boolean) {
     if (!this.placementMode) return
     if (refund && this.placementDefId) {
-      const item = BUILD_ITEMS.find(i => i.id === this.placementDefId)
+      const item = this.buildItems.find(i => i.id === this.placementDefId)
       if (item && this.humanPlayer) {
         this.humanPlayer.credits += item.cost
         this.showAlert(`${item.label} placement cancelled`, 'warning')
@@ -795,7 +815,7 @@ export class HUDScene extends Phaser.Scene {
     const gs = this.scene.get('GameScene')
     if (gs) gs.events.emit('placeBuilding', { defId: this.placementDefId, tileCol, tileRow })
 
-    const item = BUILD_ITEMS.find(i => i.id === this.placementDefId)
+    const item = this.buildItems.find(i => i.id === this.placementDefId)
     this.pendingPlace.delete(this.placementDefId!)
     this.showAlert(`${item?.label ?? 'Building'} placed!`, 'success')
     this.exitPlacement(false)
@@ -810,7 +830,7 @@ export class HUDScene extends Phaser.Scene {
       this.targetCredits = d.credits
     })
     this.events.on('productionComplete', (d: { defId: string }) => {
-      const item = BUILD_ITEMS.find(i => i.id === d.defId)
+      const item = this.buildItems.find(i => i.id === d.defId)
       if (item) this.showAlert(`${item.label} complete!`, 'success')
     })
     this.events.on('buildingLost', (d: { defId: string }) => {
@@ -986,7 +1006,7 @@ export class HUDScene extends Phaser.Scene {
     const done: string[] = []
 
     this.buildProgress.forEach((_, id) => {
-      const item = BUILD_ITEMS.find(i => i.id === id)!
+      const item = this.buildItems.find(i => i.id === id)!
       const totalTime = item.buildTime * 1000
       const paid = this.creditsPaid.get(id) ?? 0
       const remaining = item.cost - paid
@@ -1022,7 +1042,7 @@ export class HUDScene extends Phaser.Scene {
       this.buildProgress.delete(id)
       this.buildTimers.delete(id)
       this.creditsPaid.delete(id)
-      const item = BUILD_ITEMS.find(i => i.id === id)!
+      const item = this.buildItems.find(i => i.id === id)!
 
       // Process queue
       const q = this.buildQueueCnt.get(id) ?? 0

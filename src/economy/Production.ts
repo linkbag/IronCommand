@@ -6,10 +6,11 @@
 import Phaser from 'phaser'
 import type { EntityManager } from '../entities/EntityManager'
 import type { Economy } from './Economy'
-import type { GameState, BuildQueueItem } from '../types'
+import type { GameState, BuildQueueItem, FactionSide, FactionId } from '../types'
 import { UNIT_DEFS, getAvailableUnitIds } from '../entities/UnitDefs'
 import { BUILDING_DEFS } from '../entities/BuildingDefs'
 import { TILE_SIZE } from '../types'
+import { FACTIONS } from '../data/factions'
 
 export class Production extends Phaser.Events.EventEmitter {
   private em: EntityManager
@@ -127,13 +128,38 @@ export class Production extends Phaser.Events.EventEmitter {
 
   /**
    * Check all prerequisites for building/unit.
+   * Side-aware: skips prerequisites that belong to the opposite faction side.
+   * E.g., barracks requires ['construction_yard', 'power_plant', 'tesla_reactor']
+   * → Alliance skips tesla_reactor, Collective skips power_plant.
    */
-  checkPrerequisites(playerId: number, defId: string): boolean {
+  checkPrerequisites(playerId: number, defId: string, gameState?: GameState): boolean {
     const def = UNIT_DEFS[defId] ?? BUILDING_DEFS[defId]
     if (!def) return false
 
     const activeBuildingIds = this.em.getPlayerActiveBuildingIds(playerId)
-    return def.stats.prerequisites.every(req => activeBuildingIds.includes(req))
+
+    // Determine player's side from gameState or from their existing buildings
+    let playerSide: FactionSide | null = null
+    if (gameState) {
+      const player = gameState.players.find(p => p.id === playerId)
+      if (player) playerSide = FACTIONS[player.faction as FactionId]?.side ?? null
+    }
+    if (!playerSide) {
+      // Detect side from active buildings
+      for (const id of activeBuildingIds) {
+        const bd = BUILDING_DEFS[id]
+        if (bd?.side) { playerSide = bd.side; break }
+      }
+    }
+
+    return def.stats.prerequisites.every(req => {
+      const reqDef = BUILDING_DEFS[req]
+      // If the prerequisite is a side-specific building from the opposite side, skip it
+      if (reqDef && reqDef.side !== null && playerSide && reqDef.side !== playerSide) {
+        return true
+      }
+      return activeBuildingIds.includes(req)
+    })
   }
 
   /**
