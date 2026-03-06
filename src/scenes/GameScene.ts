@@ -12,8 +12,9 @@ import { Combat } from '../combat/Combat'
 import { Economy } from '../economy/Economy'
 import { Production } from '../economy/Production'
 import { AI } from '../combat/AI'
-import { BUILDING_DEFS } from '../entities/BuildingDefs'
-import type { Position, TileCoord, GameState, Player, GamePhase, FactionId } from '../types'
+import { BUILDING_DEFS, getPowerBuildingDefId } from '../entities/BuildingDefs'
+import { getHarvesterDefId, getBasicInfantryDefId } from '../entities/UnitDefs'
+import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, FactionSide } from '../types'
 import { TILE_SIZE, STARTING_CREDITS, TerrainType } from '../types'
 import { FACTIONS } from '../data/factions'
 import type { SkirmishConfig } from './SetupScene'
@@ -154,7 +155,7 @@ export class GameScene extends Phaser.Scene {
 
     // ── 8. AI commanders ──────────────────────────────────────
     this.aiCommanders = aiPlayers.map(p =>
-      new AI(p.id, cfg.aiDifficulty, this.entityMgr, this.economy, this.production)
+      new AI(p.id, cfg.aiDifficulty, this.entityMgr, this.economy, this.production, p.faction)
     )
 
     // ── 9. Game state ─────────────────────────────────────────
@@ -571,7 +572,11 @@ export class GameScene extends Phaser.Scene {
     const { tiles, width, height } = this.gameMap.data
     const spawnX = refinery.x + refinery.def.footprint.w * TILE_SIZE / 2 + TILE_SIZE
     const spawnY = refinery.y
-    const hv = this.entityMgr.createUnit(refinery.playerId, 'harvester', spawnX, spawnY)
+    // Use side-appropriate harvester type
+    const player = this.gameState.players.find(p => p.id === refinery.playerId)
+    const side: FactionSide = player ? FACTIONS[player.faction].side : 'alliance'
+    const harvesterDefId = getHarvesterDefId(side)
+    const hv = this.entityMgr.createUnit(refinery.playerId, harvesterDefId, spawnX, spawnY)
     if (hv) {
       hv.setRefineryId(refinery.id)
       // Find nearest ore
@@ -611,7 +616,8 @@ export class GameScene extends Phaser.Scene {
     players.forEach((player, i) => {
       const spawnWorld = startPositions[i] ?? startPositions[0]
       const st = this.gameMap.worldToTile(spawnWorld.x, spawnWorld.y)
-      console.log(`[IC] Player ${player.id} spawn: tile(${st.col},${st.row}) world(${spawnWorld.x},${spawnWorld.y})`)
+      const side: FactionSide = FACTIONS[player.faction].side
+      console.log(`[IC] Player ${player.id} (${player.faction}/${side}) spawn: tile(${st.col},${st.row}) world(${spawnWorld.x},${spawnWorld.y})`)
 
       // Construction Yard — start active
       const cy = this.entityMgr.createBuilding(player.id, 'construction_yard',
@@ -619,8 +625,9 @@ export class GameScene extends Phaser.Scene {
       if (cy) cy.state = 'active'
       else console.error(`[IC] FAILED to create Construction Yard for player ${player.id}`)
 
-      // Power Plant — start active
-      const pp = this.entityMgr.createBuilding(player.id, 'power_plant',
+      // Side-appropriate Power Building — start active
+      const powerDefId = getPowerBuildingDefId(side)
+      const pp = this.entityMgr.createBuilding(player.id, powerDefId,
         st.col + 3, st.row - 1)
       if (pp) pp.state = 'active'
 
@@ -629,8 +636,9 @@ export class GameScene extends Phaser.Scene {
         st.col - 1, st.row + 3)
       if (ref) ref.state = 'active'
 
-      // Harvester — find nearest ore and auto-send
-      const hv = this.entityMgr.createUnit(player.id, 'harvester',
+      // Side-appropriate Harvester — find nearest ore and auto-send
+      const harvesterDefId = getHarvesterDefId(side)
+      const hv = this.entityMgr.createUnit(player.id, harvesterDefId,
         spawnWorld.x + TILE_SIZE * 2, spawnWorld.y + TILE_SIZE * 3)
       if (hv) {
         if (ref) hv.setRefineryId(ref.id)
@@ -652,9 +660,10 @@ export class GameScene extends Phaser.Scene {
         }
       }
 
-      // 2 rifle soldiers flanking the base
+      // 2 basic infantry flanking the base (side-appropriate)
+      const infantryDefId = getBasicInfantryDefId(side)
       for (let j = 0; j < 2; j++) {
-        this.entityMgr.createUnit(player.id, 'rifle_soldier',
+        this.entityMgr.createUnit(player.id, infantryDefId,
           spawnWorld.x - TILE_SIZE * 3 + j * TILE_SIZE * 2,
           spawnWorld.y + TILE_SIZE)
       }

@@ -7,48 +7,37 @@
 import type { EntityManager } from '../entities/EntityManager'
 import type { Economy } from '../economy/Economy'
 import type { Production } from '../economy/Production'
-import type { GameState } from '../types'
+import type { GameState, FactionSide, FactionId } from '../types'
 import { TILE_SIZE } from '../types'
-import { UNIT_DEFS } from '../entities/UnitDefs'
-import { BUILDING_DEFS } from '../entities/BuildingDefs'
+import { UNIT_DEFS, getBasicInfantryDefId, getMainTankDefId, getHarvesterDefId } from '../entities/UnitDefs'
+import { BUILDING_DEFS, getPowerBuildingDefId } from '../entities/BuildingDefs'
+import { FACTIONS } from '../data/factions'
 
 export type AIDifficulty = 'easy' | 'medium' | 'hard'
 
 type AIPhase = 'early' | 'mid' | 'late'
 
-// Build order: what to build and in what order
-const BUILD_ORDER: Record<AIDifficulty, string[]> = {
-  easy: [
-    'power_plant',
-    'barracks',
-    'ore_refinery',
-    'power_plant',
-    'war_factory',
-    'barracks',
-    'radar_tower',
-  ],
-  medium: [
-    'power_plant',
-    'barracks',
-    'ore_refinery',
-    'war_factory',
-    'power_plant',
-    'barracks',
-    'radar_tower',
-    'tech_center',
-  ],
-  hard: [
-    'power_plant',
-    'barracks',
-    'ore_refinery',
-    'war_factory',
-    'power_plant',
-    'radar_tower',
-    'barracks',
-    'tech_center',
-    'advanced_power',
-    'superweapon',
-  ],
+// Build order: what to build and in what order (side-aware)
+function getBuildOrder(difficulty: AIDifficulty, side: FactionSide): string[] {
+  const power = getPowerBuildingDefId(side)
+  const techBuilding = side === 'alliance' ? 'air_force_command' : 'radar_tower'
+
+  const orders: Record<AIDifficulty, string[]> = {
+    easy: [
+      power, 'barracks', 'ore_refinery', power,
+      'war_factory', 'barracks', techBuilding,
+    ],
+    medium: [
+      power, 'barracks', 'ore_refinery', 'war_factory',
+      power, 'barracks', techBuilding, 'battle_lab',
+    ],
+    hard: [
+      power, 'barracks', 'ore_refinery', 'war_factory',
+      power, techBuilding, 'barracks', 'battle_lab',
+      power, side === 'alliance' ? 'weather_device' : 'nuclear_silo',
+    ],
+  }
+  return orders[difficulty]
 }
 
 // Army composition: how many of each unit to build before attacking
@@ -68,11 +57,14 @@ const TICK_INTERVAL: Record<AIDifficulty, number> = {
 export class AI {
   private playerId: number
   private difficulty: AIDifficulty
+  private side: FactionSide
+  private factionId: FactionId
   private em: EntityManager
   private economy: Economy
   private production: Production
 
   private phase: AIPhase
+  private buildOrder: string[]
   private buildOrderIndex: number
   private armyUnits: string[]  // unit IDs in AI's army
   private tickTimer: number
@@ -86,14 +78,18 @@ export class AI {
     entityManager: EntityManager,
     economy: Economy,
     production: Production,
+    factionId: FactionId,
   ) {
     this.playerId = playerId
     this.difficulty = difficulty
+    this.factionId = factionId
+    this.side = FACTIONS[factionId].side
     this.em = entityManager
     this.economy = economy
     this.production = production
 
     this.phase = 'early'
+    this.buildOrder = getBuildOrder(difficulty, this.side)
     this.buildOrderIndex = 0
     this.armyUnits = []
     this.tickTimer = 0
@@ -137,12 +133,12 @@ export class AI {
 
   // ── Phase management ─────────────────────────────────────────
 
-  private updatePhase(gameState: GameState): void {
+  private updatePhase(_gameState: GameState): void {
     const buildings = this.em.getBuildingsForPlayer(this.playerId)
     const hasWarFactory = buildings.some(b => b.def.id === 'war_factory' && b.state === 'active')
-    const hasTechCenter = buildings.some(b => b.def.id === 'tech_center' && b.state === 'active')
+    const hasBattleLab = buildings.some(b => b.def.id === 'battle_lab' && b.state === 'active')
 
-    if (hasTechCenter) {
+    if (hasBattleLab) {
       this.phase = 'late'
     } else if (hasWarFactory) {
       this.phase = 'mid'
@@ -164,13 +160,14 @@ export class AI {
     )
 
     if (harvesters.length < refineries.length) {
-      // Try to queue a harvester
+      // Try to queue a harvester (side-appropriate type)
+      const harvesterDefId = getHarvesterDefId(this.side)
       for (const refinery of refineries) {
         if (refinery.productionQueue.length === 0) {
           this.production.queueProduction(
             this.playerId,
             refinery.id,
-            'harvester',
+            harvesterDefId,
             this.buildFakeGameState(),
           )
         }
@@ -193,7 +190,8 @@ export class AI {
 
   private rebuildLostBuildings(_gameState: GameState): void {
     // RA2: AI rebuilds critical structures that were destroyed
-    const essentialBuildings = ['power_plant', 'barracks', 'ore_refinery', 'war_factory']
+    const powerBuilding = getPowerBuildingDefId(this.side)
+    const essentialBuildings = [powerBuilding, 'barracks', 'ore_refinery', 'war_factory']
     const activeIds = this.em.getPlayerActiveBuildingIds(this.playerId)
     const hasCY = activeIds.includes('construction_yard')
     if (!hasCY) return  // can't rebuild without CY
@@ -201,13 +199,10 @@ export class AI {
     for (const defId of essentialBuildings) {
       if (!activeIds.includes(defId)) {
         // Check if we previously had it (build order index past it)
-        const orderIdx = BUILD_ORDER[this.difficulty].indexOf(defId)
+        const orderIdx = this.buildOrder.indexOf(defId)
         if (orderIdx >= 0 && orderIdx < this.buildOrderIndex) {
           // Prerequisites still met?
-          const def = BUILDING_DEFS[defId]
-          if (!def) continue
-          const prereqsMet = def.stats.prerequisites.every(req => activeIds.includes(req))
-          if (prereqsMet) {
+          if (this.production.checkPrerequisites(this.playerId, defId)) {
             this.tryBuildBuilding(defId)
             return  // one rebuild per tick
           }
@@ -219,10 +214,9 @@ export class AI {
   // ── Build order ──────────────────────────────────────────────
 
   private updateBuildOrder(_gameState: GameState): void {
-    const order = BUILD_ORDER[this.difficulty]
-    if (this.buildOrderIndex >= order.length) return
+    if (this.buildOrderIndex >= this.buildOrder.length) return
 
-    const nextBuildingId = order[this.buildOrderIndex]
+    const nextBuildingId = this.buildOrder[this.buildOrderIndex]
     const def = BUILDING_DEFS[nextBuildingId]
     if (!def) return
 
@@ -232,10 +226,8 @@ export class AI {
       return
     }
 
-    // Check prerequisites
-    const activeBuildingIds = this.em.getPlayerActiveBuildingIds(this.playerId)
-    const prereqsMet = def.stats.prerequisites.every(req => activeBuildingIds.includes(req))
-    if (!prereqsMet) return
+    // Check prerequisites (side-aware)
+    if (!this.production.checkPrerequisites(this.playerId, nextBuildingId)) return
 
     // Check credits
     const credits = this.economy.getCredits(this.playerId)
@@ -244,8 +236,8 @@ export class AI {
     // Check power
     const powerBalance = this.economy.getPowerBalance(this.playerId)
     if (powerBalance + def.providespower < 0 && def.category !== 'power') {
-      // Build power plant first
-      this.tryBuildBuilding('power_plant')
+      // Build side-appropriate power building first
+      this.tryBuildBuilding(getPowerBuildingDefId(this.side))
       return
     }
 
@@ -368,29 +360,39 @@ export class AI {
     const hasWarFactory = this.em.playerHasBuilding(this.playerId, 'war_factory')
     const hasBarracks = this.em.playerHasBuilding(this.playerId, 'barracks')
 
+    // Side-appropriate unit IDs
+    const basicInf = getBasicInfantryDefId(this.side)
+    const mainTank = getMainTankDefId(this.side)
+    // RA2: Alliance has Rocketeer, Collective has Flak Trooper as anti-air infantry
+    const antiAirInf = this.side === 'alliance' ? 'rocketeer' : 'flak_trooper'
+    // Late-game heavy: Alliance has no direct equivalent to Apocalypse, uses IFV mix
+    const heavyUnit = this.side === 'alliance' ? 'ifv' : 'apocalypse_tank'
+    // Long-range: Alliance has Prism Tower (building), Collective has V3 Launcher
+    const siegeUnit = this.side === 'alliance' ? mainTank : 'v3_launcher'
+
     if (this.phase === 'early') {
-      return hasBarracks ? 'rifle_soldier' : null
+      return hasBarracks ? basicInf : null
     }
 
     if (this.phase === 'mid') {
-      if (hasWarFactory && vehicleCount < infantryCount * 0.5) return 'light_tank'
-      if (hasBarracks && infantryCount < 4) return 'rocket_soldier'
-      if (hasWarFactory) return 'light_tank'
-      return hasBarracks ? 'rifle_soldier' : null
+      if (hasWarFactory && vehicleCount < infantryCount * 0.5) return mainTank
+      if (hasBarracks && infantryCount < 4) return antiAirInf
+      if (hasWarFactory) return mainTank
+      return hasBarracks ? basicInf : null
     }
 
-    // Late game — mix heavy tanks, artillery, and rocket soldiers
+    // Late game — mix heavy units, siege, and anti-air
     if (hasWarFactory) {
-      if (vehicleCount < 4) return 'heavy_tank'
-      const artilleryCount = units.filter(u => u.def.id === 'artillery').length
-      if (artilleryCount < 2) return 'artillery'
-      if (vehicleCount < 8) return 'heavy_tank'
-      return Math.random() < 0.5 ? 'heavy_tank' : 'light_tank'
+      if (vehicleCount < 4) return mainTank
+      const siegeCount = units.filter(u => u.def.id === siegeUnit).length
+      if (siegeCount < 2) return siegeUnit
+      if (vehicleCount < 8) return mainTank
+      return Math.random() < 0.5 ? heavyUnit : mainTank
     }
     if (hasBarracks) {
-      const rocketCount = units.filter(u => u.def.id === 'rocket_soldier').length
-      if (rocketCount < infantryCount * 0.4) return 'rocket_soldier'
-      return 'rifle_soldier'
+      const aaCount = units.filter(u => u.def.id === antiAirInf).length
+      if (aaCount < infantryCount * 0.4) return antiAirInf
+      return basicInf
     }
     return null
   }
@@ -402,9 +404,9 @@ export class AI {
     const producingBuildingIds: Record<string, string[]> = {
       infantry: ['barracks'],
       vehicle: ['war_factory'],
-      aircraft: ['airfield'],
-      naval: ['naval_yard'],
-      harvester: ['ore_refinery'],
+      aircraft: [this.side === 'alliance' ? 'air_force_command' : 'war_factory'],
+      naval: ['naval_shipyard'],
+      harvester: ['ore_refinery', 'war_factory'],
     }
 
     const buildingIds = producingBuildingIds[unitDef.category] ?? []

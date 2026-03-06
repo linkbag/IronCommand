@@ -537,7 +537,8 @@ export class SetupScene extends Phaser.Scene {
 
   private updateFactionInfo() {
     const faction = FACTIONS[this.config.playerFaction]
-    this.factionInfoText.setText(`${faction.flag}  ${faction.name.toUpperCase()}  —  ${faction.bonus}`)
+    const sideLabel = faction.side === 'alliance' ? 'IRON ALLIANCE' : 'RED COLLECTIVE'
+    this.factionInfoText.setText(`${faction.flag}  ${faction.name.toUpperCase()}  [${sideLabel}]\n${faction.bonus}`)
     this.factionUnitText.setText(`Unique: ${faction.uniqueUnits.join(', ')}`)
     this.factionSWText.setText(`Superweapon: ${faction.superweapon}`)
 
