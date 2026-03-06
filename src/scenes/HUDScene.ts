@@ -462,13 +462,19 @@ export class HUDScene extends Phaser.Scene {
       const bg          = this.add.graphics()
       const progressBar = this.add.graphics()
 
-      const abbTxt = this.add.text(0, -10, item.abbrev, {
-        fontFamily: 'monospace', fontSize: '15px', color: '#cccccc',
+      // Draw iconic symbol for this item
+      const iconGfx = this.add.graphics()
+      this.drawBuildIcon(iconGfx, item.id, item.tab)
+
+      // Short readable name (truncated to fit)
+      const shortName = this.getShortName(item.id)
+      const abbTxt = this.add.text(0, -18, shortName, {
+        fontFamily: 'monospace', fontSize: '7px', color: '#aabbcc',
         stroke: '#000', strokeThickness: 1,
       }).setOrigin(0.5)
 
-      const costTxt = this.add.text(0, 9, `$${item.cost}`, {
-        fontFamily: 'monospace', fontSize: '8px', color: '#ffd700',
+      const costTxt = this.add.text(0, 18, `$${item.cost}`, {
+        fontFamily: 'monospace', fontSize: '7px', color: '#ffd700',
       }).setOrigin(0.5)
 
       const queueTxt = this.add.text(BTN_W / 2 - 2, -BTN_H / 2 + 2, '', {
@@ -480,7 +486,7 @@ export class HUDScene extends Phaser.Scene {
         fontFamily: 'monospace', fontSize: '8px', color: '#4ade80',
       }).setOrigin(0.5)
 
-      ctr.add([bg, progressBar, abbTxt, costTxt, queueTxt, readyTxt])
+      ctr.add([bg, progressBar, iconGfx, abbTxt, costTxt, queueTxt, readyTxt])
       ctr._item        = item
       ctr._bg          = bg
       ctr._progressBar = progressBar
@@ -587,6 +593,166 @@ export class HUDScene extends Phaser.Scene {
 
     // Set container alpha for all children (text, etc.)
     btn.setAlpha(hasPrereqs ? 1.0 : 0.35)
+  }
+
+  /** Get a short readable name for build buttons */
+  private getShortName(defId: string): string {
+    const names: Record<string, string> = {
+      // Buildings
+      construction_yard: 'CON YARD', power_plant: 'POWER', tesla_reactor: 'TESLA PWR',
+      barracks: 'BARRACKS', war_factory: 'WAR FACT', ore_refinery: 'REFINERY',
+      airfield: 'AIRFIELD', air_force_hq: 'AIR HQ', naval_shipyard: 'SHIPYARD',
+      radar_tower: 'RADAR', service_depot: 'DEPOT', battle_lab: 'BATTLE LAB',
+      tech_center: 'TECH LAB', ore_purifier: 'PURIFIER', nuclear_reactor: 'NUKE PWR',
+      cloning_vats: 'CLONING', spy_satellite: 'SPY SAT',
+      // Defenses
+      fortress_wall: 'WALL', wall: 'WALL', pillbox: 'PILLBOX', sentry_gun: 'SENTRY',
+      prism_tower: 'PRISM', tesla_coil: 'TESLA', patriot_missile: 'PATRIOT',
+      flak_cannon: 'FLAK', aa_gun: 'AA GUN', turret: 'TURRET',
+      gap_generator: 'GAP GEN', psychic_sensor: 'PSYCHIC',
+      // Superweapons
+      weather_device: 'WEATHER', chronosphere: 'CHRONO', superweapon: 'S.WEAPON',
+      iron_curtain: 'CURTAIN', nuclear_silo: 'NUKE SILO',
+      advanced_power: 'ADV PWR',
+      // Infantry
+      gi: 'GI', conscript: 'CONSCRIPT', rifle_soldier: 'RIFLE',
+      rocket_soldier: 'ROCKET', flak_trooper: 'FLAK INF',
+      engineer: 'ENGINEER', attack_dog: 'DOG', spy: 'SPY',
+      rocketeer: 'ROCKETEER', tesla_trooper: 'TESLA INF',
+      crazy_ivan: 'C. IVAN', sniper: 'SNIPER', tanya: 'TANYA',
+      // Vehicles
+      grizzly_tank: 'GRIZZLY', rhino_tank: 'RHINO', light_tank: 'LT TANK',
+      heavy_tank: 'HV TANK', ifv: 'IFV', flak_track: 'FLAK TRK',
+      v3_launcher: 'V3', artillery: 'ARTLLRY', apc: 'APC',
+      prism_tank: 'PRISM TK', mirage_tank: 'MIRAGE',
+      apocalypse_tank: 'APOC', chrono_miner: 'MINER', war_miner: 'WAR MINE',
+      harvester: 'HARVEST', mcv: 'MCV',
+      tank_destroyer: 'TK DESTR', tesla_tank: 'TESLA TK',
+      demolition_truck: 'DEMO TRK',
+      // Aircraft
+      harrier: 'HARRIER', fighter_jet: 'FIGHTER', bomber: 'BOMBER',
+      kirov: 'KIROV', black_eagle: 'BLK EAGLE',
+      nighthawk: 'NIGHTHWK',
+      // Naval
+      destroyer: 'DESTROYR', aegis: 'AEGIS', carrier: 'CARRIER',
+      typhoon_sub: 'TYPHOON', dreadnought: 'DREADNOT', gunboat: 'GUNBOAT',
+      giant_squid: 'SQUID', dolphin: 'DOLPHIN',
+    }
+    return names[defId] ?? defId.replace(/_/g, ' ').slice(0, 8).toUpperCase()
+  }
+
+  /** Draw a recognizable icon for each build item */
+  private drawBuildIcon(g: Phaser.GameObjects.Graphics, defId: string, tab: string): void {
+    const s = 10 // icon half-size
+
+    switch (defId) {
+      // ── Buildings ──
+      case 'construction_yard':
+        g.fillStyle(0x88aacc, 1); g.fillRect(-s, -s+2, s*2, s*2-4)  // base
+        g.lineStyle(2, 0xffcc00, 1); g.lineBetween(-4, -s+2, 4, -s-4) // crane arm
+        g.lineBetween(4, -s-4, 4, -s+2)
+        break
+      case 'power_plant': case 'tesla_reactor': case 'advanced_power': case 'nuclear_reactor':
+        g.fillStyle(0x446688, 1); g.fillRect(-s+2, -s+4, s*2-4, s*2-6)
+        g.lineStyle(3, 0xffff00, 1) // lightning bolt
+        g.lineBetween(2, -s+2, -3, 0); g.lineBetween(-3, 0, 3, 0); g.lineBetween(3, 0, -2, s-2)
+        break
+      case 'barracks':
+        g.fillStyle(0x556644, 1); g.fillRect(-s+2, -s+4, s*2-4, s*2-6)
+        // person silhouette
+        g.fillStyle(0xcccccc, 1); g.fillCircle(0, -4, 3) // head
+        g.fillRect(-3, -1, 6, 8) // body
+        break
+      case 'war_factory':
+        g.fillStyle(0x555566, 1); g.fillRect(-s, -s+4, s*2, s*2-6)
+        // gear/cog
+        g.lineStyle(2, 0xddaa44, 1); g.strokeCircle(0, 0, 5)
+        g.fillStyle(0xddaa44, 1); g.fillRect(-1, -7, 2, 4); g.fillRect(-1, 3, 2, 4)
+        g.fillRect(-7, -1, 4, 2); g.fillRect(3, -1, 4, 2)
+        break
+      case 'ore_refinery':
+        g.fillStyle(0x556655, 1); g.fillRect(-s+2, -s+4, s*2-4, s*2-6)
+        // ore/dollar
+        g.fillStyle(0xffdd00, 1); g.fillTriangle(-5, 4, 0, -4, 5, 4) // ore pile
+        break
+      case 'airfield': case 'air_force_hq':
+        g.fillStyle(0x445566, 1); g.fillRect(-s, -s+4, s*2, s*2-6)
+        // runway + plane
+        g.lineStyle(1, 0xcccccc, 0.8); g.lineBetween(-8, 0, 8, 0)
+        g.fillStyle(0xcccccc, 1); g.fillTriangle(-4, -2, 6, 0, -4, 2) // plane
+        break
+      case 'radar_tower':
+        g.fillStyle(0x445566, 1); g.fillRect(-s+2, -s+4, s*2-4, s*2-6)
+        // dish
+        g.lineStyle(2, 0x88ccff, 1); g.lineBetween(0, 4, 0, -4)
+        g.beginPath(); g.arc(0, -4, 6, -2.2, -0.9); g.strokePath()
+        break
+      case 'battle_lab': case 'tech_center':
+        g.fillStyle(0x334466, 1); g.fillRect(-s+2, -s+4, s*2-4, s*2-6)
+        // atom/science
+        g.lineStyle(1, 0x88ddff, 1); g.strokeCircle(0, 0, 6)
+        g.fillStyle(0xff4444, 1); g.fillCircle(0, 0, 2)
+        break
+      // ── Defenses ──
+      case 'fortress_wall': case 'wall':
+        g.fillStyle(0x888888, 1); g.fillRect(-s, -3, s*2, 6)
+        g.fillRect(-s, -6, 4, 3); g.fillRect(s-4, -6, 4, 3) // battlements
+        break
+      case 'pillbox': case 'sentry_gun':
+        g.fillStyle(0x667766, 1); g.fillCircle(0, 2, 7)
+        g.lineStyle(2, 0xcccccc, 1); g.lineBetween(0, 2, 0, -8) // gun barrel
+        break
+      case 'turret': case 'prism_tower': case 'tesla_coil':
+        g.fillStyle(0x556666, 1); g.fillCircle(0, 2, 6)
+        g.lineStyle(2, defId === 'tesla_coil' ? 0x4488ff : 0xff6644, 1)
+        g.lineBetween(0, 0, 0, -10) // barrel/coil
+        g.lineBetween(-3, -8, 3, -8) // cross
+        break
+      case 'patriot_missile': case 'flak_cannon': case 'aa_gun':
+        g.fillStyle(0x556655, 1); g.fillRect(-6, 0, 12, 6)
+        g.lineStyle(2, 0xcc4444, 1)
+        g.lineBetween(-4, 0, -2, -8); g.lineBetween(4, 0, 2, -8) // AA tubes
+        break
+      // ── Superweapons ──
+      case 'weather_device':
+        g.lineStyle(2, 0x4488ff, 1)
+        g.strokeCircle(0, -2, 8); g.lineBetween(0, -10, 0, 6)
+        g.lineStyle(1, 0xffff44, 1); g.lineBetween(-3, 2, 0, 8); g.lineBetween(3, 2, 0, 8)
+        break
+      case 'nuclear_silo': case 'superweapon':
+        g.fillStyle(0x884400, 1); g.fillRect(-4, -s, 8, s*2)
+        g.fillStyle(0xff4400, 1); g.fillTriangle(-4, -s, 0, -s-6, 4, -s) // warhead
+        break
+      case 'chronosphere': case 'iron_curtain':
+        g.lineStyle(2, defId === 'chronosphere' ? 0x44ddff : 0xff4444, 1)
+        g.strokeCircle(0, 0, 8); g.strokeCircle(0, 0, 4)
+        g.fillStyle(defId === 'chronosphere' ? 0x44ddff : 0xff4444, 0.4)
+        g.fillCircle(0, 0, 4)
+        break
+      default:
+        // Fallback by tab
+        if (tab === 'infantry') {
+          // Person silhouette
+          g.fillStyle(0xcccccc, 1); g.fillCircle(0, -5, 3)
+          g.fillRect(-3, -2, 6, 8); g.fillRect(-5, 0, 3, 2); g.fillRect(2, 0, 3, 2)
+        } else if (tab === 'vehicles') {
+          // Tank shape
+          g.fillStyle(0x778877, 1); g.fillRect(-8, -2, 16, 8) // body
+          g.fillRect(-6, -4, 4, 3) // turret
+          g.lineStyle(2, 0xaaaaaa, 1); g.lineBetween(-4, -3, 8, -3) // barrel
+          g.fillStyle(0x333333, 1); g.fillRect(-8, 6, 16, 2) // tracks
+        } else if (tab === 'aircraft') {
+          // Plane
+          g.fillStyle(0x8899aa, 1)
+          g.fillTriangle(-8, 4, 0, -8, 8, 4) // fuselage
+          g.fillRect(-12, -1, 24, 3) // wings
+        } else {
+          // Generic building
+          g.fillStyle(0x667788, 1); g.fillRect(-s+2, -s+4, s*2-4, s*2-6)
+          g.lineStyle(1, 0xaaaaaa, 0.5); g.strokeRect(-s+2, -s+4, s*2-4, s*2-6)
+        }
+        break
+    }
   }
 
   private onBuildClick(item: BuildableItem) {
