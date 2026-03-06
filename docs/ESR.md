@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-05 22:08*
+*Last updated: 2026-03-05 22:12*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -97,4 +97,8 @@ Review passed — reviewer exited cleanly (auto-pass: clean exit, no issues indi
 
 ### Update: 2026-03-05 22:08
 ### claude-ic-playable — 2026-03-05 22:08
+Review passed — reviewer exited cleanly (auto-pass: clean exit, no issues indicated)
+
+### Update: 2026-03-05 22:12
+### codex-ic-controls — 2026-03-05 22:12
 Review passed — reviewer exited cleanly (auto-pass: clean exit, no issues indicated)
