@@ -150,7 +150,7 @@ function generateMapData(
         if (tile.terrain === TerrainType.GRASS || tile.terrain === TerrainType.SAND) {
           tile.terrain = TerrainType.ORE
           tile.oreAmount = 1000 + Math.floor(rng() * 2000)
-          tile.passable = false
+          // Ore tiles stay passable so harvesters can reach them
           tile.buildable = false
         }
       }

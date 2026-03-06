@@ -91,6 +91,10 @@ export class Building extends Phaser.GameObjects.Container {
     this.playConstructionAnimation()
   }
 
+  // ── Convenience getters (for HUDScene interop) ──────────────
+  get defId(): string { return this.def.id }
+  get maxHp(): number { return this.def.stats.maxHp }
+
   // ── Public API ───────────────────────────────────────────────
 
   setSelected(selected: boolean): void {

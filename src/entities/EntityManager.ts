@@ -146,6 +146,32 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     return this.units.get(id) ?? this.buildings.get(id)
   }
 
+  /** Flat list of all entities (units + buildings) for HUD minimap / info panel */
+  getAllEntities(): Array<{
+    id: string; playerId: number; type: string; x: number; y: number;
+    isAlive: boolean; defId: string; hp: number; maxHp: number;
+  }> {
+    const result: Array<{
+      id: string; playerId: number; type: string; x: number; y: number;
+      isAlive: boolean; defId: string; hp: number; maxHp: number;
+    }> = []
+    for (const u of this.units.values()) {
+      result.push({
+        id: u.id, playerId: u.playerId, type: 'unit',
+        x: u.x, y: u.y, isAlive: u.state !== 'dying',
+        defId: u.def.id, hp: u.hp, maxHp: u.def.stats.maxHp,
+      })
+    }
+    for (const b of this.buildings.values()) {
+      result.push({
+        id: b.id, playerId: b.playerId, type: 'building',
+        x: b.x, y: b.y, isAlive: b.state !== 'dying',
+        defId: b.def.id, hp: b.hp, maxHp: b.def.stats.maxHp,
+      })
+    }
+    return result
+  }
+
   getAllUnits(): Unit[] {
     return Array.from(this.units.values())
   }
