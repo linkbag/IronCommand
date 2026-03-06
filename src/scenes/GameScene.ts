@@ -198,9 +198,18 @@ export class GameScene extends Phaser.Scene {
     // ── 16. Initial fog reveal around player base ─────────────
     console.log('[IC] Units:', this.entityMgr.getAllUnits().length,
                 'Buildings:', this.entityMgr.getAllBuildings().length)
+    console.log('[IC] StartPos[0]:', this.gameMap.data.startPositions[0])
+
+    // Reveal fog around player entities
     this.updateFogOfWar()
-    console.log('[IC] Fog updated. Visible tiles:',
-      this.gameMap.data.tiles.flat().filter(t => t.fogState === 2).length)
+
+    // DEBUG: If no tiles were revealed, force-reveal everything so the game is playable
+    const visibleCount = this.gameMap.data.tiles.flat().filter(t => t.fogState === 2).length
+    console.log('[IC] Fog updated. Visible tiles:', visibleCount)
+    if (visibleCount === 0) {
+      console.warn('[IC] WARNING: No tiles revealed! Force-revealing entire map.')
+      this.gameMap.revealAll()
+    }
 
     // Push initial camera to registry for HUD
     this.registry.set('camX', this.camX)
@@ -596,14 +605,19 @@ export class GameScene extends Phaser.Scene {
     const { tiles, width, height } = this.gameMap.data
     const players = this.gameState.players
 
+    console.log('[IC] spawnStartingEntities:', players.length, 'players,',
+      startPositions.length, 'start positions')
+
     players.forEach((player, i) => {
       const spawnWorld = startPositions[i] ?? startPositions[0]
       const st = this.gameMap.worldToTile(spawnWorld.x, spawnWorld.y)
+      console.log(`[IC] Player ${player.id} spawn: tile(${st.col},${st.row}) world(${spawnWorld.x},${spawnWorld.y})`)
 
       // Construction Yard — start active
       const cy = this.entityMgr.createBuilding(player.id, 'construction_yard',
         st.col - 1, st.row - 1)
       if (cy) cy.state = 'active'
+      else console.error(`[IC] FAILED to create Construction Yard for player ${player.id}`)
 
       // Power Plant — start active
       const pp = this.entityMgr.createBuilding(player.id, 'power_plant',
