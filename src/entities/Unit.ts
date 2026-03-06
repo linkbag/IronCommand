@@ -189,10 +189,6 @@ export class Unit extends Phaser.GameObjects.Container {
     return this.veterancy >= 2 ? 1.2 : this.veterancy >= 1 ? 1.1 : 1.0
   }
 
-  get maxHp(): number {
-    return this.def.stats.maxHp
-  }
-
   get isAlive(): boolean {
     return this.state !== 'dying' && this.hp > 0
   }

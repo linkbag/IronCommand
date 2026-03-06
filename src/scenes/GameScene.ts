@@ -670,78 +670,7 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // ── HUD → GameScene event wiring ─────────────────────────────
-
-  private wireHUDEvents(): void {
-    // Place a completed building on the map
-    this.events.on('placeBuilding', (data: { defId: string; tileCol: number; tileRow: number }) => {
-      const building = this.entityMgr.createBuilding(0, data.defId, data.tileCol, data.tileRow)
-      if (building) {
-        building.state = 'active'
-        // Deduct cost through economy if not already deducted by HUD
-        // (HUD already deducts from player.credits directly)
-      }
-    })
-
-    // Spawn a produced unit near the appropriate production building
-    this.events.on('unitProduced', (data: { defId: string }) => {
-      const unitDef = this.entityMgr.getUnitDef(data.defId)
-      if (!unitDef) return
-
-      const producerMap: Record<string, string[]> = {
-        infantry: ['barracks'],
-        vehicle: ['war_factory'],
-        aircraft: ['airfield'],
-        naval: ['naval_yard'],
-        harvester: ['ore_refinery', 'war_factory'],
-      }
-      const producerIds = producerMap[unitDef.category] ?? []
-      const playerBuildings = this.entityMgr.getBuildingsForPlayer(0)
-      const producer = playerBuildings.find(
-        b => producerIds.includes(b.def.id) && b.state === 'active'
-      )
-
-      let spawnX: number, spawnY: number
-      if (producer) {
-        spawnX = producer.x + producer.def.footprint.w * TILE_SIZE / 2 + TILE_SIZE
-        spawnY = producer.y
-      } else {
-        const sp = this.gameMap.data.startPositions[0]
-        spawnX = sp?.x ?? 200
-        spawnY = sp?.y ?? 200
-      }
-
-      const unit = this.entityMgr.createUnit(0, data.defId, spawnX, spawnY)
-      if (unit && unitDef.category === 'harvester') {
-        const refinery = this.entityMgr.getNearestRefinery(unit.x, unit.y, 0)
-        if (refinery) unit.setRefineryId(refinery.id)
-      }
-    })
-
-    // Sell a selected building
-    this.events.on('sellBuilding', (data: { entityId: string }) => {
-      const building = this.entityMgr.getBuilding(data.entityId)
-      if (building && building.playerId === 0) {
-        const refund = building.sell()
-        this.economy.addCredits(0, refund)
-      }
-    })
-
-    // Relay orders from HUD keyboard shortcuts
-    this.events.on('issueOrder', (data: { ids: string[]; type: string; target?: { x: number; y: number } }) => {
-      for (const id of data.ids) {
-        const unit = this.entityMgr.getUnit(id)
-        if (unit && unit.playerId === 0) {
-          unit.giveOrder({ type: data.type as import('../types').OrderType, target: data.target })
-        }
-      }
-    })
-
-    // Cursor mode changes from HUD (sell/repair/attackMove)
-    this.events.on('cursorModeChanged', (_data: { mode: string }) => {
-      // Could change cursor style or modify click behavior
-    })
-  }
+  // (duplicate wireHUDEvents removed — kept the comprehensive version above)
 
   // ── Input ─────────────────────────────────────────────────────
 
