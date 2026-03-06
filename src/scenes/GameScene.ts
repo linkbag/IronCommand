@@ -58,6 +58,7 @@ export class GameScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys
   private wasdKeys!: Record<string, Phaser.Input.Keyboard.Key>
   private isDragging = false
+  private isLeftPointerActive = false
   private dragAnchorScreen = { x: 0, y: 0 }
   private dragAnchorWorld = { x: 0, y: 0 }
   private cursorMode: string = 'normal'
@@ -486,6 +487,11 @@ export class GameScene extends Phaser.Scene {
     this.events.on('startProduction', (_data: { defId: string; type: string }) => {
       // HUDScene handles its own build progress tracking
     })
+
+    // Cancel production event from HUD (for queue/progress tracking)
+    this.events.on('cancelProduction', (_data: { defId: string; type: string; refund: number }) => {
+      // HUDScene currently owns player build queue/progress state.
+    })
   }
 
   // ── Production system event wiring ─────────────────────────────
@@ -724,37 +730,55 @@ export class GameScene extends Phaser.Scene {
   private setupInput(): void {
     this.cursors = this.input.keyboard!.createCursorKeys()
     this.wasdKeys = this.input.keyboard!.addKeys('W,A,S,D,H') as Record<string, Phaser.Input.Keyboard.Key>
+    this.input.mouse?.disableContextMenu()
 
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
-      if (ptr.rightButtonDown()) {
+      const mouseEvent = ptr.event as MouseEvent | undefined
+      const button = ptr.button ?? mouseEvent?.button ?? -1
+
+      if (button === 2 || ptr.rightButtonDown()) {
         this.handleRightClick(ptr)
-      } else if (ptr.leftButtonDown()) {
-        // Sell/repair cursor modes
-        if (this.cursorMode === 'sell') {
-          this.handleSellClick(ptr)
-          return
-        }
-        if (this.cursorMode === 'repair') {
-          this.handleRepairClick(ptr)
-          return
-        }
-        // Ctrl+click = force fire
-        if ((ptr.event as MouseEvent)?.ctrlKey && this.selectedIds.size > 0) {
-          this.handleForceAttack(ptr)
-          return
-        }
-        this.startDragSelect(ptr)
+        return
       }
+
+      if (button !== 0 && !ptr.leftButtonDown()) return
+
+      // Sell/repair cursor modes
+      if (this.cursorMode === 'sell') {
+        this.handleSellClick(ptr)
+        return
+      }
+      if (this.cursorMode === 'repair') {
+        this.handleRepairClick(ptr)
+        return
+      }
+
+      // Ctrl+click = force fire
+      if (mouseEvent?.ctrlKey && this.selectedIds.size > 0) {
+        this.handleForceAttack(ptr)
+        return
+      }
+
+      this.startDragSelect(ptr)
     })
 
     this.input.on('pointermove', (ptr: Phaser.Input.Pointer) => {
-      if (this.isDragging && ptr.leftButtonDown()) {
-        this.updateDragSelect(ptr)
-      }
+      if (!this.isLeftPointerActive || !ptr.leftButtonDown()) return
+      this.updateDragSelect(ptr)
     })
 
     this.input.on('pointerup', (ptr: Phaser.Input.Pointer) => {
-      if (this.isDragging) this.endDragSelect(ptr)
+      if (!this.isLeftPointerActive) return
+
+      if (this.isDragging) {
+        this.endDragSelect(ptr)
+      } else {
+        this.handleLeftClick(ptr)
+      }
+
+      this.isLeftPointerActive = false
+      this.isDragging = false
+      this.selectionRect.clear()
     })
 
     // ESC — deselect all
@@ -883,44 +907,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleRightClick(ptr: Phaser.Input.Pointer): void {
-    // Right-click cancels any special cursor mode
-    if (this.cursorMode !== 'normal') {
-      this.cursorMode = 'normal'
-      return
-    }
-
-    if (this.selectedIds.size === 0) return
-
-    const worldX = ptr.worldX
-    const worldY = ptr.worldY
-    const clickRadius = TILE_SIZE * 2
-
-    // Check for attackable enemies near click
-    const enemies = this.entityMgr.getEnemyUnitsInRange(worldX, worldY, clickRadius, 0)
-    const enemyBuilds = this.entityMgr.getEnemyBuildingsInRange(worldX, worldY, clickRadius, 0)
-    const attackTarget = enemies[0] ?? enemyBuilds[0]
-
-    const clickTile = this.gameMap.worldToTile(worldX, worldY)
-    const tile = this.gameMap.getTile(clickTile.col, clickTile.row)
-
-    let ackMsg = 'Moving out'
-
-    this.selectedIds.forEach(id => {
-      const unit = this.entityMgr.getUnit(id)
-      if (!unit || unit.playerId !== 0) return
-
-      if (attackTarget) {
-        unit.giveOrder({ type: 'attack', targetEntityId: attackTarget.id })
-        ackMsg = 'Attacking'
-      } else if (tile?.terrain === TerrainType.ORE && unit.def.category === 'harvester') {
-        unit.giveOrder({ type: 'harvest', target: { x: worldX, y: worldY } })
-        ackMsg = 'Harvesting'
-      } else {
-        unit.giveOrder({ type: 'move', target: { x: worldX, y: worldY } })
-      }
-    })
-
-    this.showUnitAck(ackMsg)
+    ;(ptr.event as MouseEvent | undefined)?.preventDefault()
+    this.cursorMode = 'normal'
+    this.deselectAll()
   }
 
   // ── Unit acknowledgment text popup ─────────────────────────────
@@ -956,27 +945,19 @@ export class GameScene extends Phaser.Scene {
   }
 
   private startDragSelect(ptr: Phaser.Input.Pointer): void {
-    // If in attack-move mode, left-click issues the attack-move order
-    if (this.cursorMode === 'attackMove') {
-      const worldX = ptr.worldX
-      const worldY = ptr.worldY
-      this.selectedIds.forEach(id => {
-        this.entityMgr.getUnit(id)?.giveOrder({
-          type: 'attackMove',
-          target: { x: worldX, y: worldY },
-        })
-      })
-      this.cursorMode = 'normal'
-      this.showUnitAck('Attack-moving')
-      return
-    }
-
-    this.isDragging = true
+    this.isLeftPointerActive = true
+    this.isDragging = false
     this.dragAnchorScreen = { x: ptr.x, y: ptr.y }
     this.dragAnchorWorld  = { x: ptr.worldX, y: ptr.worldY }
   }
 
   private updateDragSelect(ptr: Phaser.Input.Pointer): void {
+    const dragDist = Phaser.Math.Distance.Between(
+      this.dragAnchorScreen.x, this.dragAnchorScreen.y, ptr.x, ptr.y,
+    )
+    if (!this.isDragging && dragDist <= 5) return
+    this.isDragging = true
+
     // Draw in screen space (scroll-factor 0)
     const sx1 = Math.min(this.dragAnchorScreen.x, ptr.x)
     const sy1 = Math.min(this.dragAnchorScreen.y, ptr.y)
@@ -991,68 +972,124 @@ export class GameScene extends Phaser.Scene {
   }
 
   private endDragSelect(ptr: Phaser.Input.Pointer): void {
-    this.isDragging = false
-    const w = Math.abs(ptr.worldX - this.dragAnchorWorld.x)
-    const h = Math.abs(ptr.worldY - this.dragAnchorWorld.y)
+    const shiftHeld = !!(ptr.event as MouseEvent)?.shiftKey
+    const x1 = Math.min(this.dragAnchorWorld.x, ptr.worldX)
+    const y1 = Math.min(this.dragAnchorWorld.y, ptr.worldY)
+    const x2 = Math.max(this.dragAnchorWorld.x, ptr.worldX)
+    const y2 = Math.max(this.dragAnchorWorld.y, ptr.worldY)
+
+    if (!shiftHeld) this.deselectAll()
+
+    // Select player 0 units within the drag rect
+    const units = this.entityMgr.getUnitsForPlayer(0)
+    units.forEach(u => {
+      if (u.x >= x1 && u.x <= x2 && u.y >= y1 && u.y <= y2) {
+        this.selectedIds.add(u.id)
+        u.setSelected(true)
+      }
+    })
+
+    this.syncSelectionState()
+  }
+
+  private handleLeftClick(ptr: Phaser.Input.Pointer): void {
+    const worldX = ptr.worldX
+    const worldY = ptr.worldY
     const shiftHeld = !!(ptr.event as MouseEvent)?.shiftKey
 
-    if (w > 4 && h > 4) {
-      const x1 = Math.min(this.dragAnchorWorld.x, ptr.worldX)
-      const y1 = Math.min(this.dragAnchorWorld.y, ptr.worldY)
-
-      if (!shiftHeld) this.deselectAll()
-
-      // Select player 0 units within the drag rect
-      const units = this.entityMgr.getUnitsForPlayer(0)
-      units.forEach(u => {
-        if (u.x >= x1 && u.x <= x1 + w && u.y >= y1 && u.y <= y1 + h) {
-          this.selectedIds.add(u.id)
-          u.setSelected(true)
-        }
+    // Attack-move mode consumes the next left click.
+    if (this.cursorMode === 'attackMove') {
+      this.selectedIds.forEach(id => {
+        this.entityMgr.getUnit(id)?.giveOrder({
+          type: 'attackMove',
+          target: { x: worldX, y: worldY },
+        })
       })
-
-      this.gameState.selectedEntityIds = Array.from(this.selectedIds)
-      this.registry.set('selectedIds', this.gameState.selectedEntityIds)
-    } else {
-      // Click-select nearest own unit
-      const clickX = ptr.worldX
-      const clickY = ptr.worldY
-      const hitRadius = TILE_SIZE * 0.75
-
-      let bestUnit: import('../entities/Unit').Unit | null = null
-      let bestDist = Infinity
-      for (const unit of this.entityMgr.getUnitsForPlayer(0)) {
-        const dist = Phaser.Math.Distance.Between(clickX, clickY, unit.x, unit.y)
-        if (dist <= hitRadius && dist < bestDist) {
-          bestUnit = unit
-          bestDist = dist
-        }
-      }
-
-      if (!shiftHeld) this.deselectAll()
-      if (bestUnit) {
-        // Shift+click toggles selection state
-        if (shiftHeld && this.selectedIds.has(bestUnit.id)) {
-          this.selectedIds.delete(bestUnit.id)
-          bestUnit.setSelected(false)
-        } else {
-          this.selectedIds.add(bestUnit.id)
-          bestUnit.setSelected(true)
-        }
-      }
-
-      this.gameState.selectedEntityIds = Array.from(this.selectedIds)
-      this.registry.set('selectedIds', this.gameState.selectedEntityIds)
+      this.cursorMode = 'normal'
+      this.showUnitAck('Attack-moving')
+      return
     }
 
-    this.selectionRect.clear()
+    const ownUnit = this.getOwnUnitAt(worldX, worldY)
+    if (ownUnit) {
+      if (!shiftHeld) this.deselectAll()
+      if (shiftHeld && this.selectedIds.has(ownUnit.id)) {
+        this.selectedIds.delete(ownUnit.id)
+        ownUnit.setSelected(false)
+      } else {
+        this.selectedIds.add(ownUnit.id)
+        ownUnit.setSelected(true)
+      }
+      this.syncSelectionState()
+      return
+    }
+
+    if (this.selectedIds.size === 0) {
+      if (!shiftHeld) this.deselectAll()
+      return
+    }
+
+    const clickRadius = TILE_SIZE * 2
+    const enemies = this.entityMgr.getEnemyUnitsInRange(worldX, worldY, clickRadius, 0)
+    const enemyBuilds = this.entityMgr.getEnemyBuildingsInRange(worldX, worldY, clickRadius, 0)
+    const attackTarget = enemies[0] ?? enemyBuilds[0]
+    if (attackTarget) {
+      this.selectedIds.forEach(id => {
+        const unit = this.entityMgr.getUnit(id)
+        if (!unit || unit.playerId !== 0) return
+        unit.giveOrder({ type: 'attack', targetEntityId: attackTarget.id })
+      })
+      this.showUnitAck('Attacking')
+      return
+    }
+
+    const clickTile = this.gameMap.worldToTile(worldX, worldY)
+    const tile = this.gameMap.getTile(clickTile.col, clickTile.row)
+    let harvestIssued = false
+    let moveIssued = false
+
+    this.selectedIds.forEach(id => {
+      const unit = this.entityMgr.getUnit(id)
+      if (!unit || unit.playerId !== 0) return
+
+      if (tile?.terrain === TerrainType.ORE && unit.def.category === 'harvester') {
+        unit.giveOrder({ type: 'harvest', target: { x: worldX, y: worldY } })
+        harvestIssued = true
+      } else {
+        unit.giveOrder({ type: 'move', target: { x: worldX, y: worldY } })
+        moveIssued = true
+      }
+    })
+
+    if (harvestIssued && !moveIssued) this.showUnitAck('Harvesting')
+    else this.showUnitAck('Moving out')
+  }
+
+  private getOwnUnitAt(worldX: number, worldY: number): import('../entities/Unit').Unit | null {
+    const hitRadius = TILE_SIZE * 0.75
+    let bestUnit: import('../entities/Unit').Unit | null = null
+    let bestDist = Infinity
+
+    for (const unit of this.entityMgr.getUnitsForPlayer(0)) {
+      const dist = Phaser.Math.Distance.Between(worldX, worldY, unit.x, unit.y)
+      if (dist <= hitRadius && dist < bestDist) {
+        bestUnit = unit
+        bestDist = dist
+      }
+    }
+
+    return bestUnit
+  }
+
+  private syncSelectionState(): void {
+    this.gameState.selectedEntityIds = Array.from(this.selectedIds)
+    this.registry.set('selectedIds', this.gameState.selectedEntityIds)
   }
 
   private deselectAll(): void {
     this.selectedIds.forEach(id => this.entityMgr.getUnit(id)?.setSelected(false))
     this.selectedIds.clear()
-    this.gameState.selectedEntityIds = []
-    this.registry.set('selectedIds', [])
+    this.syncSelectionState()
   }
 
   private handleCameraScroll(delta: number): void {
