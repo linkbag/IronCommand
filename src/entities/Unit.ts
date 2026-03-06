@@ -473,6 +473,26 @@ export class Unit extends Phaser.GameObjects.Container {
     const HARVEST_TIME = 3000  // ms per harvest action
     const DUMP_RANGE = TILE_SIZE * 3
 
+    // Priority: if we're near a refinery with cargo, unload immediately.
+    // This must run before the "cargo full" branch, otherwise the harvester
+    // can get stuck re-issuing return-to-refinery without ever dumping.
+    if (this.cargoAmount > 0 && this.refineryId) {
+      this.emit('get_entity_pos', this.refineryId, (pos: Position | null) => {
+        if (pos) {
+          const dist = Phaser.Math.Distance.Between(this.x, this.y, pos.x, pos.y)
+          if (dist < DUMP_RANGE) {
+            // Dump cargo
+            this.emit('dump_ore', this.playerId, this.cargoAmount)
+            this.cargoAmount = 0
+            // Go back to ore
+            this.emit('find_ore_field', this.x, this.y, (target: Position | null) => {
+              if (target) this.startMoveTo(target)
+            })
+          }
+        }
+      })
+    }
+
     if (this.cargoAmount >= this.harvestCapacity) {
       // Full — return to refinery
       this.emit('find_refinery', this.playerId, (ref: IEntityRef | null) => {
@@ -508,23 +528,6 @@ export class Unit extends Phaser.GameObjects.Container {
       }
     })
 
-    // Check if near refinery with cargo
-    if (this.cargoAmount > 0 && this.refineryId) {
-      this.emit('get_entity_pos', this.refineryId, (pos: Position | null) => {
-        if (pos) {
-          const dist = Phaser.Math.Distance.Between(this.x, this.y, pos.x, pos.y)
-          if (dist < DUMP_RANGE) {
-            // Dump cargo
-            this.emit('dump_ore', this.playerId, this.cargoAmount)
-            this.cargoAmount = 0
-            // Go back to ore
-            this.emit('find_ore_field', this.x, this.y, (target: Position | null) => {
-              if (target) this.startMoveTo(target)
-            })
-          }
-        }
-      })
-    }
   }
 
   // ── Private: idle ────────────────────────────────────────────
