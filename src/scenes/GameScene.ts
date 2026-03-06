@@ -13,7 +13,7 @@ import { Economy } from '../economy/Economy'
 import { Production } from '../economy/Production'
 import { AI } from '../combat/AI'
 import { BUILDING_DEFS, getPowerBuildingDefId } from '../entities/BuildingDefs'
-import { getHarvesterDefId, getBasicInfantryDefId } from '../entities/UnitDefs'
+import { UNIT_DEFS, getHarvesterDefId, getBasicInfantryDefId } from '../entities/UnitDefs'
 import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, FactionSide } from '../types'
 import { TILE_SIZE, STARTING_CREDITS, TerrainType } from '../types'
 import { FACTIONS } from '../data/factions'
@@ -147,8 +147,11 @@ export class GameScene extends Phaser.Scene {
     // Patch if custom starting credits differ from default
     if (cfg.startingCredits !== STARTING_CREDITS) {
       const delta = cfg.startingCredits - STARTING_CREDITS
-      if (delta > 0) {
-        for (const p of allPlayers) this.economy.addCredits(p.id, delta)
+      if (delta !== 0) {
+        for (const p of allPlayers) {
+          if (delta > 0) this.economy.addCredits(p.id, delta)
+          else this.economy.deductCredits(p.id, Math.abs(delta))
+        }
       }
     }
 
@@ -277,6 +280,9 @@ export class GameScene extends Phaser.Scene {
     // AI decision making
     for (const ai of this.aiCommanders) {
       ai.update(delta, this.gameState)
+    }
+    if (this.gameState.tick % 600 === 0 && this.aiCommanders.length > 0) {
+      console.log(`[IC] AI updates running for ${this.aiCommanders.length} commander(s)`)
     }
 
     // Fog of war (every 30 ticks ≈ 0.5s at 60fps)
@@ -440,14 +446,16 @@ export class GameScene extends Phaser.Scene {
 
     // Unit produced from HUD build panel
     this.events.on('unitProduced', (data: { defId: string }) => {
-      // Find appropriate production building
-      const barracks = this.entityMgr.getBuildingsForPlayer(0)
-        .find(b => b.def.produces.includes(data.defId) && b.state === 'active')
-      if (!barracks) return
+      console.log('[Pipeline] HUD -> GameScene unitProduced', data)
 
-      const spawnX = barracks.x + barracks.def.footprint.w * TILE_SIZE / 2 + TILE_SIZE
-      const spawnY = barracks.y
-      const unit = this.entityMgr.createUnit(0, data.defId, spawnX, spawnY)
+      const producer = this.findProducerForUnit(0, data.defId)
+      if (!producer) {
+        console.warn(`[Pipeline] No active producer found for unit ${data.defId}`)
+        return
+      }
+
+      const spawn = this.getProducerExitSpawn(producer)
+      const unit = this.entityMgr.createUnit(0, data.defId, spawn.x, spawn.y)
       if (unit) {
         // Auto-harvest if harvester
         if (unit.def.category === 'harvester') {
@@ -459,8 +467,8 @@ export class GameScene extends Phaser.Scene {
         }
 
         // Rally point
-        if (barracks.rallyPoint) {
-          unit.giveOrder({ type: 'move', target: barracks.rallyPoint })
+        if (producer.rallyPoint && unit.def.category !== 'harvester') {
+          unit.giveOrder({ type: 'move', target: producer.rallyPoint })
         }
 
         const hud = this.scene.get('HUDScene')
@@ -483,8 +491,9 @@ export class GameScene extends Phaser.Scene {
     })
 
     // Start production event from HUD (for build queue tracking)
-    this.events.on('startProduction', (_data: { defId: string; type: string }) => {
-      // HUDScene handles its own build progress tracking
+    this.events.on('startProduction', (data: { defId: string; type: string }) => {
+      // HUDScene currently owns the progress bar timing; GameScene receives this for pipeline tracing.
+      console.log('[Pipeline] HUD -> GameScene startProduction', data)
     })
   }
 
@@ -492,8 +501,9 @@ export class GameScene extends Phaser.Scene {
 
   private wireProductionEvents(): void {
     this.production.on('unit_produced', (
-      _producerId: string, defId: string, _unitId: string, playerId: number
+      producerId: string, defId: string, unitId: string, playerId: number
     ) => {
+      console.log('[Pipeline] Production -> GameScene unit_produced', { producerId, defId, unitId, playerId })
       if (playerId === 0) {
         const hud = this.scene.get('HUDScene')
         if (hud) hud.events.emit('evaAlert', { message: 'Unit ready', type: 'success' })
@@ -621,6 +631,50 @@ export class GameScene extends Phaser.Scene {
         const hud = this.scene.get('HUDScene')
         if (hud) hud.events.emit('evaAlert', { message: 'Harvester deployed', type: 'info' })
       }
+    }
+  }
+
+  private findProducerForUnit(
+    playerId: number,
+    defId: string,
+  ): import('../entities/Building').Building | null {
+    const unitDef = UNIT_DEFS[defId]
+    if (!unitDef) return null
+
+    const buildings = this.entityMgr.getBuildingsForPlayer(playerId)
+      .filter(b => b.state === 'active')
+
+    const producerByCategory: Record<string, string[]> = {
+      infantry: ['barracks'],
+      vehicle: ['war_factory'],
+      aircraft: ['air_force_command', 'war_factory'],
+      naval: ['naval_shipyard'],
+      harvester: ['ore_refinery', 'war_factory'],
+    }
+
+    const candidates = producerByCategory[unitDef.category] ?? []
+    for (const producerDefId of candidates) {
+      const found = buildings.find(b => b.def.id === producerDefId)
+      if (found) return found
+    }
+
+    return null
+  }
+
+  private getProducerExitSpawn(
+    producer: import('../entities/Building').Building,
+  ): Position {
+    const spawn = {
+      x: producer.x + producer.def.footprint.w * TILE_SIZE / 2 + TILE_SIZE,
+      y: producer.y,
+    }
+
+    const maxX = this.gameMap.worldWidth - TILE_SIZE
+    const maxY = this.gameMap.worldHeight - TILE_SIZE
+
+    return {
+      x: Phaser.Math.Clamp(spawn.x, TILE_SIZE, Math.max(TILE_SIZE, maxX)),
+      y: Phaser.Math.Clamp(spawn.y, TILE_SIZE, Math.max(TILE_SIZE, maxY)),
     }
   }
 

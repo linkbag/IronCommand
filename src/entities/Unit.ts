@@ -121,7 +121,16 @@ export class Unit extends Phaser.GameObjects.Container {
     this.drawSelectionCircle()
 
     scene.add.existing(this)
-    this.setDepth(10)
+    this.setDepth(12)
+
+    console.log('[Pipeline] Unit constructed', {
+      id: this.id,
+      playerId: this.playerId,
+      defId: this.def.id,
+      x: this.x,
+      y: this.y,
+      depth: this.depth,
+    })
   }
 
   // ── Convenience getters (for HUDScene interop) ──────────────
