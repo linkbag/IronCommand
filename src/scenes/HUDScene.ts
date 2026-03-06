@@ -501,8 +501,41 @@ export class HUDScene extends Phaser.Scene {
         g.strokeRect(-BTN_W / 2, -BTN_H / 2, BTN_W, BTN_H)
       })
       zone.on('pointerout',  () => this.drawItemBg(ctr))
-      zone.on('pointerdown', () => this.onBuildClick(item))
+      zone.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+        if (pointer.rightButtonDown()) {
+          this.onBuildRightClick(item)
+        } else {
+          this.onBuildClick(item)
+        }
+      })
     })
+  }
+
+  /** Right-click on build button: cancel production or remove from queue */
+  private onBuildRightClick(item: BuildableItem) {
+    // Cancel active build
+    if (this.buildProgress.has(item.id)) {
+      const paid = this.creditsPaid.get(item.id) ?? 0
+      if (this.humanPlayer) this.humanPlayer.credits += paid
+      this.buildProgress.delete(item.id)
+      this.buildTimers.delete(item.id)
+      this.creditsPaid.delete(item.id)
+      this.showAlert(`${item.label} cancelled ($${Math.floor(paid)} refunded)`, 'warning')
+      return
+    }
+    // Cancel from queue
+    const q = this.buildQueueCnt.get(item.id) ?? 0
+    if (q > 0) {
+      if (this.humanPlayer) this.humanPlayer.credits += item.cost
+      this.buildQueueCnt.set(item.id, q - 1)
+      if (q - 1 === 0) this.buildQueueCnt.delete(item.id)
+      this.showAlert(`${item.label} removed from queue ($${item.cost} refunded)`, 'warning')
+      return
+    }
+    // Cancel pending placement
+    if (this.pendingPlace.has(item.id)) {
+      this.exitPlacement(true)
+    }
   }
 
   private drawItemBg(btn: BuildBtn) {
@@ -854,15 +887,12 @@ export class HUDScene extends Phaser.Scene {
   private setupKeys() {
     const kb = this.input.keyboard!
 
-    // Tab cycling
-    kb.on('keydown-TAB', () => {
+    // Tab cycling (Tab key only — number keys are for selection groups)
+    kb.on('keydown-TAB', (ev: KeyboardEvent) => {
+      ev.preventDefault()
       const list: BuildTab[] = ['buildings', 'infantry', 'vehicles', 'aircraft']
       this.switchTab(list[(list.indexOf(this.activeTab) + 1) % list.length])
     })
-    kb.on('keydown-ONE',   () => this.switchTab('buildings'))
-    kb.on('keydown-TWO',   () => this.switchTab('infantry'))
-    kb.on('keydown-THREE', () => this.switchTab('vehicles'))
-    kb.on('keydown-FOUR',  () => this.switchTab('aircraft'))
 
     // Escape
     kb.on('keydown-ESC', () => {
@@ -927,8 +957,9 @@ export class HUDScene extends Phaser.Scene {
       }
     })
 
-    // Ctrl+1-9 save / 1-9 recall selection groups
+    // Ctrl+1-9 save / 1-9 recall selection groups / double-tap to center camera
     const keyNames = ['ONE','TWO','THREE','FOUR','FIVE','SIX','SEVEN','EIGHT','NINE']
+    const lastGroupTap: Map<number, number> = new Map()
     keyNames.forEach((kn, i) => {
       kb.on(`keydown-${kn}`, (ev: KeyboardEvent) => {
         const n = i + 1
@@ -938,9 +969,25 @@ export class HUDScene extends Phaser.Scene {
           this.showAlert(`Group ${n} saved`, 'info')
         } else {
           const group = this.selGroups.get(n)
-          if (group) {
-            this.registry.set('selectedIds', group)
-            this.showAlert(`Group ${n} recalled`, 'info')
+          if (group && group.length > 0) {
+            const now = Date.now()
+            const lastTap = lastGroupTap.get(n) ?? 0
+
+            this.registry.set('selectedIds', [...group])
+
+            // Double-tap: center camera on group
+            if (now - lastTap < 400) {
+              type E = { x: number; y: number }
+              const em = this.registry.get('entityMgr') as { getUnit(id: string): E | undefined } | undefined
+              if (em) {
+                const first = em.getUnit(group[0])
+                if (first) {
+                  this.registry.set('camTargetX', first.x - this.sidebarX / 2)
+                  this.registry.set('camTargetY', first.y - this.scale.height / 2)
+                }
+              }
+            }
+            lastGroupTap.set(n, now)
           }
         }
       })
