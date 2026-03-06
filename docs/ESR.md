@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-05 16:59*
+*Last updated: 2026-03-05 18:17*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -48,3 +48,7 @@ Review passed — reviewer exited cleanly (auto-pass: clean exit, no issues indi
 ### Integration Review — 2026-03-05 16:59
 **Subteams:** claude-ic-core-overhaul claude-ic-hud-overhaul
 **Result:** Integration review completed
+
+### Update: 2026-03-05 18:17
+### claude-ic-debug-fix — 2026-03-05 18:17
+Review passed — reviewer fixed issues (commit: 6ab8796 fix: fog of war rendering (full redraw on each update) + direct entity scan for fog sources)
