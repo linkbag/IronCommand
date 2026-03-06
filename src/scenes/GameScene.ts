@@ -196,16 +196,18 @@ export class GameScene extends Phaser.Scene {
     this.scene.launch('HUDScene', { gameState: this.gameState })
 
     // ── 16. Initial fog reveal around player base ─────────────
+    console.log('[IC] Units:', this.entityMgr.getAllUnits().length,
+                'Buildings:', this.entityMgr.getAllBuildings().length)
     this.updateFogOfWar()
-    // Now render fog — hidden areas are black, revealed areas are clear
-    this.gameMap.renderFog()
-
-    // ── 17. Wire HUD → GameScene commands ────────────────────
-    this.wireHUDEvents()
+    console.log('[IC] Fog updated. Visible tiles:',
+      this.gameMap.data.tiles.flat().filter(t => t.fogState === 2).length)
 
     // Push initial camera to registry for HUD
     this.registry.set('camX', this.camX)
     this.registry.set('camY', this.camY)
+
+    console.log('[IC] Camera at:', this.camX, this.camY)
+    console.log('[IC] Map world size:', this.gameMap.worldWidth, 'x', this.gameMap.worldHeight)
 
     this.cameras.main.fadeIn(500)
   }
@@ -665,9 +667,9 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    if (sources.length > 0) {
-      this.gameMap.updateFog(sources)
-    }
+    // Always call updateFog — even with 0 sources, it resets VISIBLE→EXPLORED
+    // and re-renders. Skipping it when sources=0 would leave stale full-black fog.
+    this.gameMap.updateFog(sources)
   }
 
   // (duplicate wireHUDEvents removed — kept the comprehensive version above)
@@ -713,11 +715,13 @@ export class GameScene extends Phaser.Scene {
     // ESC — deselect all
     this.input.keyboard!.on('keydown-ESC', () => this.deselectAll())
 
-    // S — stop selected units
+    // S — stop selected units (only if units selected; otherwise let WASD handle camera)
     this.input.keyboard!.on('keydown-S', () => {
-      this.selectedIds.forEach(id => {
-        this.entityMgr.getUnit(id)?.giveOrder({ type: 'stop' })
-      })
+      if (this.selectedIds.size > 0) {
+        this.selectedIds.forEach(id => {
+          this.entityMgr.getUnit(id)?.giveOrder({ type: 'stop' })
+        })
+      }
     })
 
     // H — snap camera to home base
@@ -976,17 +980,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleCameraScroll(delta: number): void {
-    // Snap to target from HUD (minimap click, H key, etc.)
-    const targetX = this.registry.get('camTargetX') as number | undefined
-    const targetY = this.registry.get('camTargetY') as number | undefined
-    if (targetX !== undefined && targetY !== undefined) {
-      this.camX = targetX
-      this.camY = targetY
-      this.registry.remove('camTargetX')
-      this.registry.remove('camTargetY')
-      return
-    }
-
+    // Camera target snap is handled by handleCameraTarget() already
     const dt = delta / 1000
     const speed = this.camSpeed
     let dx = 0, dy = 0
