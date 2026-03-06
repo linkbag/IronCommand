@@ -132,3 +132,44 @@
 
 ---
 ## Integration Review
+
+---
+
+# Integration Log: Iron Command v4 — gameplay fix + graphics polish + RA2 mechanics
+**Project:** IronCommand
+**Subteams:** codex-ic-gameplay-fix claude-ic-graphics-polish
+**Started:** 2026-03-05 21:33:22
+
+## Subteam Summaries
+
+
+========================================
+## Subteam: codex-ic-gameplay-fix
+========================================
+# Work Log: codex-ic-gameplay-fix
+## Task: Agent codex-ic-gameplay-fix completed task: ic-gameplay-fix (IronCommand)
+---
+### Builder Phase
+- **Started:** 2026-03-05 21:32:06
+- **Completed:** 2026-03-05 21:32:06
+- **Status:** Builder finished. Awaiting review.
+
+### Review Round 1
+- Verdict: Review passed — reviewer exited cleanly (auto-pass: clean exit, no issues indicated)
+
+========================================
+## Subteam: claude-ic-graphics-polish
+========================================
+# Work Log: claude-ic-graphics-polish
+## Task: Agent claude-ic-graphics-polish completed task: ic-graphics-polish (IronCommand)
+---
+### Builder Phase
+- **Started:** 2026-03-05 20:58:45
+- **Completed:** 2026-03-05 20:58:45
+- **Status:** Builder finished. Awaiting review.
+
+### Review Round 1
+- Verdict: Review passed — reviewer exited cleanly (auto-pass: clean exit, no issues indicated)
+
+---
+## Integration Review
