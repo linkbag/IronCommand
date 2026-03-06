@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-05 20:58*
+*Last updated: 2026-03-05 21:32*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -76,4 +76,8 @@ Review passed — reviewer fixed issues (commit: c9e451f fix: force-reveal fog i
 
 ### Update: 2026-03-05 20:58
 ### claude-ic-graphics-polish — 2026-03-05 20:58
+Review passed — reviewer exited cleanly (auto-pass: clean exit, no issues indicated)
+
+### Update: 2026-03-05 21:32
+### codex-ic-gameplay-fix — 2026-03-05 21:32
 Review passed — reviewer exited cleanly (auto-pass: clean exit, no issues indicated)
