@@ -284,12 +284,53 @@ export class EntityManager extends Phaser.Events.EventEmitter {
 
   // ── Main update ──────────────────────────────────────────────
 
+  private separationCounter = 0
+
   update(delta: number): void {
     for (const unit of this.units.values()) {
       unit.update(delta)
     }
     for (const building of this.buildings.values()) {
       building.update(delta)
+    }
+
+    // Unit separation — nudge overlapping units apart (run every 3 frames for perf)
+    this.separationCounter++
+    if (this.separationCounter >= 3) {
+      this.separationCounter = 0
+      this.separateUnits()
+    }
+  }
+
+  /** Push overlapping units apart so they don't stack on the same spot */
+  private separateUnits(): void {
+    const units = Array.from(this.units.values()).filter(u => u.hp > 0 && u.state !== 'dying')
+    const MIN_DIST = 14 // minimum pixel distance between unit centers
+    const PUSH_FORCE = 2 // pixels per separation tick
+
+    for (let i = 0; i < units.length; i++) {
+      const a = units[i]
+      if (a.state === 'moving') continue // don't nudge moving units
+      for (let j = i + 1; j < units.length; j++) {
+        const b = units[j]
+        if (b.state === 'moving') continue
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        if (dist < MIN_DIST && dist > 0.1) {
+          // Push apart
+          const nx = dx / dist
+          const ny = dy / dist
+          const push = PUSH_FORCE * (1 - dist / MIN_DIST)
+          if (a.state === 'idle') { a.x -= nx * push; a.y -= ny * push }
+          if (b.state === 'idle') { b.x += nx * push; b.y += ny * push }
+        } else if (dist <= 0.1) {
+          // Exactly overlapping — random nudge
+          const angle = Math.random() * Math.PI * 2
+          if (a.state === 'idle') { a.x += Math.cos(angle) * PUSH_FORCE; a.y += Math.sin(angle) * PUSH_FORCE }
+          if (b.state === 'idle') { b.x -= Math.cos(angle) * PUSH_FORCE; b.y -= Math.sin(angle) * PUSH_FORCE }
+        }
+      }
     }
   }
 
