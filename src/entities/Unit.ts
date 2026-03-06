@@ -223,6 +223,10 @@ export class Unit extends Phaser.GameObjects.Container {
         break
       case 'moving':
         this.updateMovement(delta)
+        // Auto-attack while moving (RA2-style: units fire on the move)
+        if (this.def.attack && this.attackCooldown <= 0) {
+          this.tryFireWhileMoving()
+        }
         break
       case 'attacking':
         this.updateAttack(delta)
@@ -416,6 +420,27 @@ export class Unit extends Phaser.GameObjects.Container {
         this.state = 'attacking'
       }
     }
+  }
+
+  /** Fire at nearby enemies while moving — doesn't stop movement */
+  private tryFireWhileMoving(): void {
+    if (!this.def.attack) return
+    const rangePixels = this.def.attack.range * TILE_SIZE
+
+    this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: IEntityRef[]) => {
+      if (enemies.length === 0) return
+      // Pick nearest enemy
+      let nearest: IEntityRef | null = null
+      let nearestDist = Infinity
+      for (const e of enemies) {
+        const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
+        if (d < nearestDist) { nearestDist = d; nearest = e }
+      }
+      if (nearest && nearestDist <= rangePixels) {
+        this.emit('fire_at_target', this, nearest)
+        this.attackCooldown = 1 / this.def.attack!.fireRate
+      }
+    })
   }
 
   private arriveAtDestination(): void {
