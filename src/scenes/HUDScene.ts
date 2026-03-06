@@ -519,10 +519,12 @@ export class HUDScene extends Phaser.Scene {
     // Cancel active build
     if (this.buildProgress.has(item.id)) {
       const paid = this.creditsPaid.get(item.id) ?? 0
-      if (this.humanPlayer) this.humanPlayer.credits += paid
+      if (this.humanPlayer && paid > 0) this.humanPlayer.credits += paid
       this.buildProgress.delete(item.id)
       this.buildTimers.delete(item.id)
       this.creditsPaid.delete(item.id)
+      const gs = this.scene.get('GameScene')
+      if (gs) gs.events.emit('cancelProduction', { defId: item.id, type: item.tab === 'buildings' ? 'building' : 'unit', refund: paid })
       this.showAlert(`${item.label} cancelled ($${Math.floor(paid)} refunded)`, 'warning')
       return
     }
@@ -626,34 +628,6 @@ export class HUDScene extends Phaser.Scene {
     if (gs) gs.events.emit('startProduction', { defId: item.id, type: item.tab === 'buildings' ? 'building' : 'unit' })
 
     this.showAlert(`Building: ${item.label}`, 'info')
-  }
-
-  private onBuildRightClick(item: BuildableItem) {
-    if (!this.buildProgress.has(item.id)) return
-
-    const refund = this.creditsPaid.get(item.id) ?? 0
-    if (this.humanPlayer && refund > 0) {
-      this.humanPlayer.credits += refund
-    }
-
-    this.buildProgress.delete(item.id)
-    this.buildTimers.delete(item.id)
-    this.creditsPaid.delete(item.id)
-    this.buildQueueCnt.delete(item.id)
-    this.pendingPlace.delete(item.id)
-
-    const gs = this.scene.get('GameScene')
-    if (gs) {
-      gs.events.emit('cancelProduction', {
-        defId: item.id,
-        type: item.tab === 'buildings' ? 'building' : 'unit',
-        refund,
-      })
-    }
-
-    const roundedRefund = Math.round(refund)
-    const refundMsg = roundedRefund > 0 ? ` (+$${roundedRefund})` : ''
-    this.showAlert(`${item.label} cancelled${refundMsg}`, 'warning')
   }
 
   /** Check tech prerequisites for an item against player's active buildings */

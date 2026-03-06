@@ -146,7 +146,7 @@ export class AI {
     const buildings = this.em.getBuildingsForPlayer(this.playerId)
     if (buildings.length === 0) return
 
-    this.updatePhase(gameState)
+    this.updatePhase()
     this.ensureHarvesting(gameState)
 
     if (this.handleLastStand(gameState)) {
