@@ -19,9 +19,9 @@ export const FACTIONS: Record<FactionId, FactionDef> = {
     color: 0x3366ff,
     colorStr: '#3366ff',
     flag: '🇺🇸',
-    bonus: 'Paratroopers (free paradrop every 4 min with Airfield)',
+    bonus: 'Paratrooper training doctrine and periodic paradrop support',
     superweapon: 'Weather Control Device',
-    uniqueUnits: ['Paratroopers'],
+    uniqueUnits: ['Paratrooper'],
   },
   france: {
     id: 'france',
@@ -30,9 +30,9 @@ export const FACTIONS: Record<FactionId, FactionDef> = {
     color: 0x4488ff,
     colorStr: '#4488ff',
     flag: '🇫🇷',
-    bonus: 'Grand Cannon (powerful base defense structure)',
+    bonus: 'Grand Cannon defense network with elite Chasseur infantry',
     superweapon: 'Weather Control Device',
-    uniqueUnits: ['Grand Cannon'],
+    uniqueUnits: ['Chasseur'],
   },
   germany: {
     id: 'germany',

@@ -380,12 +380,16 @@ export class Production extends Phaser.Events.EventEmitter {
     }
     if (!unitDef) return false
 
+    if (defId === 'kirov') {
+      return producerDefId === 'war_factory'
+    }
+
     const categoryToProducers: Record<string, string[]> = {
       infantry: ['barracks'],
       vehicle: ['war_factory'],
-      aircraft: ['air_force_command', 'war_factory'],
+      aircraft: ['air_force_command'],
       naval: ['naval_shipyard'],
-      harvester: ['ore_refinery', 'war_factory'],
+      harvester: ['ore_refinery'],
     }
 
     return (categoryToProducers[unitDef.category] ?? []).includes(producerDefId)

@@ -679,7 +679,7 @@ export class Unit extends Phaser.GameObjects.Container {
   /** Fire at nearby enemies while moving — doesn't stop movement */
   private tryFireWhileMoving(): void {
     if (!this.def.attack) return
-    const rangePixels = this.def.attack.range * TILE_SIZE
+    const rangePixels = this.getEffectiveAttackRangePixels()
 
     this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: IEntityRef[]) => {
       const validTargets = enemies.filter(e => this.canAttackEntityRef(e))
@@ -792,7 +792,7 @@ export class Unit extends Phaser.GameObjects.Container {
     }
 
     const dist = Phaser.Math.Distance.Between(this.x, this.y, this.target.x, this.target.y)
-    const rangePixels = this.def.attack.range * TILE_SIZE
+    const rangePixels = this.getEffectiveAttackRangePixels()
     this.updateFacingFromVector(this.target.x - this.x, this.target.y - this.y)
     this.updateTurretFacingFromVector(this.target.x - this.x, this.target.y - this.y)
 
@@ -804,7 +804,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
     // In range — fire (veterancy boosts fire rate)
     if (this.attackCooldown <= 0) {
-      const cooldown = 1 / (this.def.attack.fireRate * this.getVeterancyFireRateMultiplier())
+      const cooldown = 1 / (this.getEffectiveFireRate() * this.getVeterancyFireRateMultiplier())
       this.attackCooldown = cooldown
       this.emit('fire_at_target', this, this.target)
       this.playWeaponEffect(this.target.x, this.target.y)
@@ -831,7 +831,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
   private findNearbyEnemy(): IEntityRef | null {
     if (!this.def.attack) return null
-    const rangePixels = this.def.attack.range * TILE_SIZE
+    const rangePixels = this.getEffectiveAttackRangePixels()
     let nearest: IEntityRef | null = null
     let nearestDist = Infinity
 
@@ -852,7 +852,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
   private findNearbyEnemyUnit(): IEntityRef | null {
     if (!this.def.attack) return null
-    const rangePixels = this.def.attack.range * TILE_SIZE
+    const rangePixels = this.getEffectiveAttackRangePixels()
     let nearest: IEntityRef | null = null
     let nearestDist = Infinity
 
@@ -874,7 +874,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
   private findNearbyEnemyBuilding(): IEntityRef | null {
     if (!this.def.attack) return null
-    const rangePixels = this.def.attack.range * TILE_SIZE
+    const rangePixels = this.getEffectiveAttackRangePixels()
     let nearest: IEntityRef | null = null
     let nearestDist = Infinity
 
@@ -901,6 +901,27 @@ export class Unit extends Phaser.GameObjects.Container {
     const targetCategory = (target as { def?: { category?: string } }).def?.category
     const isAir = targetCategory === 'aircraft'
     return isAir ? this.def.attack.canAttackAir : this.def.attack.canAttackGround
+  }
+
+  private getEffectiveAttackRangePixels(): number {
+    if (!this.def.attack) return 0
+    return this.getEffectiveAttackRangeTiles() * TILE_SIZE
+  }
+
+  private getEffectiveAttackRangeTiles(): number {
+    if (!this.def.attack) return 0
+    if (this.def.id === 'gi' && this.state !== 'moving' && this.orders.length === 0) {
+      return this.def.attack.range + 1.5
+    }
+    return this.def.attack.range
+  }
+
+  private getEffectiveFireRate(): number {
+    if (!this.def.attack) return 0.1
+    if (this.def.id === 'gi' && this.state !== 'moving' && this.orders.length === 0) {
+      return this.def.attack.fireRate * 1.25
+    }
+    return this.def.attack.fireRate
   }
 
   private isBuildingCategory(category: string): boolean {
