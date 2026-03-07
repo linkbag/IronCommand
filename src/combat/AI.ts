@@ -25,8 +25,22 @@ type PendingWave = {
 }
 
 type AttackGroup = {
+  waveId: number
   unitIds: string[]
   initialCount: number
+}
+
+type DangerZone = {
+  x: number
+  y: number
+  intensity: number
+  ttlMs: number
+}
+
+type TargetChoice = {
+  x: number
+  y: number
+  entityId?: string
 }
 
 // ── Constants ──────────────────────────────────────────────────
@@ -95,11 +109,17 @@ const DEFENDER_RESPONSE_RADIUS: Record<AIDifficulty, number> = {
 }
 
 const RETREAT_HEALTH_PCT = 0.35
+const RETREAT_WAVE_LOSS_THRESHOLD = 0.5
 const REBUILD_RECOVERY_MS: Record<AIDifficulty, number> = {
   easy: 70000,
   medium: 50000,
   hard: 40000,
 }
+const DANGER_ZONE_RADIUS = 5 * TILE_SIZE
+const DANGER_ZONE_TTL_MS = 120000
+const DANGER_ZONE_DECAY_PER_TICK = 0.93
+const FOCUS_FIRE_INTERVAL_MS = 900
+const MAP_CONTROL_INTERVAL_MS = 15000
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -148,9 +168,19 @@ export class AI {
   private superweaponReady: Set<string> = new Set()
   private matchTimer: number
   private waveCount: number
+  private nextWaveId: number
   private rebuildUntilMs: number
   private aggressionUntilMs: number
   private activeAttackGroups: AttackGroup[]
+  private waveInitialCounts: Map<number, number>
+  private focusFireTimer: number
+  private mapControlTimer: number
+  private knownDangerZones: DangerZone[]
+  private lastKnownUnitPositions: Map<string, { x: number; y: number }>
+  private enemyKillPressure: Map<string, number>
+  private enemyHasAirSuperiority: boolean
+  private enemyIsTurtling: boolean
+  private enemyIsRushing: boolean
 
   private static readonly SW_COOLDOWNS: Record<string, number> = {
     nuclear_silo: 300000,
@@ -191,9 +221,19 @@ export class AI {
     this.enemyComposition = { infantry: 0, vehicles: 0, aircraft: 0, defenses: 0 }
     this.matchTimer = 0
     this.waveCount = 0
+    this.nextWaveId = 1
     this.rebuildUntilMs = 0
     this.aggressionUntilMs = 0
     this.activeAttackGroups = []
+    this.waveInitialCounts = new Map()
+    this.focusFireTimer = 0
+    this.mapControlTimer = 0
+    this.knownDangerZones = []
+    this.lastKnownUnitPositions = new Map()
+    this.enemyKillPressure = new Map()
+    this.enemyHasAirSuperiority = false
+    this.enemyIsTurtling = false
+    this.enemyIsRushing = false
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -211,6 +251,8 @@ export class AI {
     this.attackTimer += delta
     this.scoutTimer += delta
     this.harassTimer += delta
+    this.focusFireTimer += delta
+    this.mapControlTimer += delta
     this.matchTimer += delta
 
     this.updatePendingWave(delta)
@@ -229,6 +271,7 @@ export class AI {
     if (buildings.length === 0) return
 
     this.updatePhase()
+    this.updateBattlefieldIntel(gameState)
     this.assessEnemyComposition(gameState)
     this.ensureHarvesting(gameState)
 
@@ -243,6 +286,7 @@ export class AI {
     this.buildArmy(gameState)
     this.considerHarassment(gameState)
     this.considerAttacking(gameState)
+    this.contestMapControl(gameState)
     this.rebuildDestroyedBuildings(gameState)
 
     if (this.phase === 'mid' || this.phase === 'late') {
@@ -271,8 +315,66 @@ export class AI {
 
   // ── Enemy assessment ─────────────────────────────────────────
 
+  private updateBattlefieldIntel(gameState: GameState): void {
+    const currentUnits = this.getCombatUnits()
+    const currentIds = new Set(currentUnits.map(u => u.id))
+
+    // Track where our combat units died to identify danger corridors.
+    for (const [id, lastPos] of this.lastKnownUnitPositions.entries()) {
+      if (currentIds.has(id)) continue
+      this.addDangerZone(lastPos.x, lastPos.y, 1.25)
+      this.recordLikelyKillSource(gameState, lastPos.x, lastPos.y)
+      this.lastKnownUnitPositions.delete(id)
+    }
+
+    for (const u of currentUnits) {
+      this.lastKnownUnitPositions.set(u.id, { x: u.x, y: u.y })
+    }
+
+    for (const zone of this.knownDangerZones) {
+      zone.intensity *= DANGER_ZONE_DECAY_PER_TICK
+      zone.ttlMs -= TICK_INTERVAL[this.difficulty]
+    }
+    this.knownDangerZones = this.knownDangerZones.filter(z => z.ttlMs > 0 && z.intensity > 0.15)
+  }
+
+  private addDangerZone(x: number, y: number, amount: number): void {
+    const existing = this.knownDangerZones.find(z => dist(z.x, z.y, x, y) <= DANGER_ZONE_RADIUS)
+    if (existing) {
+      existing.x = (existing.x * existing.intensity + x * amount) / (existing.intensity + amount)
+      existing.y = (existing.y * existing.intensity + y * amount) / (existing.intensity + amount)
+      existing.intensity = Math.min(5, existing.intensity + amount)
+      existing.ttlMs = Math.max(existing.ttlMs, DANGER_ZONE_TTL_MS)
+      return
+    }
+    this.knownDangerZones.push({ x, y, intensity: amount, ttlMs: DANGER_ZONE_TTL_MS })
+  }
+
+  private recordLikelyKillSource(gameState: GameState, x: number, y: number): void {
+    const radius = 6 * TILE_SIZE
+    const counts = new Map<string, number>()
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      for (const eu of this.em.getUnitsForPlayer(p.id)) {
+        if (eu.state === 'dying' || !eu.def.attack) continue
+        if (dist(eu.x, eu.y, x, y) > radius) continue
+        counts.set(eu.def.id, (counts.get(eu.def.id) ?? 0) + 2)
+      }
+      for (const eb of this.em.getBuildingsForPlayer(p.id)) {
+        if (eb.state === 'dying' || !eb.def.attack) continue
+        if (dist(eb.x, eb.y, x, y) > radius) continue
+        counts.set(eb.def.id, (counts.get(eb.def.id) ?? 0) + 1)
+      }
+    }
+    for (const [id, score] of counts.entries()) {
+      this.enemyKillPressure.set(id, (this.enemyKillPressure.get(id) ?? 0) + score)
+    }
+  }
+
   private assessEnemyComposition(gameState: GameState): void {
     let infantry = 0, vehicles = 0, aircraft = 0, defenses = 0
+    let aggressionNearBase = 0
+    const ownAnchor = this.getFallbackPosition()
     for (const p of gameState.players) {
       if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
       for (const u of this.em.getUnitsForPlayer(p.id)) {
@@ -280,12 +382,18 @@ export class AI {
         if (u.def.category === 'infantry') infantry++
         else if (u.def.category === 'vehicle') vehicles++
         else if (u.def.category === 'aircraft') aircraft++
+        if (ownAnchor && dist(u.x, u.y, ownAnchor.x, ownAnchor.y) <= 12 * TILE_SIZE) aggressionNearBase++
       }
       for (const b of this.em.getBuildingsForPlayer(p.id)) {
         if (b.state !== 'dying' && b.def.category === 'defense') defenses++
       }
     }
     this.enemyComposition = { infantry, vehicles, aircraft, defenses }
+    const enemyArmy = infantry + vehicles + aircraft
+    this.enemyIsTurtling = defenses >= 4 && enemyArmy <= Math.max(6, defenses + 2) && this.matchTimer > 180000
+    this.enemyIsRushing = this.matchTimer < 240000 && aggressionNearBase >= (this.difficulty === 'easy' ? 3 : 5)
+    this.enemyHasAirSuperiority = aircraft >= Math.max(4, vehicles + 1)
+
   }
 
   // ── Economy / harvesting ─────────────────────────────────────
@@ -321,12 +429,46 @@ export class AI {
     const credits = this.economy.getCredits(this.playerId)
     const refCount = this.countBuildings('ore_refinery')
     const threshold = this.difficulty === 'easy' ? 3500 : 2500
-    const maxRef = this.difficulty === 'hard' ? 4 : this.difficulty === 'medium' ? 3 : 2
+    const baseMaxRef = this.difficulty === 'hard' ? 4 : this.difficulty === 'medium' ? 3 : 2
+    const maxRef = this.enemyIsTurtling ? baseMaxRef + 1 : baseMaxRef
 
     if (credits > threshold && refCount < maxRef) {
-      if (this.tryBuildBuilding('ore_refinery', true)) {
+      const expanded = this.tryBuildRefineryExpansion(gameState) || this.tryBuildBuilding('ore_refinery', true)
+      if (expanded) {
         console.log(`[AI] Player ${this.playerId} expanding economy — refinery #${refCount + 1}`)
       }
+    }
+  }
+
+  private tryBuildRefineryExpansion(gameState: GameState): boolean {
+    const placement = this.findOreExpansionPlacement(gameState)
+    if (!placement) return false
+    return this.tryBuildBuildingAt('ore_refinery', placement.col, placement.row)
+  }
+
+  private contestMapControl(gameState: GameState): void {
+    if (this.mapControlTimer < MAP_CONTROL_INTERVAL_MS) return
+    this.mapControlTimer = 0
+    const idle = this.getCombatUnits().filter(u => u.state === 'idle')
+    if (idle.length < 3) return
+
+    const keyPoints = [
+      ...this.getOreFieldAnchors(gameState, 2),
+      { x: gameState.map.width * TILE_SIZE * 0.5, y: gameState.map.height * TILE_SIZE * 0.5 },
+      { x: gameState.map.width * TILE_SIZE * 0.25, y: gameState.map.height * TILE_SIZE * 0.5 },
+      { x: gameState.map.width * TILE_SIZE * 0.75, y: gameState.map.height * TILE_SIZE * 0.5 },
+    ]
+
+    for (const point of keyPoints) {
+      if (!this.isPointContested(point.x, point.y)) continue
+      if (this.getDangerScore(point.x, point.y) > 2.2) continue
+      const squadSize = this.difficulty === 'hard' ? 4 : 3
+      const squad = idle.splice(0, Math.min(idle.length, squadSize))
+      if (squad.length < 2) break
+      for (const u of squad) {
+        u.giveOrder({ type: 'attackMove', target: point })
+      }
+      if (idle.length < 2) break
     }
   }
 
@@ -356,6 +498,9 @@ export class AI {
 
     // 4. Some infantry before War Factory
     const infantryCount = this.getCombatInfantryCount()
+    if (this.enemyIsRushing && this.countBuildings(this.side === 'alliance' ? 'pillbox' : 'sentry_gun') < 1) {
+      if (this.tryBuildBuilding(this.side === 'alliance' ? 'pillbox' : 'sentry_gun', true)) return
+    }
     if (infantryCount < INFANTRY_BEFORE_WAR_FACTORY[this.difficulty]) {
       this.queueUnitIfPossible(basicInfantry, gameState)
       return
@@ -437,7 +582,7 @@ export class AI {
   private buildDefenses(): void {
     if (!this.hasActiveBuilding('war_factory')) return
 
-    const target = DEFENSE_TARGET[this.difficulty]
+    const target = DEFENSE_TARGET[this.difficulty] + (this.enemyIsRushing ? 1 : 0)
 
     // Early defenses (cheap, available after barracks)
     const earlyDefId = this.side === 'alliance' ? 'pillbox' : 'sentry_gun'
@@ -625,6 +770,16 @@ export class AI {
       }
     }
 
+    if (this.enemyHasAirSuperiority) {
+      if (this.side === 'alliance') {
+        if (this.canProduceUnit('ifv')) pool.push('ifv', 'ifv', 'ifv', 'ifv')
+        if (this.canProduceUnit('rocketeer')) pool.push('rocketeer', 'rocketeer', 'rocketeer')
+      } else {
+        if (this.canProduceUnit('flak_track')) pool.push('flak_track', 'flak_track', 'flak_track', 'flak_track')
+        if (this.canProduceUnit('flak_trooper')) pool.push('flak_trooper', 'flak_trooper', 'flak_trooper')
+      }
+    }
+
     // Enemy turtling (many defenses) -> siege bias
     if (ed >= 4) {
       if (this.side === 'collective') {
@@ -633,6 +788,41 @@ export class AI {
       } else {
         if (this.canProduceUnit('prism_tank')) pool.push('prism_tank', 'prism_tank')
         if (this.canProduceUnit('destroyer')) pool.push('destroyer')
+      }
+    }
+
+    if (this.enemyIsTurtling) {
+      if (this.side === 'collective') {
+        if (this.canProduceUnit('v3_launcher')) pool.push('v3_launcher', 'v3_launcher', 'v3_launcher')
+        if (this.canProduceUnit('dreadnought')) pool.push('dreadnought', 'dreadnought')
+      } else {
+        if (this.canProduceUnit('prism_tank')) pool.push('prism_tank', 'prism_tank', 'prism_tank')
+        if (this.canProduceUnit('destroyer')) pool.push('destroyer', 'destroyer')
+      }
+    }
+
+    if (this.enemyIsRushing && this.phase === 'early') {
+      if (this.side === 'alliance') {
+        if (this.canProduceUnit('ifv')) pool.push('ifv', 'ifv')
+      } else {
+        if (this.canProduceUnit('tesla_trooper')) pool.push('tesla_trooper', 'tesla_trooper')
+      }
+      if (this.canProduceUnit(mainTank)) pool.push(mainTank, mainTank)
+    }
+
+    for (const [killerId, pressure] of this.enemyKillPressure.entries()) {
+      if (pressure < 3) continue
+      const def = UNIT_DEFS[killerId]
+      const category = def?.category
+      if (category === 'aircraft') {
+        if (this.side === 'alliance' && this.canProduceUnit('ifv')) pool.push('ifv', 'ifv')
+        if (this.side === 'collective' && this.canProduceUnit('flak_track')) pool.push('flak_track', 'flak_track')
+      } else if (category === 'vehicle') {
+        if (this.side === 'collective' && this.canProduceUnit('tesla_trooper')) pool.push('tesla_trooper', 'tesla_trooper')
+        if (this.side === 'alliance' && this.canProduceUnit('mirage_tank')) pool.push('mirage_tank', 'mirage_tank')
+      } else if (category === 'infantry') {
+        if (this.side === 'alliance' && this.canProduceUnit('ifv')) pool.push('ifv')
+        if (this.side === 'collective' && this.canProduceUnit('flak_track')) pool.push('flak_track')
       }
     }
 
@@ -691,6 +881,10 @@ export class AI {
       u => u.state === 'idle' && u.def.stats.speed >= speedReq,
     )
     if (fastUnits.length < 2) return
+    fastUnits.sort((a, b) => {
+      if (b.veterancy !== a.veterancy) return b.veterancy - a.veterancy
+      return b.def.stats.speed - a.def.stats.speed
+    })
 
     const target = this.findHarassTarget(gameState)
     if (!target) return
@@ -700,6 +894,8 @@ export class AI {
       2,
       fastUnits.length,
     )
+    const fallback = this.getFallbackPosition()
+    if (fallback && raidSize <= 3 && this.isRouteHighRisk(fallback, target)) return
 
     for (let i = 0; i < raidSize; i++) {
       fastUnits[i].giveOrder({ type: 'attackMove', target })
@@ -757,7 +953,12 @@ export class AI {
 
     const waveUnits = this.pickWaveUnits(combatUnits, waveSizeTarget)
     if (waveUnits.length === 0) return
+    const fallback = this.getFallbackPosition()
+    if (fallback && waveUnits.length < 7 && this.isRouteHighRisk(fallback, target)) {
+      return
+    }
 
+    const waveId = this.nextWaveId++
     const groups = this.buildAttackGroups(waveUnits, target, gameState)
     const pendingGroups: Array<{ unitIds: string[]; target: { x: number; y: number } }> = []
 
@@ -768,8 +969,9 @@ export class AI {
       }
       const ids = group.units.map(u => u.id)
       pendingGroups.push({ unitIds: ids, target: group.target })
-      this.activeAttackGroups.push({ unitIds: ids, initialCount: ids.length })
+      this.activeAttackGroups.push({ waveId, unitIds: ids, initialCount: ids.length })
     }
+    this.waveInitialCounts.set(waveId, waveUnits.length)
 
     this.pendingWave = {
       groups: pendingGroups,
@@ -782,7 +984,7 @@ export class AI {
     this.nextAttackWindowMs = this.nextAttackWindow()
 
     console.log(
-      `[AI] Player ${this.playerId} staged attack (${waveUnits.length} units, ${groups.length} prong(s))`,
+      `[AI] Player ${this.playerId} staged attack (${waveUnits.length} units, ${groups.length} prong(s), wave ${waveId})`,
     )
   }
 
@@ -820,30 +1022,50 @@ export class AI {
 
   private buildAttackGroups(
     waveUnits: Unit[],
-    target: { x: number; y: number },
+    target: TargetChoice,
     gameState: GameState,
   ): Array<{ units: Unit[]; target: { x: number; y: number } }> {
     if (this.difficulty !== 'hard' || waveUnits.length < 10) {
-      return [{ units: waveUnits, target }]
+      return [{ units: waveUnits, target: { x: target.x, y: target.y } }]
     }
-    const split = Math.floor(waveUnits.length / 2)
-    const first = waveUnits.slice(0, split)
-    const second = waveUnits.slice(split)
-    const flank = this.computeFlankTarget(target, gameState, 6 * TILE_SIZE)
-    return [
-      { units: first, target },
-      { units: second, target: flank },
+
+    const frontCount = Math.max(3, Math.floor(waveUnits.length * 0.4))
+    const flankCount = Math.max(2, Math.floor((waveUnits.length - frontCount) / 2))
+    const secondFlankCount = Math.max(2, waveUnits.length - frontCount - flankCount)
+    const front = waveUnits.slice(0, frontCount)
+    const flankA = waveUnits.slice(frontCount, frontCount + flankCount)
+    const flankB = waveUnits.slice(frontCount + flankCount, frontCount + flankCount + secondFlankCount)
+    const flank1Target = this.computeFlankTarget(target, gameState, 7 * TILE_SIZE, -1)
+    const flank2Target = this.computeFlankTarget(target, gameState, 7 * TILE_SIZE, 1)
+    const groups: Array<{ units: Unit[]; target: { x: number; y: number } }> = [
+      { units: front, target: { x: target.x, y: target.y } },
+      { units: flankA, target: flank1Target },
+      { units: flankB, target: flank2Target },
     ]
+
+    if (waveUnits.length >= 14) {
+      const feintTarget = this.findFeintTarget(gameState, target)
+      if (feintTarget) {
+        const feintSize = Math.max(2, Math.floor(waveUnits.length * 0.18))
+        const feintUnits = groups[0].units.splice(0, Math.min(feintSize, groups[0].units.length))
+        if (feintUnits.length >= 2) {
+          groups.push({ units: feintUnits, target: feintTarget })
+        }
+      }
+    }
+
+    return groups.filter(g => g.units.length > 0)
   }
 
   private computeFlankTarget(
     target: { x: number; y: number },
     gameState: GameState,
     offset: number,
+    signHint?: -1 | 1,
   ): { x: number; y: number } {
     const mapW = gameState.map.width * TILE_SIZE
     const mapH = gameState.map.height * TILE_SIZE
-    const sign = Math.random() < 0.5 ? -1 : 1
+    const sign = signHint ?? (Math.random() < 0.5 ? -1 : 1)
     return {
       x: clamp(target.x + offset * sign, TILE_SIZE, Math.max(TILE_SIZE, mapW - TILE_SIZE)),
       y: clamp(target.y + offset * -sign * 0.6, TILE_SIZE, Math.max(TILE_SIZE, mapH - TILE_SIZE)),
@@ -851,8 +1073,20 @@ export class AI {
   }
 
   private pickWaveUnits(units: Unit[], desiredSize: number): Unit[] {
-    const infantry = units.filter(u => u.def.category === 'infantry')
-    const vehicles = units.filter(u => u.def.category === 'vehicle')
+    const veterans = units.filter(u => u.veterancy >= 1)
+    const reserveVeterans = veterans.length >= 3 && units.length >= desiredSize + 2
+      ? Math.max(1, Math.floor(veterans.length * 0.4))
+      : 0
+    const veteranIdsToKeep = new Set(
+      veterans
+        .sort((a, b) => b.veterancy - a.veterancy || b.hp - a.hp)
+        .slice(0, reserveVeterans)
+        .map(u => u.id),
+    )
+    const candidateUnits = units.filter(u => !veteranIdsToKeep.has(u.id))
+
+    const infantry = candidateUnits.filter(u => u.def.category === 'infantry')
+    const vehicles = candidateUnits.filter(u => u.def.category === 'vehicle')
     const selected: Unit[] = []
     const selectedIds = new Set<string>()
 
@@ -874,8 +1108,13 @@ export class AI {
     addRandom(infantry, infantryTarget)
     addRandom(vehicles, vehicleTarget)
 
-    const remainder = units.filter(u => !selectedIds.has(u.id))
+    const remainder = candidateUnits.filter(u => !selectedIds.has(u.id))
     addRandom(remainder, desiredSize - selected.length)
+
+    if (selected.length < desiredSize) {
+      const fallback = units.filter(u => !selectedIds.has(u.id))
+      addRandom(fallback, desiredSize - selected.length)
+    }
 
     return selected
   }
@@ -898,41 +1137,179 @@ export class AI {
     const mapW = gameState.map.width * TILE_SIZE
     const mapH = gameState.map.height * TILE_SIZE
 
+    let stagingX = clamp(rawX, TILE_SIZE, Math.max(TILE_SIZE, mapW - TILE_SIZE))
+    let stagingY = clamp(rawY, TILE_SIZE, Math.max(TILE_SIZE, mapH - TILE_SIZE))
+    if (this.getDangerScore(stagingX, stagingY) > 1.8) {
+      const offsets = [4, -4, 7, -7]
+      for (const o of offsets) {
+        const altX = clamp(stagingX + o * TILE_SIZE, TILE_SIZE, Math.max(TILE_SIZE, mapW - TILE_SIZE))
+        const altY = clamp(stagingY - o * TILE_SIZE * 0.5, TILE_SIZE, Math.max(TILE_SIZE, mapH - TILE_SIZE))
+        if (this.getDangerScore(altX, altY) < 1.3) {
+          stagingX = altX
+          stagingY = altY
+          break
+        }
+      }
+    }
+
     return {
-      x: clamp(rawX, TILE_SIZE, Math.max(TILE_SIZE, mapW - TILE_SIZE)),
-      y: clamp(rawY, TILE_SIZE, Math.max(TILE_SIZE, mapH - TILE_SIZE)),
+      x: stagingX,
+      y: stagingY,
     }
   }
 
   // ── Strategic attack targeting ───────────────────────────────
 
-  private findAttackTarget(gameState: GameState): { x: number; y: number } | null {
+  private findAttackTarget(gameState: GameState): TargetChoice | null {
     const allEnemyBuildings: Building[] = []
+    const enemyHarvesters: Unit[] = []
     for (const p of gameState.players) {
       if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
       allEnemyBuildings.push(
         ...this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying'),
       )
+      enemyHarvesters.push(
+        ...this.em.getUnitsForPlayer(p.id).filter(u => u.state !== 'dying' && u.def.category === 'harvester'),
+      )
+    }
+
+    // Economy starvation: harvesters first when available.
+    if (enemyHarvesters.length > 0 && this.difficulty !== 'easy') {
+      const sortedHarvesters = enemyHarvesters
+        .slice()
+        .sort((a, b) => this.getDangerScore(a.x, a.y) - this.getDangerScore(b.x, b.y))
+      const h = sortedHarvesters[0]
+      return { x: h.x, y: h.y, entityId: h.id }
     }
 
     if (allEnemyBuildings.length === 0) return null
 
-    // Priority: power plants -> refineries -> war factories -> CY -> any building.
-    const priorities = [
-      ['power_plant', 'tesla_reactor', 'nuclear_reactor'],
-      ['ore_refinery'],
-      ['war_factory'],
-      ['construction_yard'],
-    ]
+    const ownAnchor = this.getFallbackPosition()
+    let best: Building | null = null
+    let bestScore = -Infinity
 
-    for (const group of priorities) {
-      const target = allEnemyBuildings.find(b => group.includes(b.def.id))
-      if (target) return { x: target.x, y: target.y }
+    for (const b of allEnemyBuildings) {
+      let score = this.getBuildingStrategicValue(b)
+      if (ownAnchor) {
+        const travelPenalty = dist(ownAnchor.x, ownAnchor.y, b.x, b.y) / (20 * TILE_SIZE)
+        score -= travelPenalty
+      }
+      const zonePenalty = this.getDangerScore(b.x, b.y) * 0.8
+      score -= zonePenalty
+      if (this.difficulty === 'hard' && b.def.id === 'war_factory') score += 5
+      if (this.difficulty === 'hard' && b.def.id === 'ore_refinery') score += 4
+      if (this.difficulty === 'hard' && b.def.category === 'production') score += 2
+      if (score > bestScore) {
+        bestScore = score
+        best = b
+      }
     }
 
-    // Fallback: any building
-    const any = allEnemyBuildings[0]
-    return { x: any.x, y: any.y }
+    if (!best) return null
+    return { x: best.x, y: best.y, entityId: best.id }
+  }
+
+  private getBuildingStrategicValue(b: Building): number {
+    // Priority ladder: production > power > economy > defenses > walls.
+    if (b.def.category === 'production') {
+      if (b.def.id === 'war_factory') return 20
+      if (b.def.id === 'barracks') return 14
+      return 12
+    }
+    if (b.def.id === 'ore_refinery') return 17
+    if (b.def.category === 'power') return 11
+    if (b.def.category === 'tech' || b.def.id === 'construction_yard') return 10
+    if (b.def.category === 'defense') return 7
+    if (b.def.id.includes('wall')) return 2
+    return 6
+  }
+
+  private findFeintTarget(gameState: GameState, mainTarget: TargetChoice): { x: number; y: number } | null {
+    const choices: Building[] = []
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      choices.push(
+        ...this.em.getBuildingsForPlayer(p.id).filter(
+          b => b.state !== 'dying' && dist(b.x, b.y, mainTarget.x, mainTarget.y) >= 6 * TILE_SIZE,
+        ),
+      )
+    }
+    if (choices.length === 0) return null
+    choices.sort((a, b) => this.getBuildingStrategicValue(a) - this.getBuildingStrategicValue(b))
+    const pick = choices[Math.min(choices.length - 1, randomInt(0, Math.min(2, choices.length - 1)))]
+    return { x: pick.x, y: pick.y }
+  }
+
+  private getDangerScore(x: number, y: number): number {
+    let score = 0
+    for (const zone of this.knownDangerZones) {
+      const d = dist(x, y, zone.x, zone.y)
+      if (d > DANGER_ZONE_RADIUS * 1.8) continue
+      const weight = 1 - d / (DANGER_ZONE_RADIUS * 1.8)
+      score += zone.intensity * Math.max(0, weight)
+    }
+    return score
+  }
+
+  private isRouteHighRisk(from: { x: number; y: number }, to: { x: number; y: number }): boolean {
+    const samples = 6
+    let total = 0
+    for (let i = 1; i <= samples; i++) {
+      const t = i / (samples + 1)
+      const x = from.x + (to.x - from.x) * t
+      const y = from.y + (to.y - from.y) * t
+      total += this.getDangerScore(x, y)
+    }
+    return (total / samples) >= 1.2
+  }
+
+  private applyFocusFire(): void {
+    for (const group of this.activeAttackGroups) {
+      const aliveUnits = group.unitIds
+        .map(id => this.em.getUnit(id))
+        .filter((u): u is Unit => !!u && u.state !== 'dying' && !!u.def.attack)
+      if (aliveUnits.length < 2) continue
+
+      const cx = aliveUnits.reduce((s, u) => s + u.x, 0) / aliveUnits.length
+      const cy = aliveUnits.reduce((s, u) => s + u.y, 0) / aliveUnits.length
+      const focus = this.findFocusFireTarget(cx, cy)
+      if (!focus) continue
+
+      for (const u of aliveUnits) {
+        if (u.state === 'moving' || u.state === 'attacking' || u.state === 'idle') {
+          u.giveOrder({ type: 'attack', targetEntityId: focus.id })
+        }
+      }
+    }
+  }
+
+  private findFocusFireTarget(x: number, y: number): Unit | Building | null {
+    const radius = 12 * TILE_SIZE
+    let best: Unit | Building | null = null
+    let bestScore = -Infinity
+    for (const eu of this.em.getAllUnits()) {
+      if (!this.isEnemyPlayer(eu.playerId) || eu.state === 'dying') continue
+      if (dist(x, y, eu.x, eu.y) > radius) continue
+      const hpFactor = 1 - eu.hp / Math.max(1, eu.def.stats.maxHp)
+      let score = 8 + hpFactor * 5
+      if (eu.def.category === 'aircraft') score += 2
+      if (eu.def.category === 'harvester') score += 3
+      if (score > bestScore) {
+        bestScore = score
+        best = eu
+      }
+    }
+    for (const eb of this.em.getAllBuildings()) {
+      if (!this.isEnemyPlayer(eb.playerId) || eb.state === 'dying') continue
+      if (dist(x, y, eb.x, eb.y) > radius) continue
+      const hpFactor = 1 - eb.hp / Math.max(1, eb.def.stats.maxHp)
+      let score = this.getBuildingStrategicValue(eb) + hpFactor * 4
+      if (score > bestScore) {
+        bestScore = score
+        best = eb
+      }
+    }
+    return best
   }
 
   // ── Last stand ───────────────────────────────────────────────
@@ -966,7 +1343,8 @@ export class AI {
     for (const u of this.getCombatUnits()) {
       if (u.state === 'dying') continue
       const hpPct = u.hp / Math.max(1, u.def.stats.maxHp)
-      if (hpPct <= RETREAT_HEALTH_PCT) {
+      const vetThreshold = u.veterancy >= 2 ? 0.62 : u.veterancy >= 1 ? 0.5 : RETREAT_HEALTH_PCT
+      if (hpPct <= vetThreshold || (u.veterancy >= 1 && this.getDangerScore(u.x, u.y) > 2.3)) {
         u.giveOrder({ type: 'move', target: fallback })
       }
     }
@@ -1032,6 +1410,27 @@ export class AI {
 
   // ── Building construction ────────────────────────────────────
 
+  private tryBuildBuildingAt(defId: string, col: number, row: number): boolean {
+    const def = BUILDING_DEFS[defId]
+    if (!def) return false
+    if (!this.hasActiveBuilding('construction_yard')) return false
+    if (!this.production.checkPrerequisites(this.playerId, defId)) return false
+    if (this.economy.getCredits(this.playerId) < def.stats.cost) return false
+    if (!this.isPlacementWithinMap(col, row, def.footprint.w, def.footprint.h)) return false
+    if (!this.isTileFree(col, row, def.footprint.w, def.footprint.h)) return false
+    if (!this.economy.deductCredits(this.playerId, def.stats.cost)) return false
+
+    const building = this.em.createBuilding(this.playerId, defId, col, row)
+    if (!building) {
+      this.economy.addCredits(this.playerId, def.stats.cost)
+      return false
+    }
+    building.state = 'active'
+    building.setAlpha(1)
+    console.log(`[AI] Player ${this.playerId} started ${defId} expansion at (${col}, ${row})`)
+    return true
+  }
+
   private tryBuildBuilding(defId: string, allowDuplicate = false): boolean {
     const def = BUILDING_DEFS[defId]
     if (!def) return false
@@ -1063,6 +1462,89 @@ export class AI {
 
     this.economy.addCredits(this.playerId, def.stats.cost)
     return false
+  }
+
+  private findOreExpansionPlacement(gameState: GameState): { col: number; row: number } | null {
+    const def = BUILDING_DEFS.ore_refinery
+    if (!def) return null
+    const fields = this.getOreFieldAnchors(gameState, 6)
+    if (fields.length === 0) return null
+    const ownBuildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state !== 'dying')
+    if (ownBuildings.length === 0) return null
+    const avoidRadius = 10 * TILE_SIZE
+
+    for (const anchor of fields) {
+      const contested = this.isPointContested(anchor.x, anchor.y)
+      if (contested) continue
+
+      const tooClose = ownBuildings.some(b => dist(b.x, b.y, anchor.x, anchor.y) < avoidRadius)
+      if (tooClose) continue
+
+      const tileCol = Math.floor(anchor.x / TILE_SIZE - def.footprint.w / 2)
+      const tileRow = Math.floor(anchor.y / TILE_SIZE - def.footprint.h / 2)
+      for (let r = -3; r <= 3; r++) {
+        for (let c = -3; c <= 3; c++) {
+          const col = tileCol + c
+          const row = tileRow + r
+          if (!this.isPlacementWithinMap(col, row, def.footprint.w, def.footprint.h)) continue
+          if (!this.isTileFree(col, row, def.footprint.w, def.footprint.h)) continue
+          if (this.getDangerScore((col + 1) * TILE_SIZE, (row + 1) * TILE_SIZE) > 1.6) continue
+          return { col, row }
+        }
+      }
+    }
+
+    return null
+  }
+
+  private getOreFieldAnchors(gameState: GameState, limit: number): Array<{ x: number; y: number }> {
+    const clusters: Array<{ x: number; y: number; ore: number }> = []
+    const map = gameState.map
+    const clusterRadiusTiles = 4
+    for (let row = 0; row < map.height; row++) {
+      for (let col = 0; col < map.width; col++) {
+        const tile = map.tiles[row]?.[col]
+        if (!tile || tile.oreAmount <= 0) continue
+
+        let localOre = 0
+        for (let rr = Math.max(0, row - clusterRadiusTiles); rr <= Math.min(map.height - 1, row + clusterRadiusTiles); rr++) {
+          for (let cc = Math.max(0, col - clusterRadiusTiles); cc <= Math.min(map.width - 1, col + clusterRadiusTiles); cc++) {
+            const neighbor = map.tiles[rr]?.[cc]
+            if (neighbor && neighbor.oreAmount > 0) localOre += neighbor.oreAmount
+          }
+        }
+        if (localOre < 6000) continue
+        clusters.push({
+          x: col * TILE_SIZE + TILE_SIZE / 2,
+          y: row * TILE_SIZE + TILE_SIZE / 2,
+          ore: localOre,
+        })
+      }
+    }
+
+    clusters.sort((a, b) => b.ore - a.ore)
+    const anchors: Array<{ x: number; y: number }> = []
+    for (const c of clusters) {
+      if (anchors.some(a => dist(a.x, a.y, c.x, c.y) < 7 * TILE_SIZE)) continue
+      anchors.push({ x: c.x, y: c.y })
+      if (anchors.length >= limit) break
+    }
+    return anchors
+  }
+
+  private isPointContested(x: number, y: number): boolean {
+    const radius = 12 * TILE_SIZE
+    let ownPresence = 0
+    let enemyPresence = 0
+    for (const u of this.getCombatUnits()) {
+      if (dist(u.x, u.y, x, y) <= radius) ownPresence++
+    }
+    for (const p of this.em.getAllUnits()) {
+      if (p.state === 'dying' || !p.def.attack) continue
+      if (!this.isEnemyPlayer(p.playerId)) continue
+      if (dist(p.x, p.y, x, y) <= radius) enemyPresence++
+    }
+    return enemyPresence > ownPresence + 1
   }
 
   private findBuildingPlacement(defId: string): { col: number; row: number } | null {
@@ -1256,6 +1738,19 @@ export class AI {
     if (this.matchTimer < this.aggressionUntilMs) {
       return randomInt(Math.floor(w.min * 0.55), Math.floor(w.max * 0.7))
     }
+    if (this.difficulty === 'hard') {
+      // Hard mode cadence alternates between pressure spikes and regroup lulls.
+      const burstCycle = this.waveCount % 5
+      if (burstCycle === 1 || burstCycle === 2) {
+        return randomInt(Math.floor(w.min * 0.7), Math.floor(w.max * 0.92))
+      }
+      if (burstCycle === 4) {
+        return randomInt(Math.floor(w.min * 1.15), Math.floor(w.max * 1.45))
+      }
+      const jitterMin = Math.max(12000, Math.floor(w.min * (0.78 + Math.random() * 0.3)))
+      const jitterMax = Math.max(jitterMin + 5000, Math.floor(w.max * (0.9 + Math.random() * 0.35)))
+      return randomInt(jitterMin, jitterMax)
+    }
     return randomInt(w.min, w.max)
   }
 
@@ -1426,11 +1921,38 @@ export class AI {
   private updateAttackGroups(): void {
     if (this.activeAttackGroups.length === 0) return
     const fallback = this.getFallbackPosition()
+    const aliveByWave = new Map<number, number>()
+    for (const group of this.activeAttackGroups) {
+      const alive = group.unitIds
+        .map(id => this.em.getUnit(id))
+        .filter((u): u is Unit => !!u && u.state !== 'dying').length
+      aliveByWave.set(group.waveId, (aliveByWave.get(group.waveId) ?? 0) + alive)
+    }
+
+    for (const [waveId, initial] of this.waveInitialCounts.entries()) {
+      const alive = aliveByWave.get(waveId) ?? 0
+      if (alive < Math.max(1, Math.floor(initial * RETREAT_WAVE_LOSS_THRESHOLD))) {
+        if (fallback) {
+          for (const group of this.activeAttackGroups.filter(g => g.waveId === waveId)) {
+            for (const id of group.unitIds) {
+              const u = this.em.getUnit(id)
+              if (!u || u.state === 'dying') continue
+              u.giveOrder({ type: 'move', target: fallback })
+            }
+          }
+        }
+        this.waveInitialCounts.delete(waveId)
+        this.rebuildUntilMs = Math.max(this.rebuildUntilMs, this.matchTimer + REBUILD_RECOVERY_MS[this.difficulty])
+      }
+    }
+
     this.activeAttackGroups = this.activeAttackGroups.filter(group => {
       const alive = group.unitIds
         .map(id => this.em.getUnit(id))
         .filter((u): u is Unit => !!u && u.state !== 'dying')
       if (alive.length === 0) return false
+
+      if (!this.waveInitialCounts.has(group.waveId)) return false
 
       if (alive.length <= Math.floor(group.initialCount / 2)) {
         if (fallback) {
@@ -1444,6 +1966,16 @@ export class AI {
       }
       return true
     })
+    if (this.activeAttackGroups.length === 0) {
+      this.waveInitialCounts.clear()
+      this.isAttacking = false
+      return
+    }
+
+    if (this.focusFireTimer >= FOCUS_FIRE_INTERVAL_MS) {
+      this.focusFireTimer = 0
+      this.applyFocusFire()
+    }
   }
 
   private getFallbackPosition(): { x: number; y: number } | null {
