@@ -7,6 +7,7 @@ import Phaser from 'phaser'
 
 export interface EntityForHP {
   id: string
+  playerId: number
   x: number       // world px
   y: number
   hp: number
@@ -34,7 +35,7 @@ export class HealthBars {
     this.selectedIds = new Set(ids)
   }
 
-  draw(entities: EntityForHP[], camOffX: number, camOffY: number) {
+  draw(entities: EntityForHP[], camOffX: number, camOffY: number, localPlayerId = 0) {
     const g = this.graphics
     g.clear()
     g.setPosition(-camOffX, -camOffY)
@@ -57,7 +58,10 @@ export class HealthBars {
       g.fillRect(sx, sy, this.BAR_W, this.BAR_H)
 
       // Filled portion
-      const barColor = pct > 0.5 ? 0x44ee44 : pct > 0.25 ? 0xeeee44 : 0xee4444
+      const isFriendly = e.playerId === localPlayerId
+      const barColor = isFriendly
+        ? (pct > 0.3 ? 0x4ade80 : 0x2f9e5a)
+        : (pct > 0.3 ? 0xe94560 : 0x9f2436)
       const fillW    = Math.max(1, Math.floor(this.BAR_W * pct))
       g.fillStyle(barColor, 1)
       g.fillRect(sx, sy, fillW, this.BAR_H)

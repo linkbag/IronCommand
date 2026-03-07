@@ -1540,7 +1540,6 @@ export class HUDScene extends Phaser.Scene {
         if (!e.isAlive) return
 
         // Only show enemy entities if tile is VISIBLE in fog
-        const player = this.gameState.players.find(p => p.id === e.playerId)
         const isOwn = e.playerId === localId
         if (!isOwn && map.tiles) {
           const tc = Math.floor(e.x / TILE_SIZE)
@@ -1549,9 +1548,8 @@ export class HUDScene extends Phaser.Scene {
           if (fog !== FogState.VISIBLE) return
         }
 
-        const isHuman = !player?.isAI
-        // Green for friendly, red for enemy, yellow for neutral
-        const color = isHuman ? 0x4ade80 : (e.playerId > 0 ? 0xe94560 : 0xdddd44)
+        // Friendly = green, enemy = red for clear minimap contrast.
+        const color = isOwn ? 0x4ade80 : 0xe94560
         const mx = ox + (e.x / 32) * scaleX
         const my = oy + (e.y / 32) * scaleY
         const sz = e.type === 'building' ? 3 : 2
