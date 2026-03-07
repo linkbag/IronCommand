@@ -5,6 +5,7 @@
 
 import Phaser from 'phaser'
 import type { Player, GameState, FactionSide } from '../types'
+import { FogState, TILE_SIZE } from '../types'
 import { FACTIONS } from '../data/factions'
 import { UNIT_DEFS, getAvailableUnitIds } from '../entities/UnitDefs'
 import { BUILDING_DEFS, getAvailableBuildingIds } from '../entities/BuildingDefs'
@@ -24,6 +25,15 @@ const ACTION_H        = 30
 const MAX_ALERTS      = 3
 const ALERT_SPACING   = 34
 
+// Superweapon countdown times (ms)
+const SUPERWEAPON_TIMERS: Record<string, number> = {
+  nuclear_silo: 300000,    // 5 min
+  weather_device: 300000,  // 5 min
+  chronosphere: 180000,    // 3 min
+  iron_curtain: 180000,    // 3 min
+}
+const SUPERWEAPON_IDS = new Set(Object.keys(SUPERWEAPON_TIMERS))
+
 // ── Colours ────────────────────────────────────────────────────────────
 const HUD_BG      = 0x0a0a1a
 const HUD_PANEL   = 0x1a1a2e
@@ -36,7 +46,7 @@ const POWER_YELLOW = 0xcccc44
 const POWER_RED    = 0xcc4444
 
 // ── Types ──────────────────────────────────────────────────────────────
-type BuildTab   = 'buildings' | 'infantry' | 'vehicles' | 'aircraft'
+type BuildTab   = 'buildings' | 'defenses' | 'infantry' | 'vehicles' | 'aircraft'
 type AlertType  = 'success' | 'warning' | 'danger' | 'info'
 type CursorMode = 'normal' | 'sell' | 'repair' | 'attackMove' | 'placement'
 
@@ -72,12 +82,13 @@ function getBuildItems(factionId: string): BuildableItem[] {
   for (const id of buildingIds) {
     const def = BUILDING_DEFS[id]
     if (!def || id === 'construction_yard') continue // CY is never built from panel
+    const tab: BuildTab = (def.category === 'defense') ? 'defenses' : 'buildings'
     items.push({
       id: def.id,
       label: def.name,
       abbrev: def.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
       cost: def.stats.cost,
-      tab: 'buildings',
+      tab,
       buildTime: def.stats.buildTime,
     })
   }
@@ -166,6 +177,12 @@ export class HUDScene extends Phaser.Scene {
   // ── Dynamic build catalogue ──────────────────────────────────────
   private buildItems: BuildableItem[] = []
 
+  // ── Superweapon tracking ─────────────────────────────────────────
+  private superweaponTimers: Map<string, number> = new Map()  // defId → ms remaining
+  private superweaponReady: Set<string> = new Set()
+  private superweaponTargetMode = false
+  private superweaponActiveId: string | null = null
+
   // ── Selection groups ──────────────────────────────────────────────
   private selGroups: Map<number, string[]> = new Map()
 
@@ -227,6 +244,7 @@ export class HUDScene extends Phaser.Scene {
     this.tickPower()
     this.tickMinimap()
     this.tickBuildProgress(delta)
+    this.tickSuperweapons(delta)
     this.tickSelectedInfo()
     this.tickGhost()
   }
@@ -381,8 +399,8 @@ export class HUDScene extends Phaser.Scene {
   private buildTabs() {
     const x    = this.sidebarX
     const y    = this.tabY
-    const tabs: BuildTab[]  = ['buildings', 'infantry', 'vehicles', 'aircraft']
-    const icons             = ['🏗', '🚶', '🚗', '✈']
+    const tabs: BuildTab[]  = ['buildings', 'defenses', 'infantry', 'vehicles', 'aircraft']
+    const icons             = ['🏗', '🛡', '🚶', '🚗', '✈']
     const tabW = Math.floor(SIDEBAR_W / tabs.length)
 
     // Tab separator line above
@@ -418,7 +436,7 @@ export class HUDScene extends Phaser.Scene {
 
   private switchTab(tab: BuildTab) {
     this.activeTab = tab
-    const tabs: BuildTab[] = ['buildings', 'infantry', 'vehicles', 'aircraft']
+    const tabs: BuildTab[] = ['buildings', 'defenses', 'infantry', 'vehicles', 'aircraft']
     const tabW = Math.floor(SIDEBAR_W / tabs.length)
     const y    = this.tabY
 
@@ -530,7 +548,7 @@ export class HUDScene extends Phaser.Scene {
       this.buildTimers.delete(item.id)
       this.creditsPaid.delete(item.id)
       const gs = this.scene.get('GameScene')
-      if (gs) gs.events.emit('cancelProduction', { defId: item.id, type: item.tab === 'buildings' ? 'building' : 'unit', refund: paid })
+      if (gs) gs.events.emit('cancelProduction', { defId: item.id, type: (item.tab === 'buildings' || item.tab === 'defenses') ? 'building' : 'unit', refund: paid })
       this.showAlert(`${item.label} cancelled ($${Math.floor(paid)} refunded)`, 'warning')
       return
     }
@@ -949,16 +967,30 @@ export class HUDScene extends Phaser.Scene {
     const player = this.humanPlayer
     if (!player) return
 
+    const isBuildingTab = item.tab === 'buildings' || item.tab === 'defenses'
+
+    // Superweapon activation: if ready, enter target selection mode
+    if (SUPERWEAPON_IDS.has(item.id) && this.superweaponReady.has(item.id)) {
+      this.superweaponTargetMode = true
+      this.superweaponActiveId = item.id
+      this.ghost.setVisible(true)
+      this.ghostLabel.setVisible(true)
+      this.ghostLabel.setText(`[${item.label}] Click target location`)
+      this.input.on('pointerdown', this.onSuperweaponPointer, this)
+      this.showAlert(`Select target for ${item.label}`, 'warning')
+      return
+    }
+
     // If building is ready to place, enter placement mode
-    if (this.pendingPlace.has(item.id) && item.tab === 'buildings') {
+    if (this.pendingPlace.has(item.id) && isBuildingTab) {
       this.enterPlacement(item.id)
       return
     }
 
     // RA2: One building at a time per Construction Yard
-    if (item.tab === 'buildings') {
+    if (isBuildingTab) {
       const alreadyBuilding = this.buildItems.some(
-        bi => bi.tab === 'buildings' && bi.id !== item.id && this.buildProgress.has(bi.id)
+        bi => (bi.tab === 'buildings' || bi.tab === 'defenses') && bi.id !== item.id && this.buildProgress.has(bi.id)
       )
       if (alreadyBuilding) {
         this.showAlert('Already constructing a building', 'danger')
@@ -968,7 +1000,7 @@ export class HUDScene extends Phaser.Scene {
 
     // Queue if already building this item
     if (this.buildProgress.has(item.id)) {
-      if (item.tab === 'buildings') {
+      if (isBuildingTab) {
         this.showAlert('Already constructing this building', 'danger')
         return
       }
@@ -999,7 +1031,7 @@ export class HUDScene extends Phaser.Scene {
     this.creditsPaid.set(item.id, 0)
 
     const gs = this.scene.get('GameScene')
-    if (gs) gs.events.emit('startProduction', { defId: item.id, type: item.tab === 'buildings' ? 'building' : 'unit' })
+    if (gs) gs.events.emit('startProduction', { defId: item.id, type: (item.tab === 'buildings' || item.tab === 'defenses') ? 'building' : 'unit' })
 
     this.showAlert(`Building: ${item.label}`, 'info')
   }
@@ -1251,6 +1283,46 @@ export class HUDScene extends Phaser.Scene {
     this.exitPlacement(false)
   }
 
+  private onSuperweaponPointer = (ptr: Phaser.Input.Pointer) => {
+    if (!this.superweaponTargetMode) return
+    if (ptr.rightButtonDown()) {
+      this.exitSuperweaponTarget()
+      return
+    }
+    if (!ptr.leftButtonDown()) return
+    if (ptr.x >= this.sidebarX) return
+
+    const camX = (this.registry.get('camX') as number) ?? 0
+    const camY = (this.registry.get('camY') as number) ?? 0
+    const worldX = ptr.x + camX
+    const worldY = ptr.y + camY
+
+    const gs = this.scene.get('GameScene')
+    if (gs) {
+      gs.events.emit('fireSuperweapon', {
+        defId: this.superweaponActiveId,
+        targetX: worldX,
+        targetY: worldY,
+      })
+    }
+
+    this.showAlert(`${(this.superweaponActiveId ?? '').replace(/_/g, ' ').toUpperCase()} LAUNCHED!`, 'danger')
+    this.superweaponReady.delete(this.superweaponActiveId!)
+    // Restart countdown
+    if (this.superweaponActiveId && SUPERWEAPON_TIMERS[this.superweaponActiveId]) {
+      this.superweaponTimers.set(this.superweaponActiveId, SUPERWEAPON_TIMERS[this.superweaponActiveId])
+    }
+    this.exitSuperweaponTarget()
+  }
+
+  private exitSuperweaponTarget() {
+    this.superweaponTargetMode = false
+    this.superweaponActiveId = null
+    this.ghost.setVisible(false)
+    this.ghostLabel.setVisible(false)
+    this.input.off('pointerdown', this.onSuperweaponPointer, this)
+  }
+
   // ── Setup keys & events ──────────────────────────────────────────────
   private setupEvents() {
     this.events.on('evaAlert', (d: { message: string; type?: string }) => {
@@ -1277,7 +1349,7 @@ export class HUDScene extends Phaser.Scene {
     // Tab cycling (Tab key only — number keys are for selection groups)
     kb.on('keydown-TAB', (ev: KeyboardEvent) => {
       ev.preventDefault()
-      const list: BuildTab[] = ['buildings', 'infantry', 'vehicles', 'aircraft']
+      const list: BuildTab[] = ['buildings', 'defenses', 'infantry', 'vehicles', 'aircraft']
       this.switchTab(list[(list.indexOf(this.activeTab) + 1) % list.length])
     })
 
@@ -1461,9 +1533,20 @@ export class HUDScene extends Phaser.Scene {
     type E = { id: string; playerId: number; type: string; x: number; y: number; isAlive: boolean }
     const em = this.registry.get('entityMgr') as { getAllEntities(): E[] } | undefined
     if (em) {
+      const localId = this.gameState?.localPlayerId ?? 0
       em.getAllEntities().forEach(e => {
         if (!e.isAlive) return
+
+        // Only show enemy entities if tile is VISIBLE in fog
         const player = this.gameState.players.find(p => p.id === e.playerId)
+        const isOwn = e.playerId === localId
+        if (!isOwn && map.tiles) {
+          const tc = Math.floor(e.x / TILE_SIZE)
+          const tr = Math.floor(e.y / TILE_SIZE)
+          const fog = map.tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
+          if (fog !== FogState.VISIBLE) return
+        }
+
         const isHuman = !player?.isAI
         // Green for friendly, red for enemy, yellow for neutral
         const color = isHuman ? 0x4ade80 : (e.playerId > 0 ? 0xe94560 : 0xdddd44)
@@ -1537,7 +1620,7 @@ export class HUDScene extends Phaser.Scene {
         this.buildTimers.set(id, item.buildTime * 1000)
       }
 
-      if (item.tab === 'buildings') {
+      if (item.tab === 'buildings' || item.tab === 'defenses') {
         this.pendingPlace.add(id)
         this.showAlert(`${item.label} ready — place it!`, 'success')
         this.enterPlacement(id)
@@ -1571,6 +1654,62 @@ export class HUDScene extends Phaser.Scene {
 
       this.drawItemBg(btn)
     })
+  }
+
+  private tickSuperweapons(delta: number) {
+    // Check for newly placed superweapon buildings and start timers
+    type E = { defId: string; playerId: number; isAlive: boolean }
+    const em = this.registry.get('entityMgr') as { getAllEntities(): E[] } | undefined
+    if (em) {
+      for (const defId of SUPERWEAPON_IDS) {
+        const hasBuilding = em.getAllEntities().some(
+          e => e.defId === defId && e.playerId === 0 && e.isAlive,
+        )
+        if (hasBuilding && !this.superweaponTimers.has(defId) && !this.superweaponReady.has(defId)) {
+          this.superweaponTimers.set(defId, SUPERWEAPON_TIMERS[defId])
+          this.showAlert(`${defId.replace(/_/g, ' ').toUpperCase()} charging...`, 'warning')
+        }
+        if (!hasBuilding) {
+          this.superweaponTimers.delete(defId)
+          this.superweaponReady.delete(defId)
+        }
+      }
+    }
+
+    // Tick down active timers
+    for (const [defId, remaining] of this.superweaponTimers) {
+      const newRemaining = remaining - delta
+      if (newRemaining <= 0) {
+        this.superweaponTimers.delete(defId)
+        this.superweaponReady.add(defId)
+        this.showAlert(`${defId.replace(/_/g, ' ').toUpperCase()} READY!`, 'success')
+      } else {
+        this.superweaponTimers.set(defId, newRemaining)
+      }
+    }
+
+    // Update superweapon build button visuals
+    for (const btn of this.buildBtns) {
+      const id = btn._item.id
+      if (!SUPERWEAPON_IDS.has(id)) continue
+
+      const remaining = this.superweaponTimers.get(id)
+      const ready = this.superweaponReady.has(id)
+
+      if (remaining !== undefined) {
+        const secs = Math.ceil(remaining / 1000)
+        const min = Math.floor(secs / 60)
+        const sec = secs % 60
+        btn._readyTxt?.setText(`${min}:${sec.toString().padStart(2, '0')}`)
+        btn._readyTxt?.setColor('#ffdd44')
+      } else if (ready) {
+        // Pulse effect
+        const pulse = 0.7 + Math.sin(Date.now() / 200) * 0.3
+        btn._readyTxt?.setText('FIRE!')
+        btn._readyTxt?.setColor('#4ade80')
+        btn.setAlpha(pulse)
+      }
+    }
   }
 
   private tickSelectedInfo() {
@@ -1630,6 +1769,30 @@ export class HUDScene extends Phaser.Scene {
   }
 
   private tickGhost() {
+    // Superweapon target mode ghost
+    if (this.superweaponTargetMode) {
+      const ptr = this.input.activePointer
+      if (!ptr || ptr.x >= this.sidebarX) {
+        this.ghost.setVisible(false); this.ghostLabel.setVisible(false); return
+      }
+      this.ghost.setVisible(true); this.ghostLabel.setVisible(true)
+      const g = this.ghost
+      g.clear()
+      // Draw blast radius circle (6 tiles = 192px)
+      const radius = this.superweaponActiveId === 'chronosphere' || this.superweaponActiveId === 'iron_curtain' ? 96 : 192
+      const color = this.superweaponActiveId === 'iron_curtain' ? 0xff4444
+        : this.superweaponActiveId === 'chronosphere' ? 0x44ddff
+        : this.superweaponActiveId === 'weather_device' ? 0x4488ff : 0xff8800
+      g.lineStyle(2, color, 0.8)
+      g.strokeCircle(ptr.x, ptr.y, radius / 3) // visual at screen scale
+      g.fillStyle(color, 0.15)
+      g.fillCircle(ptr.x, ptr.y, radius / 3)
+      this.ghostLabel.setPosition(ptr.x + 14, ptr.y - 22)
+      this.ghostLabel.setText('Click to fire')
+      this.ghostLabel.setColor(color === 0xff8800 ? '#ff8800' : color === 0xff4444 ? '#ff4444' : '#44ddff')
+      return
+    }
+
     if (!this.placementMode) return
     const ptr = this.input.activePointer
     if (!ptr || ptr.x >= this.sidebarX) {

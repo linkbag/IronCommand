@@ -458,6 +458,34 @@ export class Unit extends Phaser.GameObjects.Container {
   // ── Private: attack ──────────────────────────────────────────
 
   private updateAttack(delta: number): void {
+    // Spies infiltrate enemy buildings for temporary vision
+    if (this.def.id === 'spy' && this.target) {
+      const dist = Phaser.Math.Distance.Between(this.x, this.y, this.target.x, this.target.y)
+      if (dist > TILE_SIZE * 2) {
+        this.startMoveTo({ x: this.target.x, y: this.target.y })
+        return
+      }
+      // In range — infiltrate
+      this.emit('spy_infiltrate', this, this.target)
+      this.state = 'idle'
+      this.target = null
+      return
+    }
+
+    // Engineers capture buildings instead of fighting
+    if (this.def.id === 'engineer' && this.target) {
+      const dist = Phaser.Math.Distance.Between(this.x, this.y, this.target.x, this.target.y)
+      if (dist > TILE_SIZE * 2) {
+        this.startMoveTo({ x: this.target.x, y: this.target.y })
+        return
+      }
+      // In range — attempt capture
+      this.emit('fire_at_target', this, this.target)
+      this.state = 'idle'
+      this.target = null
+      return
+    }
+
     if (!this.def.attack) {
       this.state = 'idle'
       return

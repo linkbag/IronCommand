@@ -5,7 +5,7 @@
 
 import Phaser from 'phaser'
 import { Unit } from '../entities/Unit'
-import type { Building } from '../entities/Building'
+import { Building } from '../entities/Building'
 import type { EntityManager } from '../entities/EntityManager'
 import type { AttackStats } from '../types'
 import { DamageType } from '../types'
@@ -14,30 +14,30 @@ import { TILE_SIZE } from '../types'
 // Type multipliers: who's strong against what
 const TYPE_MULTIPLIERS: Record<DamageType, Record<string, number>> = {
   [DamageType.BULLET]: {
-    infantry: 1.5,
-    vehicle: 0.5,
-    aircraft: 0.7,
-    naval: 0.5,
-    harvester: 0.8,
-    base: 0.3,
-    power: 0.3,
-    production: 0.3,
-    defense: 0.5,
-    tech: 0.3,
+    infantry: 1.6,
+    vehicle: 0.4,
+    aircraft: 0.6,
+    naval: 0.4,
+    harvester: 0.7,
+    base: 0.25,
+    power: 0.25,
+    production: 0.25,
+    defense: 0.4,
+    tech: 0.25,
     superweapon: 0.2,
   },
   [DamageType.EXPLOSIVE]: {
-    infantry: 0.8,
-    vehicle: 1.2,
+    infantry: 0.7,
+    vehicle: 1.4,
     aircraft: 0.3,
     naval: 1.0,
     harvester: 1.0,
-    base: 1.5,
-    power: 1.5,
-    production: 1.5,
-    defense: 1.2,
+    base: 1.6,
+    power: 1.6,
+    production: 1.6,
+    defense: 1.3,
     tech: 1.5,
-    superweapon: 1.3,
+    superweapon: 1.4,
   },
   [DamageType.MISSILE]: {
     infantry: 0.6,
@@ -66,17 +66,17 @@ const TYPE_MULTIPLIERS: Record<DamageType, Record<string, number>> = {
     superweapon: 1.0,
   },
   [DamageType.ELECTRIC]: {
-    infantry: 1.0,
+    infantry: 1.2,
     vehicle: 1.3,
-    aircraft: 0.5,
+    aircraft: 0.8,
     naval: 1.5,
     harvester: 1.2,
-    base: 0.8,
+    base: 1.0,
     power: 2.0,
     production: 1.0,
     defense: 1.2,
     tech: 1.5,
-    superweapon: 0.8,
+    superweapon: 1.0,
   },
 }
 
@@ -125,9 +125,34 @@ export class Combat extends Phaser.Events.EventEmitter {
   /**
    * Resolve an attack from attacker to target.
    * Spawns projectile if needed, otherwise applies damage directly.
+   * Handles special unit types (attack dogs, engineers, etc.)
    */
   resolveAttack(attacker: Unit | Building, target: Unit | Building): void {
     if (!attacker.def.attack) return
+
+    // ── Special unit handling ──
+    if (attacker instanceof Unit) {
+      // Attack dogs: instant-kill vs infantry, 0 damage vs everything else
+      if (attacker.def.id === 'attack_dog') {
+        if (target instanceof Unit && target.def.category === 'infantry') {
+          target.takeDamage(target.hp + 100, attacker.playerId) // instant kill
+          attacker.recordKill()
+          return
+        }
+        return // dogs can't damage vehicles/buildings
+      }
+
+      // Engineers: capture enemy buildings instead of damaging
+      if (attacker.def.id === 'engineer' && target instanceof Building && target.playerId !== attacker.playerId) {
+        // Capture: switch building ownership and sacrifice engineer
+        this.em.emit('engineer_capture', {
+          engineerId: attacker.id,
+          buildingId: target.id,
+          newPlayerId: attacker.playerId,
+        })
+        return
+      }
+    }
 
     const attack = attacker.def.attack
     // RA2 Veterancy: damage multiplier for units

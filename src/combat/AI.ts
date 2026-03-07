@@ -28,9 +28,9 @@ type PendingWave = {
 // ── Constants ──────────────────────────────────────────────────
 
 const TICK_INTERVAL: Record<AIDifficulty, number> = {
-  easy: 4000,
-  medium: 2500,
-  hard: 1500,
+  easy: 3000,
+  medium: 2000,
+  hard: 1200,
 }
 
 const INFANTRY_BEFORE_WAR_FACTORY: Record<AIDifficulty, number> = {
@@ -40,23 +40,23 @@ const INFANTRY_BEFORE_WAR_FACTORY: Record<AIDifficulty, number> = {
 }
 
 const ATTACK_INTERVAL_MS: Record<AIDifficulty, { min: number; max: number }> = {
-  easy: { min: 180000, max: 240000 },
-  medium: { min: 120000, max: 180000 },
-  hard: { min: 90000, max: 130000 },
+  easy: { min: 120000, max: 170000 },
+  medium: { min: 75000, max: 120000 },
+  hard: { min: 55000, max: 90000 },
 }
 
 const ATTACK_WAVE_SIZE: Record<AIDifficulty, { min: number; max: number }> = {
-  easy: { min: 4, max: 6 },
-  medium: { min: 5, max: 10 },
-  hard: { min: 10, max: 16 },
+  easy: { min: 3, max: 6 },
+  medium: { min: 4, max: 10 },
+  hard: { min: 6, max: 16 },
 }
 
-const STAGING_HOLD_MS = 9000
+const STAGING_HOLD_MS = 5000
 
 const HARASS_INTERVAL_MS: Record<AIDifficulty, number> = {
-  easy: 150000,
-  medium: 90000,
-  hard: 50000,
+  easy: 100000,
+  medium: 60000,
+  hard: 35000,
 }
 
 const DEFENSE_TARGET: Record<AIDifficulty, number> = {
@@ -126,6 +126,16 @@ export class AI {
   private mapHeightTiles = 0
 
   private enemyComposition: { infantry: number; vehicles: number; aircraft: number }
+  private superweaponTimers: Map<string, number> = new Map()
+  private superweaponReady: Set<string> = new Set()
+
+  private static readonly SW_COOLDOWNS: Record<string, number> = {
+    nuclear_silo: 300000,
+    weather_device: 300000,
+    chronosphere: 180000,
+    iron_curtain: 180000,
+  }
+  private static readonly SW_IDS = Object.keys(AI.SW_COOLDOWNS)
 
   constructor(
     playerId: number,
@@ -209,6 +219,11 @@ export class AI {
 
     if (this.difficulty === 'hard' && this.isAttacking) {
       this.considerMultiProng(gameState)
+    }
+
+    // Superweapon management (medium/hard only)
+    if (this.difficulty !== 'easy') {
+      this.tickSuperweapons(gameState)
     }
   }
 
@@ -578,7 +593,7 @@ export class AI {
     this.harassTimer = 0
 
     // Need enough army before diverting units
-    if (this.getCombatUnits().length < 8) return
+    if (this.getCombatUnits().length < 5) return
 
     // Find fast idle units for raiding
     const fastUnits = this.getCombatUnits().filter(
@@ -1015,6 +1030,82 @@ export class AI {
     return this.em.getUnitsForPlayer(this.playerId).filter(
       u => u.state !== 'dying' && u.def.category === category,
     ).length
+  }
+
+  // ── Superweapon management ──────────────────────────────────
+
+  private tickSuperweapons(gameState: GameState): void {
+    const interval = TICK_INTERVAL[this.difficulty]
+
+    // Track superweapon buildings and countdown timers
+    for (const swId of AI.SW_IDS) {
+      const hasBuilding = this.hasActiveBuilding(swId)
+      if (hasBuilding && !this.superweaponTimers.has(swId) && !this.superweaponReady.has(swId)) {
+        this.superweaponTimers.set(swId, AI.SW_COOLDOWNS[swId])
+      }
+      if (!hasBuilding) {
+        this.superweaponTimers.delete(swId)
+        this.superweaponReady.delete(swId)
+      }
+    }
+
+    // Tick down timers
+    for (const [swId, remaining] of this.superweaponTimers) {
+      const newRemaining = remaining - interval
+      if (newRemaining <= 0) {
+        this.superweaponTimers.delete(swId)
+        this.superweaponReady.add(swId)
+        console.log(`[AI] Player ${this.playerId} superweapon ${swId} READY`)
+      } else {
+        this.superweaponTimers.set(swId, newRemaining)
+      }
+    }
+
+    // Fire ready superweapons
+    for (const swId of this.superweaponReady) {
+      const target = this.findSuperweaponTarget(gameState, swId)
+      if (!target) continue
+
+      // Emit event for GameScene to handle
+      this.em.emit('ai_fire_superweapon', {
+        defId: swId,
+        targetX: target.x,
+        targetY: target.y,
+        playerId: this.playerId,
+      })
+      this.superweaponReady.delete(swId)
+      this.superweaponTimers.set(swId, AI.SW_COOLDOWNS[swId])
+      console.log(`[AI] Player ${this.playerId} fired ${swId} at (${Math.round(target.x)}, ${Math.round(target.y)})`)
+      break // Only fire one per tick
+    }
+  }
+
+  private findSuperweaponTarget(gameState: GameState, swId: string): { x: number; y: number } | null {
+    if (swId === 'iron_curtain') {
+      // Target own army concentration
+      const units = this.getCombatUnits()
+      if (units.length >= 5) {
+        const cx = units.reduce((s, u) => s + u.x, 0) / units.length
+        const cy = units.reduce((s, u) => s + u.y, 0) / units.length
+        return { x: cx, y: cy }
+      }
+      return null
+    }
+
+    // For offensive weapons: target enemy base/army concentration
+    for (const p of gameState.players) {
+      if (p.id === this.playerId || p.isDefeated) continue
+      const enemyBuildings = this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying')
+      if (enemyBuildings.length === 0) continue
+
+      // Prefer CY or power buildings for nukes
+      const cy = enemyBuildings.find(b => b.def.id === 'construction_yard')
+      if (cy) return { x: cy.x, y: cy.y }
+
+      // Fallback: densest building cluster
+      return { x: enemyBuildings[0].x, y: enemyBuildings[0].y }
+    }
+    return null
   }
 
   /** Expose hard-mode attack split hook for external callers. */

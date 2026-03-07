@@ -15,7 +15,7 @@ import { AI } from '../combat/AI'
 import { BUILDING_DEFS, getPowerBuildingDefId } from '../entities/BuildingDefs'
 import { UNIT_DEFS, getHarvesterDefId, getBasicInfantryDefId } from '../entities/UnitDefs'
 import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, FactionSide } from '../types'
-import { TILE_SIZE, STARTING_CREDITS, TerrainType } from '../types'
+import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType } from '../types'
 import { FACTIONS } from '../data/factions'
 import type { SkirmishConfig } from './SetupScene'
 
@@ -183,6 +183,53 @@ export class GameScene extends Phaser.Scene {
     this.wireHUDEvents()
     this.wireProductionEvents()
 
+    // AI superweapon fire events
+    this.entityMgr.on('ai_fire_superweapon', (data: { defId: string; targetX: number; targetY: number; playerId: number }) => {
+      this.executeSuperweapon(data.defId, data.targetX, data.targetY, data.playerId)
+      const hud = this.scene.get('HUDScene')
+      if (hud) hud.events.emit('evaAlert', { message: `Enemy ${data.defId.replace(/_/g, ' ')} detected!`, type: 'danger' })
+    })
+
+    // Engineer capture event
+    this.entityMgr.on('engineer_capture', (data: { engineerId: string; buildingId: string; newPlayerId: number }) => {
+      const engineer = this.entityMgr.getUnit(data.engineerId)
+      const building = this.entityMgr.getBuilding(data.buildingId)
+      if (!engineer || !building) return
+
+      // Transfer building ownership
+      ;(building as any).playerId = data.newPlayerId
+
+      // Sacrifice the engineer
+      engineer.takeDamage(engineer.hp + 100, engineer.playerId)
+
+      const hud = this.scene.get('HUDScene')
+      if (data.newPlayerId === 0) {
+        if (hud) hud.events.emit('evaAlert', { message: `Building captured!`, type: 'success' })
+      } else {
+        if (hud) hud.events.emit('evaAlert', { message: `Building captured by enemy!`, type: 'danger' })
+      }
+      console.log(`[Engineer] Building ${data.buildingId} captured by player ${data.newPlayerId}`)
+    })
+
+    // Spy infiltration — reveal enemy base for 30 seconds
+    this.entityMgr.on('spy_infiltrate', (spy: import('../entities/Unit').Unit, target: import('../entities/Unit').Unit | import('../entities/Building').Building) => {
+      if (target.playerId === spy.playerId) return // can't spy on own buildings
+      // Add temporary sight source at the enemy building
+      const pos = this.gameMap.worldToTile(target.x, target.y)
+      const sightSource = { pos, range: 12 }
+      this.fogAnchorSources.push(sightSource)
+      // Remove after 30 seconds
+      this.time.delayedCall(30000, () => {
+        const idx = this.fogAnchorSources.indexOf(sightSource)
+        if (idx >= 0) this.fogAnchorSources.splice(idx, 1)
+      })
+      // Sacrifice the spy
+      spy.takeDamage(spy.hp + 100, spy.playerId)
+      const hud = this.scene.get('HUDScene')
+      if (hud) hud.events.emit('evaAlert', { message: 'Spy infiltrated! Enemy base revealed.', type: 'success' })
+      console.log(`[Spy] Infiltrated building at (${target.x}, ${target.y}) owned by player ${target.playerId}`)
+    })
+
     // ── 11. Spawn starting entities ───────────────────────────
     this.spawnStartingEntities()
 
@@ -295,6 +342,9 @@ export class GameScene extends Phaser.Scene {
     if (this.gameState.tick % 30 === 0) {
       this.updateFogOfWar()
     }
+
+    // Hide enemy entities in fog
+    this.updateEntityVisibility()
 
     // Win/loss check (every 120 ticks ≈ 2s)
     if (this.gameState.tick % 120 === 0) {
@@ -526,6 +576,11 @@ export class GameScene extends Phaser.Scene {
     // Cancel production event from HUD (for queue/progress tracking)
     this.events.on('cancelProduction', (_data: { defId: string; type: string; refund: number }) => {
       // HUDScene currently owns player build queue/progress state.
+    })
+
+    // Superweapon fired from HUD
+    this.events.on('fireSuperweapon', (data: { defId: string; targetX: number; targetY: number }) => {
+      this.executeSuperweapon(data.defId, data.targetX, data.targetY, 0)
     })
   }
 
@@ -801,6 +856,116 @@ export class GameScene extends Phaser.Scene {
     // Always call updateFog — even with 0 sources, it resets VISIBLE→EXPLORED
     // and re-renders. Skipping it when sources=0 would leave stale full-black fog.
     this.gameMap.updateFog(sources)
+  }
+
+  // ── Superweapon execution ────────────────────────────────────
+
+  private executeSuperweapon(defId: string, targetX: number, targetY: number, playerId: number): void {
+    const radiusPx = 6 * TILE_SIZE  // 6-tile blast radius
+
+    if (defId === 'nuclear_silo' || defId === 'weather_device') {
+      // Massive area damage
+      const damage = defId === 'nuclear_silo' ? 1000 : 800
+      this.combat.dealSplashDamage(
+        { x: targetX, y: targetY }, radiusPx, damage,
+        defId === 'nuclear_silo' ? DamageType.EXPLOSIVE : DamageType.ELECTRIC,
+        playerId,
+      )
+      // Big explosion visual
+      this.combat.createExplosion(targetX, targetY, 'large')
+      // Extra visual: multiple smaller explosions around the area
+      for (let i = 0; i < 8; i++) {
+        const angle = (Math.PI * 2 * i) / 8
+        const dist = radiusPx * 0.5
+        this.time.delayedCall(i * 100, () => {
+          this.combat.createExplosion(
+            targetX + Math.cos(angle) * dist,
+            targetY + Math.sin(angle) * dist,
+            'medium',
+          )
+        })
+      }
+      console.log(`[Superweapon] ${defId} fired at (${Math.round(targetX)}, ${Math.round(targetY)}) by player ${playerId}`)
+    } else if (defId === 'iron_curtain') {
+      // Make friendly units near target invulnerable for 15 seconds
+      const units = this.entityMgr.getUnitsInRange(targetX, targetY, 3 * TILE_SIZE)
+        .filter(u => u.playerId === playerId && u.state !== 'dying')
+      for (const u of units) {
+        const origTakeDamage = u.takeDamage.bind(u)
+        u.takeDamage = () => {} // invulnerable
+        u.setAlpha(0.8) // visual indicator
+        this.time.delayedCall(15000, () => {
+          u.takeDamage = origTakeDamage
+          u.setAlpha(1)
+        })
+      }
+      // Visual effect
+      const flash = this.add.graphics()
+      flash.fillStyle(0xff4444, 0.4)
+      flash.fillCircle(targetX, targetY, 3 * TILE_SIZE)
+      flash.setDepth(45)
+      this.tweens.add({ targets: flash, alpha: 0, duration: 2000, onComplete: () => flash.destroy() })
+      console.log(`[Superweapon] Iron Curtain: ${units.length} units made invulnerable`)
+    } else if (defId === 'chronosphere') {
+      // Teleport friendly units from selected to target
+      const selectedArr = Array.from(this.selectedIds)
+      const units = selectedArr
+        .map(id => this.entityMgr.getUnit(id))
+        .filter((u): u is import('../entities/Unit').Unit =>
+          u !== undefined && u.playerId === playerId && u.state !== 'dying')
+      if (units.length === 0) {
+        // Fallback: teleport units near the player's base
+        const nearBase = this.entityMgr.getUnitsForPlayer(playerId)
+          .filter(u => u.state !== 'dying' && u.def.category !== 'harvester')
+          .slice(0, 5)
+        for (const u of nearBase) {
+          u.setPosition(targetX + (Math.random() - 0.5) * 64, targetY + (Math.random() - 0.5) * 64)
+          u.giveOrder({ type: 'stop' })
+        }
+      } else {
+        for (const u of units) {
+          u.setPosition(targetX + (Math.random() - 0.5) * 64, targetY + (Math.random() - 0.5) * 64)
+          u.giveOrder({ type: 'stop' })
+        }
+      }
+      // Visual flash at destination
+      const flash = this.add.graphics()
+      flash.fillStyle(0x44ddff, 0.5)
+      flash.fillCircle(targetX, targetY, 3 * TILE_SIZE)
+      flash.setDepth(45)
+      this.tweens.add({ targets: flash, alpha: 0, duration: 1500, onComplete: () => flash.destroy() })
+      console.log(`[Superweapon] Chronosphere teleported units to (${Math.round(targetX)}, ${Math.round(targetY)})`)
+    }
+  }
+
+  // ── Entity visibility based on fog ────────────────────────────
+
+  private updateEntityVisibility(): void {
+    const localId = this.gameState.localPlayerId
+    const { tiles, width, height } = this.gameMap.data
+
+    // Units
+    for (const u of this.entityMgr.getAllUnits()) {
+      if (u.playerId === localId) { u.setVisible(true); u.setAlpha(1); continue }
+      const tc = Math.floor(u.x / TILE_SIZE)
+      const tr = Math.floor(u.y / TILE_SIZE)
+      if (tc < 0 || tc >= width || tr < 0 || tr >= height) { u.setVisible(false); continue }
+      const fog = tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
+      if (fog === FogState.VISIBLE) { u.setVisible(true); u.setAlpha(1) }
+      else { u.setVisible(false) }
+    }
+
+    // Buildings
+    for (const b of this.entityMgr.getAllBuildings()) {
+      if (b.playerId === localId) { b.setVisible(true); b.setAlpha(1); continue }
+      const tc = Math.floor(b.x / TILE_SIZE)
+      const tr = Math.floor(b.y / TILE_SIZE)
+      if (tc < 0 || tc >= width || tr < 0 || tr >= height) { b.setVisible(false); continue }
+      const fog = tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
+      if (fog === FogState.VISIBLE) { b.setVisible(true); b.setAlpha(1) }
+      else if (fog === FogState.EXPLORED) { b.setVisible(true); b.setAlpha(0.5) }
+      else { b.setVisible(false) }
+    }
   }
 
   // (duplicate wireHUDEvents removed — kept the comprehensive version above)

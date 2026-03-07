@@ -410,6 +410,11 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     unit.on('check_ore_at', (x: number, y: number, cb: (amount: number, pos: Position) => void) => {
       this.emit('check_ore_at', x, y, cb)
     })
+
+    // Spy infiltration
+    unit.on('spy_infiltrate', (spy: Unit, target: Unit | Building) => {
+      this.emit('spy_infiltrate', spy, target)
+    })
   }
 
   private wireBuilding(building: Building): void {
