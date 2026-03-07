@@ -870,6 +870,10 @@ export class AI {
     const def = BUILDING_DEFS[defId]
     if (!def) return false
 
+    const sideMatch = def.side === null || def.side === this.side
+    const exclusiveMatch = def.factionExclusive === null || def.factionExclusive === this.factionId
+    if (!sideMatch || !exclusiveMatch) return false
+
     if (!this.hasActiveBuilding('construction_yard')) return false
     if (!allowDuplicate && this.hasBuildingPlacedOrConstructing(defId)) return false
 

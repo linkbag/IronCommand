@@ -33,6 +33,9 @@ export interface IEntityRef {
   y: number
   hp: number
   playerId: number
+  def?: {
+    category?: string
+  }
   takeDamage?: (amount: number, sourcePlayerId: number) => void
 }
 
@@ -433,6 +436,7 @@ export class Unit extends Phaser.GameObjects.Container {
       let nearest: IEntityRef | null = null
       let nearestDist = Infinity
       for (const e of enemies) {
+        if (!this.canAttackTarget(e)) continue
         const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
         if (d < nearestDist) { nearestDist = d; nearest = e }
       }
@@ -500,6 +504,18 @@ export class Unit extends Phaser.GameObjects.Container {
       }
     }
 
+    if (!this.canAttackTarget(this.target)) {
+      this.target = this.findNearbyEnemy()
+      if (!this.target) {
+        this.processNextOrder()
+        return
+      }
+      if (!this.canAttackTarget(this.target)) {
+        this.processNextOrder()
+        return
+      }
+    }
+
     const dist = Phaser.Math.Distance.Between(this.x, this.y, this.target.x, this.target.y)
     const rangePixels = this.def.attack.range * TILE_SIZE
 
@@ -526,6 +542,7 @@ export class Unit extends Phaser.GameObjects.Container {
     // EntityManager listens to this event and returns nearby enemies
     this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: IEntityRef[]) => {
       for (const e of enemies) {
+        if (!this.canAttackTarget(e)) continue
         const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
         if (d < nearestDist) {
           nearestDist = d
@@ -568,6 +585,22 @@ export class Unit extends Phaser.GameObjects.Container {
       this.emit('find_refinery', this.playerId, (ref: IEntityRef | null) => {
         if (ref) {
           this.refineryId = ref.id
+          if (this.def.id === 'chrono_miner') {
+            // Chrono Miner signature behavior: teleport back to refinery to unload.
+            this.setPosition(ref.x, ref.y)
+            this.emit('dump_ore', this.playerId, this.cargoAmount)
+            this.cargoAmount = 0
+            console.log('[ChronoMiner] Teleported to refinery and unloaded ore', {
+              unitId: this.id,
+              refineryId: ref.id,
+              playerId: this.playerId,
+            })
+            this.emit('find_ore_field', this.x, this.y, (target: Position | null) => {
+              if (target) this.startMoveTo(target)
+              else this.state = 'idle'
+            })
+            return
+          }
           const order: Order = { type: 'harvest', target: { x: ref.x, y: ref.y } }
           this.currentOrder = order
           this.startMoveTo({ x: ref.x, y: ref.y })
@@ -620,6 +653,19 @@ export class Unit extends Phaser.GameObjects.Container {
         this.startMoveTo(this.guardPosition)
       }
     }
+  }
+
+  private canAttackTarget(target: IEntityRef): boolean {
+    const attack = this.def.attack
+    if (!attack) return false
+
+    const category = target.def?.category ?? 'vehicle'
+    const isAir = category === 'aircraft'
+    const isGround = !isAir
+
+    if (isAir && !attack.canAttackAir) return false
+    if (isGround && !attack.canAttackGround) return false
+    return true
   }
 
   // ── Visuals ──────────────────────────────────────────────────

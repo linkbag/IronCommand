@@ -71,6 +71,7 @@ export class GameScene extends Phaser.Scene {
   private lastAlertPos: Position | null = null
   private fogAnchorSources: Array<{ pos: TileCoord; range: number }> = []
   private waypointMode = false
+  private paratrooperCooldownMs: Map<number, number> = new Map()
 
   constructor() {
     super({ key: 'GameScene' })
@@ -93,6 +94,7 @@ export class GameScene extends Phaser.Scene {
     this.lastAlertPos = null
     this.fogAnchorSources = []
     this.waypointMode = false
+    this.paratrooperCooldownMs = new Map()
   }
 
   create() {
@@ -330,6 +332,9 @@ export class GameScene extends Phaser.Scene {
     // Build queue progress
     this.production.update(delta, this.gameState)
 
+    // Country passive abilities (e.g., USA paratroopers)
+    this.updateParatroopers(delta)
+
     // AI decision making
     for (const ai of this.aiCommanders) {
       ai.update(delta, this.gameState)
@@ -456,6 +461,16 @@ export class GameScene extends Phaser.Scene {
     this.events.on('placeBuilding', (data: { defId: string; tileCol: number; tileRow: number }) => {
       const def = BUILDING_DEFS[data.defId]
       if (!def) return
+      if (!this.isDefAvailableToPlayer(0, data.defId)) {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'Faction restriction: unavailable', type: 'danger' })
+        return
+      }
+      if (!this.production.checkPrerequisites(0, data.defId, this.gameState)) {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'Prerequisites not met', type: 'danger' })
+        return
+      }
 
       // Adjacency check: must be within 3 tiles of existing building
       if (!this.isAdjacentToOwnBuildings(data.tileCol, data.tileRow, def.footprint.w, def.footprint.h, 0)) {
@@ -524,6 +539,14 @@ export class GameScene extends Phaser.Scene {
     // Unit produced from HUD build panel
     this.events.on('unitProduced', (data: { defId: string }) => {
       console.log('[Pipeline] HUD -> GameScene unitProduced', data)
+      if (!this.isDefAvailableToPlayer(0, data.defId)) {
+        console.warn(`[Pipeline] Faction-restricted unit blocked: ${data.defId}`)
+        return
+      }
+      if (!this.production.checkPrerequisites(0, data.defId, this.gameState)) {
+        console.warn(`[Pipeline] Prerequisite check failed for unit: ${data.defId}`)
+        return
+      }
 
       const producer = this.findProducerForUnit(0, data.defId)
       if (!producer) {
@@ -1069,8 +1092,12 @@ export class GameScene extends Phaser.Scene {
       this.selectedIds.forEach(id => {
         const unit = this.entityMgr.getUnit(id)
         if (!unit || unit.playerId !== 0) return
+        if (unit.def.id === 'mcv') {
+          this.deployMCV(unit)
+          return
+        }
         // Toggle guard mode as "deploy" (fortified position: can't move, auto-engage)
-        if (unit.def.category === 'infantry' || unit.def.id === 'mcv') {
+        if (unit.def.category === 'infantry') {
           if (unit.state === 'idle') {
             unit.giveOrder({ type: 'guard' })
             this.showUnitAck('Deployed')
@@ -1446,5 +1473,110 @@ export class GameScene extends Phaser.Scene {
       this.scene.stop('HUDScene')
       this.scene.start('MenuScene')
     })
+  }
+
+  private isDefAvailableToPlayer(playerId: number, defId: string): boolean {
+    const player = this.gameState.players.find(p => p.id === playerId)
+    if (!player) return false
+
+    const unitDef = UNIT_DEFS[defId]
+    if (unitDef) {
+      const sideMatch = unitDef.side === null || unitDef.side === FACTIONS[player.faction].side
+      const exclusiveMatch = unitDef.factionExclusive === null || unitDef.factionExclusive === player.faction
+      return sideMatch && exclusiveMatch
+    }
+
+    const buildingDef = BUILDING_DEFS[defId]
+    if (buildingDef) {
+      const sideMatch = buildingDef.side === null || buildingDef.side === FACTIONS[player.faction].side
+      const exclusiveMatch = buildingDef.factionExclusive === null || buildingDef.factionExclusive === player.faction
+      return sideMatch && exclusiveMatch
+    }
+
+    return false
+  }
+
+  private deployMCV(unit: import('../entities/Unit').Unit): void {
+    const tile = this.gameMap.worldToTile(unit.x, unit.y)
+    const def = BUILDING_DEFS['construction_yard']
+    const col = tile.col - Math.floor(def.footprint.w / 2)
+    const row = tile.row - Math.floor(def.footprint.h / 2)
+
+    for (let r = 0; r < def.footprint.h; r++) {
+      for (let c = 0; c < def.footprint.w; c++) {
+        if (!this.gameMap.isBuildable(col + c, row + r)) {
+          this.showUnitAck('Cannot deploy here')
+          return
+        }
+      }
+    }
+
+    const cy = this.entityMgr.createBuilding(unit.playerId, 'construction_yard', col, row)
+    if (!cy) return
+    cy.state = 'active'
+    cy.setAlpha(1)
+    for (const occ of cy.occupiedTiles) {
+      this.gameMap.setOccupied(occ.col, occ.row, cy.id)
+    }
+    unit.takeDamage(unit.hp + 999, unit.playerId)
+    this.selectedIds.delete(unit.id)
+    this.showUnitAck('Construction Yard deployed')
+    console.log('[MCV] Deployed into Construction Yard', { playerId: unit.playerId, col, row })
+  }
+
+  private updateParatroopers(delta: number): void {
+    for (const player of this.gameState.players) {
+      const isUsa = player.faction === 'usa'
+      if (!isUsa) continue
+      if (!this.entityMgr.playerHasBuilding(player.id, 'air_force_command')) continue
+
+      const prev = this.paratrooperCooldownMs.get(player.id) ?? 0
+      const next = prev - delta
+      if (next > 0) {
+        this.paratrooperCooldownMs.set(player.id, next)
+        continue
+      }
+
+      this.spawnParatrooperDrop(player.id)
+      this.paratrooperCooldownMs.set(player.id, 240000)
+    }
+  }
+
+  private spawnParatrooperDrop(playerId: number): void {
+    const enemyTargets = this.entityMgr.getAllBuildings().filter(b => b.playerId !== playerId && b.state !== 'dying')
+    let cx: number
+    let cy: number
+    if (enemyTargets.length > 0) {
+      const t = Phaser.Utils.Array.GetRandom(enemyTargets)
+      cx = t.x + Phaser.Math.Between(-TILE_SIZE * 2, TILE_SIZE * 2)
+      cy = t.y + Phaser.Math.Between(-TILE_SIZE * 2, TILE_SIZE * 2)
+    } else {
+      const spawn = this.gameMap.data.startPositions[playerId] ?? this.gameMap.data.startPositions[0]
+      cx = spawn.x + TILE_SIZE * 4
+      cy = spawn.y + TILE_SIZE * 2
+    }
+
+    const count = 5
+    for (let i = 0; i < count; i++) {
+      const ox = Phaser.Math.Between(-20, 20)
+      const oy = Phaser.Math.Between(-20, 20)
+      const u = this.entityMgr.createUnit(playerId, 'gi', cx + ox, cy + oy)
+      if (u && enemyTargets.length > 0) {
+        const t = Phaser.Utils.Array.GetRandom(enemyTargets)
+        u.giveOrder({ type: 'attackMove', target: { x: t.x, y: t.y } })
+      }
+    }
+
+    const flare = this.add.graphics()
+    flare.fillStyle(0x99ddff, 0.5)
+    flare.fillCircle(cx, cy, TILE_SIZE * 2.5)
+    flare.setDepth(45)
+    this.tweens.add({ targets: flare, alpha: 0, duration: 1800, onComplete: () => flare.destroy() })
+
+    if (playerId === 0) {
+      const hud = this.scene.get('HUDScene')
+      if (hud) hud.events.emit('evaAlert', { message: 'Paratroopers inbound!', type: 'success' })
+    }
+    console.log('[USA] Paratroopers deployed', { playerId, x: Math.round(cx), y: Math.round(cy), count })
   }
 }

@@ -917,7 +917,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       range: 7,
       fireRate: 0.7,
       projectileSpeed: 700,
-      damageType: DamageType.EXPLOSIVE,
+      damageType: DamageType.MISSILE,
       canAttackAir: false,
       canAttackGround: true,
       splash: 0,

@@ -59,12 +59,10 @@ export class Production extends Phaser.Events.EventEmitter {
     const def = unitDef ?? buildingDef!
     const cost = def.stats.cost
 
-    // Check faction exclusivity for units
-    if (unitDef?.factionExclusive) {
-      const playerFaction = gameState.players.find(p => p.id === playerId)?.faction
-      if (playerFaction && unitDef.factionExclusive !== playerFaction) {
-        return false
-      }
+    // Check faction exclusivity for units/buildings
+    const playerFaction = gameState.players.find(p => p.id === playerId)?.faction
+    if (playerFaction && def.factionExclusive && def.factionExclusive !== playerFaction) {
+      return false
     }
 
     // Check prerequisites

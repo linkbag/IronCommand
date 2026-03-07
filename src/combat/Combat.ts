@@ -97,12 +97,14 @@ export class Combat extends Phaser.Events.EventEmitter {
   private scene: Phaser.Scene
   private em: EntityManager
   private projectiles: Projectile[]
+  private chronoEraseProgress: Map<string, number>
 
   constructor(scene: Phaser.Scene, entityManager: EntityManager) {
     super()
     this.scene = scene
     this.em = entityManager
     this.projectiles = []
+    this.chronoEraseProgress = new Map()
 
     this.wireEntityManager()
   }
@@ -130,6 +132,14 @@ export class Combat extends Phaser.Events.EventEmitter {
   resolveAttack(attacker: Unit | Building, target: Unit | Building): void {
     if (!attacker.def.attack) return
 
+    const attack = attacker.def.attack
+    const targetCategory = this.getTargetCategory(target)
+    const targetIsAir = targetCategory === 'aircraft'
+    const targetIsGround = !targetIsAir
+    if ((targetIsAir && !attack.canAttackAir) || (targetIsGround && !attack.canAttackGround)) {
+      return
+    }
+
     // ── Special unit handling ──
     if (attacker instanceof Unit) {
       // Attack dogs: instant-kill vs infantry, 0 damage vs everything else
@@ -137,6 +147,7 @@ export class Combat extends Phaser.Events.EventEmitter {
         if (target instanceof Unit && target.def.category === 'infantry') {
           target.takeDamage(target.hp + 100, attacker.playerId) // instant kill
           attacker.recordKill()
+          console.log('[AttackDog] Infantry kill', { attackerId: attacker.id, targetId: target.id })
           return
         }
         return // dogs can't damage vehicles/buildings
@@ -150,11 +161,43 @@ export class Combat extends Phaser.Events.EventEmitter {
           buildingId: target.id,
           newPlayerId: attacker.playerId,
         })
+        console.log('[Engineer] Capture triggered', { engineerId: attacker.id, buildingId: target.id })
+        return
+      }
+
+      // Tanya: pistols for infantry/units, C4 burst vs buildings
+      if (attacker.def.id === 'tanya' && target instanceof Building) {
+        const c4Damage = Math.max(400, Math.ceil(target.def.stats.maxHp * 0.6))
+        target.takeDamage(c4Damage, attacker.playerId)
+        if (target.hp <= 0) attacker.recordKill()
+        console.log('[Tanya] C4 planted', {
+          attackerId: attacker.id,
+          targetId: target.id,
+          damage: c4Damage,
+        })
+        this.createExplosion(target.x, target.y, 'large')
+        return
+      }
+
+      // Chrono Legionnaire: slow, guaranteed erase if beam maintained over time
+      if (attacker.def.id === 'chrono_legionnaire') {
+        const prev = this.chronoEraseProgress.get(target.id) ?? 0
+        const next = prev + 25
+        this.chronoEraseProgress.set(target.id, next)
+        console.log('[ChronoLegionnaire] Erase progress', {
+          attackerId: attacker.id,
+          targetId: target.id,
+          progress: next,
+        })
+        if (next >= 100) {
+          target.takeDamage(target.hp + 1, attacker.playerId)
+          attacker.recordKill()
+          this.chronoEraseProgress.delete(target.id)
+          console.log('[ChronoLegionnaire] Target erased', { attackerId: attacker.id, targetId: target.id })
+        }
         return
       }
     }
-
-    const attack = attacker.def.attack
     // RA2 Veterancy: damage multiplier for units
     const vetMult = (attacker instanceof Unit) ? attacker.getVeterancyDamageMultiplier() : 1.0
 
@@ -162,10 +205,17 @@ export class Combat extends Phaser.Events.EventEmitter {
       // Hitscan — instant damage
       const baseDmg = this.calculateDamage(
         attack,
-        this.getTargetCategory(target),
+        targetCategory,
         target.def.stats.armor,
       )
-      const dmg = Math.ceil(baseDmg * vetMult)
+      let dmg = Math.ceil(baseDmg * vetMult)
+      if (attacker instanceof Unit && attacker.def.id === 'tank_destroyer') {
+        if (['vehicle', 'harvester', 'naval'].includes(targetCategory)) {
+          dmg = Math.ceil(dmg * 1.25)
+        } else if (targetCategory === 'infantry') {
+          dmg = Math.ceil(dmg * 0.7)
+        }
+      }
       const hpBefore = target.hp
       target.takeDamage(dmg, attacker.playerId)
 
@@ -198,10 +248,17 @@ export class Combat extends Phaser.Events.EventEmitter {
           if (target.hp > 0) {
             const baseDmg = this.calculateDamage(
               attack,
-              this.getTargetCategory(target),
+              targetCategory,
               target.def.stats.armor,
             )
-            const dmg = Math.ceil(baseDmg * vetMult)
+            let dmg = Math.ceil(baseDmg * vetMult)
+            if (attacker instanceof Unit && attacker.def.id === 'tank_destroyer') {
+              if (['vehicle', 'harvester', 'naval'].includes(targetCategory)) {
+                dmg = Math.ceil(dmg * 1.25)
+              } else if (targetCategory === 'infantry') {
+                dmg = Math.ceil(dmg * 0.7)
+              }
+            }
             const hpBefore = target.hp
             target.takeDamage(dmg, attacker.playerId)
 
@@ -363,7 +420,7 @@ export class Combat extends Phaser.Events.EventEmitter {
   // ── Private ──────────────────────────────────────────────────
 
   private wireEntityManager(): void {
-    this.em.on('fire_at_target', (attacker: Unit, target: Unit | Building) => {
+    this.em.on('fire_at_target', (attacker: Unit | Building, target: Unit | Building) => {
       this.resolveAttack(attacker, target)
     })
   }

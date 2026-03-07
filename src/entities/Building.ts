@@ -42,6 +42,7 @@ export class Building extends Phaser.GameObjects.Container {
   private isSelected: boolean
   private factionColor: number
   private smokeTimer = 0
+  private attackCooldown = 0
 
   constructor(
     scene: Phaser.Scene,
@@ -178,6 +179,8 @@ export class Building extends Phaser.GameObjects.Container {
       return
     }
 
+    this.attackCooldown = Math.max(0, this.attackCooldown - delta / 1000)
+
     // Damage smoke when below 50% HP
     const pct = this.hp / this.def.stats.maxHp
     if (pct < 0.5 && pct > 0) {
@@ -191,6 +194,9 @@ export class Building extends Phaser.GameObjects.Container {
 
     // Production is handled by Production.ts via productionQueue
     this.updateProductionVisuals()
+
+    // Defensive buildings auto-fire at nearby enemies
+    this.updateCombat()
   }
 
   private spawnSmoke(): void {
@@ -591,5 +597,48 @@ export class Building extends Phaser.GameObjects.Container {
     // Production progress is drawn as overlay on the health bar area
     // The full progress bar rendering is handled by the UI layer (Agent 3)
     this.emit('production_progress', this.id, item.defId, item.progress)
+  }
+
+  private updateCombat(): void {
+    if (this.state !== 'active' || !this.def.attack || this.attackCooldown > 0) return
+
+    const attack = this.def.attack
+    const rangePixels = attack.range * TILE_SIZE
+
+    this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: Array<{ id: string; x: number; y: number; hp: number; def?: { category?: string } }>) => {
+      if (enemies.length === 0) return
+
+      let nearest: { id: string; x: number; y: number; hp: number; def?: { category?: string } } | null = null
+      let nearestDist = Infinity
+
+      for (const e of enemies) {
+        const cat = e.def?.category ?? 'vehicle'
+        const isAir = cat === 'aircraft'
+        const isGround = !isAir
+
+        if (isAir && !attack.canAttackAir) continue
+        if (isGround && !attack.canAttackGround) continue
+
+        const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
+        if (d < nearestDist) {
+          nearestDist = d
+          nearest = e
+        }
+      }
+
+      if (!nearest) return
+
+      this.emit('fire_at_target', this, nearest)
+      this.attackCooldown = 1 / attack.fireRate
+
+      if (this.def.id === 'grand_cannon') {
+        console.log('[GrandCannon] Fired', {
+          buildingId: this.id,
+          owner: this.playerId,
+          targetId: nearest.id,
+          targetCategory: nearest.def?.category ?? 'unknown',
+        })
+      }
+    })
   }
 }

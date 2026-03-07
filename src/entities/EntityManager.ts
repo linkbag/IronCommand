@@ -367,9 +367,12 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     // Provide nearby enemy resolution
     unit.on('find_enemy', (
       x: number, y: number, range: number, ownPlayerId: number,
-      cb: (enemies: Unit[]) => void
+      cb: (enemies: Array<Unit | Building>) => void
     ) => {
-      const enemies = this.getEnemyUnitsInRange(x, y, range, ownPlayerId)
+      const enemies = [
+        ...this.getEnemyUnitsInRange(x, y, range, ownPlayerId),
+        ...this.getEnemyBuildingsInRange(x, y, range, ownPlayerId),
+      ]
       cb(enemies)
     })
 
@@ -428,6 +431,21 @@ export class EntityManager extends Phaser.Events.EventEmitter {
 
     building.on('building_died', (b: Building) => {
       this.emit('building_died', b)
+    })
+
+    building.on('find_enemy', (
+      x: number, y: number, range: number, ownPlayerId: number,
+      cb: (enemies: Array<Unit | Building>) => void
+    ) => {
+      const enemies = [
+        ...this.getEnemyUnitsInRange(x, y, range, ownPlayerId),
+        ...this.getEnemyBuildingsInRange(x, y, range, ownPlayerId),
+      ]
+      cb(enemies)
+    })
+
+    building.on('fire_at_target', (attacker: Building, target: Unit | Building) => {
+      this.emit('fire_at_target', attacker, target)
     })
   }
 
