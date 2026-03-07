@@ -8,80 +8,94 @@ import { Unit } from '../entities/Unit'
 import { Building } from '../entities/Building'
 import type { EntityManager } from '../entities/EntityManager'
 import type { AttackStats } from '../types'
-import { DamageType } from '../types'
+import { DamageType, ArmorType } from '../types'
 import { TILE_SIZE } from '../types'
 import { cartToScreen } from '../engine/IsoUtils'
 
-// Type multipliers: who's strong against what
-// RA2-authentic type multipliers — balanced for realistic counter-play:
-// Bullets: shred infantry, weak vs armor. Explosive: anti-structure/vehicle.
-// Missile: all-rounder AA/AT. Fire: anti-infantry/structure. Electric: anti-vehicle/naval.
-const TYPE_MULTIPLIERS: Record<DamageType, Record<string, number>> = {
+const DAMAGE_ARMOR_MULTIPLIERS: Record<DamageType, Record<ArmorType, number>> = {
   [DamageType.BULLET]: {
-    infantry: 1.75,
-    vehicle: 0.3,
-    aircraft: 0.5,
-    naval: 0.3,
-    harvester: 0.5,
-    base: 0.15,
-    power: 0.15,
-    production: 0.15,
-    defense: 0.3,
-    tech: 0.15,
-    superweapon: 0.1,
+    [ArmorType.NONE]: 1.5,
+    [ArmorType.LIGHT]: 1.0,
+    [ArmorType.MEDIUM]: 0.55,
+    [ArmorType.HEAVY]: 0.35,
+    [ArmorType.WOOD]: 0.7,
+    [ArmorType.STEEL]: 0.35,
+    [ArmorType.CONCRETE]: 0.05,
   },
   [DamageType.EXPLOSIVE]: {
-    infantry: 0.6,
-    vehicle: 1.5,
-    aircraft: 0.2,
-    naval: 1.2,
-    harvester: 1.2,
-    base: 1.8,
-    power: 1.8,
-    production: 1.7,
-    defense: 1.4,
-    tech: 1.6,
-    superweapon: 1.5,
+    [ArmorType.NONE]: 0.65,
+    [ArmorType.LIGHT]: 1.1,
+    [ArmorType.MEDIUM]: 1.3,
+    [ArmorType.HEAVY]: 1.45,
+    [ArmorType.WOOD]: 1.55,
+    [ArmorType.STEEL]: 1.25,
+    [ArmorType.CONCRETE]: 1.1,
+  },
+  [DamageType.HE]: {
+    [ArmorType.NONE]: 0.75,
+    [ArmorType.LIGHT]: 1.2,
+    [ArmorType.MEDIUM]: 1.35,
+    [ArmorType.HEAVY]: 1.55,
+    [ArmorType.WOOD]: 1.75,
+    [ArmorType.STEEL]: 1.35,
+    [ArmorType.CONCRETE]: 1.2,
+  },
+  [DamageType.AP]: {
+    [ArmorType.NONE]: 0.6,
+    [ArmorType.LIGHT]: 0.95,
+    [ArmorType.MEDIUM]: 1.35,
+    [ArmorType.HEAVY]: 1.7,
+    [ArmorType.WOOD]: 0.8,
+    [ArmorType.STEEL]: 1.6,
+    [ArmorType.CONCRETE]: 1.1,
   },
   [DamageType.MISSILE]: {
-    infantry: 0.5,
-    vehicle: 1.6,
-    aircraft: 2.0,
-    naval: 1.4,
-    harvester: 1.3,
-    base: 1.0,
-    power: 1.0,
-    production: 1.0,
-    defense: 0.8,
-    tech: 1.0,
-    superweapon: 0.8,
+    [ArmorType.NONE]: 0.65,
+    [ArmorType.LIGHT]: 1.1,
+    [ArmorType.MEDIUM]: 1.45,
+    [ArmorType.HEAVY]: 1.5,
+    [ArmorType.WOOD]: 1.15,
+    [ArmorType.STEEL]: 1.45,
+    [ArmorType.CONCRETE]: 0.85,
   },
   [DamageType.FIRE]: {
-    infantry: 2.0,
-    vehicle: 0.6,
-    aircraft: 0.1,
-    naval: 0.4,
-    harvester: 0.8,
-    base: 1.5,
-    power: 1.5,
-    production: 1.4,
-    defense: 0.7,
-    tech: 1.4,
-    superweapon: 1.0,
+    [ArmorType.NONE]: 2.0,
+    [ArmorType.LIGHT]: 1.2,
+    [ArmorType.MEDIUM]: 0.6,
+    [ArmorType.HEAVY]: 0.35,
+    [ArmorType.WOOD]: 1.75,
+    [ArmorType.STEEL]: 0.4,
+    [ArmorType.CONCRETE]: 0.3,
   },
   [DamageType.ELECTRIC]: {
-    infantry: 1.3,
-    vehicle: 1.4,
-    aircraft: 0.6,
-    naval: 1.8,
-    harvester: 1.3,
-    base: 1.0,
-    power: 2.5,
-    production: 1.0,
-    defense: 1.3,
-    tech: 1.6,
-    superweapon: 1.0,
+    [ArmorType.NONE]: 1.15,
+    [ArmorType.LIGHT]: 1.25,
+    [ArmorType.MEDIUM]: 1.25,
+    [ArmorType.HEAVY]: 1.3,
+    [ArmorType.WOOD]: 0.7,
+    [ArmorType.STEEL]: 1.5,
+    [ArmorType.CONCRETE]: 0.8,
   },
+  [DamageType.RADIATION]: {
+    [ArmorType.NONE]: 1.7,
+    [ArmorType.LIGHT]: 1.2,
+    [ArmorType.MEDIUM]: 0.75,
+    [ArmorType.HEAVY]: 0.45,
+    [ArmorType.WOOD]: 0.95,
+    [ArmorType.STEEL]: 0.35,
+    [ArmorType.CONCRETE]: 0.25,
+  },
+}
+
+const BASE_ACCURACY: Record<DamageType, number> = {
+  [DamageType.BULLET]: 0.92,
+  [DamageType.EXPLOSIVE]: 0.78,
+  [DamageType.HE]: 0.74,
+  [DamageType.AP]: 0.88,
+  [DamageType.FIRE]: 0.85,
+  [DamageType.ELECTRIC]: 0.95,
+  [DamageType.RADIATION]: 0.9,
+  [DamageType.MISSILE]: 0.86,
 }
 
 interface Projectile {
@@ -118,6 +132,13 @@ interface RadiationZone {
   graphic: Phaser.GameObjects.Graphics
 }
 
+interface TerrorInfestation {
+  droneId: string
+  target: Unit
+  sourcePlayerId: number
+  nextTickAt: number
+}
+
 export class Combat extends Phaser.Events.EventEmitter {
   private scene: Phaser.Scene
   private em: EntityManager
@@ -125,6 +146,7 @@ export class Combat extends Phaser.Events.EventEmitter {
   private timedBombs: Map<string, TimedBomb>
   private radiationZones: RadiationZone[]
   private chronoEraseProgress: Map<string, number> = new Map()
+  private terrorInfestations: Map<string, TerrorInfestation> = new Map()
 
   constructor(scene: Phaser.Scene, entityManager: EntityManager) {
     super()
@@ -145,11 +167,14 @@ export class Combat extends Phaser.Events.EventEmitter {
    */
   calculateDamage(
     attack: AttackStats,
-    targetCategory: string,
+    _targetCategory: string,
     targetArmor: number,
+    targetArmorType: ArmorType,
   ): number {
-    const mult = TYPE_MULTIPLIERS[attack.damageType]?.[targetCategory] ?? 1
-    return Math.ceil(attack.damage * (1 - targetArmor) * mult)
+    const byType = DAMAGE_ARMOR_MULTIPLIERS[attack.damageType]
+      ?? DAMAGE_ARMOR_MULTIPLIERS[DamageType.EXPLOSIVE]
+    const mult = byType[targetArmorType] ?? 1
+    return Math.max(0, Math.round(attack.damage * (1 - targetArmor) * mult))
   }
 
   /**
@@ -270,6 +295,7 @@ export class Combat extends Phaser.Events.EventEmitter {
 
     // RA2 Veterancy: damage multiplier for units
     const vetMult = (attacker instanceof Unit) ? attacker.getVeterancyDamageMultiplier() : 1.0
+    const impact = this.getImpactResult(attacker, target, attack)
 
     // Crazy Ivan: plants timed explosives instead of immediate damage.
     if (attacker instanceof Unit && attacker.def.id === 'crazy_ivan') {
@@ -277,9 +303,26 @@ export class Combat extends Phaser.Events.EventEmitter {
       return
     }
 
+    if (
+      attacker instanceof Unit &&
+      attacker.def.id === 'terror_drone' &&
+      target instanceof Unit &&
+      (target.def.category === 'vehicle' || target.def.category === 'harvester') &&
+      !this.terrorInfestations.has(target.id)
+    ) {
+      this.terrorInfestations.set(target.id, {
+        droneId: attacker.id,
+        target,
+        sourcePlayerId: attacker.playerId,
+        nextTickAt: this.scene.time.now + 700,
+      })
+      attacker.takeDamage(attacker.hp + 1, attacker.playerId)
+      return
+    }
+
     // Suicide units: range-0 attacks explode on contact, apply AoE, and die.
     if (attacker instanceof Unit && attack.range === 0) {
-      const center = { x: target.x, y: target.y }
+      const center = { x: impact.x, y: impact.y }
       const scaledDamage = Math.ceil(attack.damage * vetMult)
       this.dealSplashDamage(
         center,
@@ -295,40 +338,47 @@ export class Combat extends Phaser.Events.EventEmitter {
 
     if (attack.projectileSpeed <= 0) {
       // Hitscan — instant damage
-      const baseDmg = this.calculateDamage(
-        attack,
-        targetCategory,
-        target.def.stats.armor,
-      )
-      let dmg = Math.ceil(baseDmg * vetMult)
-      if (attacker instanceof Unit && attacker.def.id === 'tank_destroyer') {
-        if (['vehicle', 'harvester', 'naval'].includes(targetCategory)) {
-          dmg = Math.ceil(dmg * 1.25)
-        } else if (targetCategory === 'infantry') {
-          dmg = Math.ceil(dmg * 0.7)
+      if (impact.hitPrimary) {
+        const baseDmg = this.calculateDamage(
+          attack,
+          targetCategory,
+          this.getEffectiveArmor(target),
+          this.getArmorType(target),
+        )
+        let dmg = Math.ceil(baseDmg * vetMult)
+        if (attacker instanceof Unit && attacker.def.id === 'tank_destroyer') {
+          if (['vehicle', 'harvester', 'naval'].includes(targetCategory)) {
+            dmg = Math.ceil(dmg * 1.25)
+          } else if (targetCategory === 'infantry') {
+            dmg = Math.ceil(dmg * 0.7)
+          }
         }
-      }
-      const hpBefore = target.hp
-      target.takeDamage(dmg, attacker.playerId)
+        const hpBefore = target.hp
+        target.takeDamage(dmg, attacker.playerId)
 
-      // Track kill for veterancy
-      if (hpBefore > 0 && target.hp <= 0 && attacker instanceof Unit) {
-        attacker.recordKill()
+        // Track kill for veterancy
+        if (hpBefore > 0 && target.hp <= 0 && attacker instanceof Unit) {
+          attacker.recordKill()
+        }
+
+        if (attacker instanceof Unit) {
+          this.applyUnitSpecialOnHit(attacker, target)
+        }
       }
 
       if (attack.splash > 0) {
         this.dealSplashDamage(
-          { x: target.x, y: target.y },
+          { x: impact.x, y: impact.y },
           attack.splash * TILE_SIZE,
           attack.damage,
           attack.damageType,
           attacker.playerId,
-          target.id,
+          impact.hitPrimary ? target.id : undefined,
         )
       }
 
       if (attacker instanceof Unit && attacker.def.id === 'desolator') {
-        this.createRadiationZone(target.x, target.y, attacker.playerId)
+        this.createRadiationZone(impact.x, impact.y, attacker.playerId)
       }
     } else {
       // Muzzle flash at attacker position
@@ -337,15 +387,16 @@ export class Combat extends Phaser.Events.EventEmitter {
       // Spawn projectile
       this.spawnProjectile(
         attacker.x, attacker.y,
-        target.x, target.y,
+        impact.x, impact.y,
         attack,
         attacker.playerId,
         () => {
-          if (target.hp > 0) {
+          if (impact.hitPrimary && target.hp > 0) {
             const baseDmg = this.calculateDamage(
               attack,
               targetCategory,
-              target.def.stats.armor,
+              this.getEffectiveArmor(target),
+              this.getArmorType(target),
             )
             let dmg = Math.ceil(baseDmg * vetMult)
             if (attacker instanceof Unit && attacker.def.id === 'tank_destroyer') {
@@ -363,22 +414,34 @@ export class Combat extends Phaser.Events.EventEmitter {
               attacker.recordKill()
             }
 
+            if (attacker instanceof Unit) {
+              this.applyUnitSpecialOnHit(attacker, target)
+            }
+
             if (attack.splash > 0) {
               this.dealSplashDamage(
-                { x: target.x, y: target.y },
+                { x: impact.x, y: impact.y },
                 attack.splash * TILE_SIZE,
                 attack.damage,
                 attack.damageType,
                 attacker.playerId,
-                target.id,
+                impact.hitPrimary ? target.id : undefined,
               )
             }
 
             if (attacker instanceof Unit && attacker.def.id === 'desolator') {
-              this.createRadiationZone(target.x, target.y, attacker.playerId)
+              this.createRadiationZone(impact.x, impact.y, attacker.playerId)
             }
+          } else if (attack.splash > 0) {
+            this.dealSplashDamage(
+              { x: impact.x, y: impact.y },
+              attack.splash * TILE_SIZE,
+              attack.damage,
+              attack.damageType,
+              attacker.playerId,
+            )
           }
-          this.createExplosion(target.x, target.y, this.getExplosionSize(target))
+          this.createExplosion(impact.x, impact.y, this.getExplosionSize(target))
         },
       )
     }
@@ -413,7 +476,7 @@ export class Combat extends Phaser.Events.EventEmitter {
       if (u.id === excludeId || u.state === 'dying') continue
       const dist = Phaser.Math.Distance.Between(center.x, center.y, u.x, u.y)
       const falloff = 1 - dist / radiusPixels
-      const dmg = Math.ceil(this.calculateDamage(fakeAttack, u.def.category, u.def.stats.armor) * falloff)
+      const dmg = Math.ceil(this.calculateDamage(fakeAttack, u.def.category, this.getEffectiveArmor(u), this.getArmorType(u)) * falloff)
       if (dmg > 0) u.takeDamage(dmg, sourcePlayerId)
     }
 
@@ -421,7 +484,7 @@ export class Combat extends Phaser.Events.EventEmitter {
       if (b.id === excludeId || b.state === 'dying') continue
       const dist = Phaser.Math.Distance.Between(center.x, center.y, b.x, b.y)
       const falloff = 1 - dist / radiusPixels
-      const dmg = Math.ceil(this.calculateDamage(fakeAttack, b.def.category, b.def.stats.armor) * falloff)
+      const dmg = Math.ceil(this.calculateDamage(fakeAttack, b.def.category, this.getEffectiveArmor(b), this.getArmorType(b)) * falloff)
       if (dmg > 0) b.takeDamage(dmg, sourcePlayerId)
     }
   }
@@ -491,6 +554,7 @@ export class Combat extends Phaser.Events.EventEmitter {
     const toRemove: number[] = []
     const bombIdsToRemove: string[] = []
     this.updateRadiationZones()
+    this.updateTerrorInfestations()
 
     for (const [targetId, bomb] of this.timedBombs.entries()) {
       if (!this.isEntityAlive(bomb.target)) {
@@ -598,7 +662,8 @@ export class Combat extends Phaser.Events.EventEmitter {
     const directDamage = this.calculateDamage(
       damageAttack,
       this.getTargetCategory(bomb.target),
-      bomb.target.def.stats.armor,
+      this.getEffectiveArmor(bomb.target),
+      this.getArmorType(bomb.target),
     )
     bomb.target.takeDamage(directDamage, bomb.sourcePlayerId)
 
@@ -694,6 +759,74 @@ export class Combat extends Phaser.Events.EventEmitter {
     this.radiationZones = survivors
   }
 
+  private updateTerrorInfestations(): void {
+    const now = this.scene.time.now
+    for (const [targetId, inf] of this.terrorInfestations.entries()) {
+      if (!this.isEntityAlive(inf.target)) {
+        this.terrorInfestations.delete(targetId)
+        continue
+      }
+      if (now < inf.nextTickAt) continue
+      inf.nextTickAt = now + 700
+      inf.target.takeDamage(25, inf.sourcePlayerId)
+      if (!this.isEntityAlive(inf.target)) {
+        this.terrorInfestations.delete(targetId)
+      }
+    }
+  }
+
+  private getImpactResult(
+    attacker: Unit | Building,
+    target: Unit | Building,
+    attack: AttackStats,
+  ): { hitPrimary: boolean; x: number; y: number } {
+    const rangePx = Math.max(1, attack.range * TILE_SIZE)
+    const distPx = Phaser.Math.Distance.Between(attacker.x, attacker.y, target.x, target.y)
+    const rangeFactor = Phaser.Math.Clamp(distPx / rangePx, 0, 1.3)
+    const accuracy = Phaser.Math.Clamp(
+      (BASE_ACCURACY[attack.damageType] ?? 0.86) - Math.max(0, rangeFactor - 0.8) * 0.25,
+      0.35,
+      0.98,
+    )
+    const hitPrimary = Math.random() <= accuracy
+    if (hitPrimary) {
+      return { hitPrimary, x: target.x, y: target.y }
+    }
+    const scatterTiles = attack.splash > 0 ? Math.max(1, attack.splash * 0.8) : 1.2
+    const scatterRadiusPx = scatterTiles * TILE_SIZE
+    const angle = Math.random() * Math.PI * 2
+    const dist = Phaser.Math.FloatBetween(0.4, 1) * scatterRadiusPx
+    return {
+      hitPrimary: false,
+      x: target.x + Math.cos(angle) * dist,
+      y: target.y + Math.sin(angle) * dist,
+    }
+  }
+
+  private getArmorType(entity: Unit | Building): ArmorType {
+    const direct = (entity.def as { armorType?: ArmorType }).armorType
+    if (direct) return direct
+    const category = this.getTargetCategory(entity)
+    return this.mapCategoryToArmorType(category)
+  }
+
+  private getEffectiveArmor(entity: Unit | Building): number {
+    let armor = entity.def.stats.armor
+    if (entity instanceof Unit) {
+      armor = Math.min(0.95, armor * entity.getVeterancyArmorMultiplier())
+    }
+    return armor
+  }
+
+  private mapCategoryToArmorType(category: string): ArmorType {
+    if (category === 'infantry') return ArmorType.NONE
+    if (category === 'harvester' || category === 'vehicle') return ArmorType.MEDIUM
+    if (category === 'aircraft') return ArmorType.LIGHT
+    if (category === 'naval') return ArmorType.HEAVY
+    if (category === 'defense') return ArmorType.STEEL
+    return ArmorType.CONCRETE
+  }
+
   private spawnProjectile(
     fromX: number, fromY: number,
     toX: number, toY: number,
@@ -728,16 +861,22 @@ export class Combat extends Phaser.Events.EventEmitter {
     const colors: Record<DamageType, number> = {
       [DamageType.BULLET]: 0xffee00,
       [DamageType.EXPLOSIVE]: 0xff8800,
+      [DamageType.HE]: 0xff7722,
+      [DamageType.AP]: 0xffcc66,
       [DamageType.MISSILE]: 0x88ccff,
       [DamageType.FIRE]: 0xff4400,
       [DamageType.ELECTRIC]: 0xaaddff,
+      [DamageType.RADIATION]: 0x99ff44,
     }
     const sizes: Record<DamageType, number> = {
       [DamageType.BULLET]: 2,
       [DamageType.EXPLOSIVE]: 4,
+      [DamageType.HE]: 5,
+      [DamageType.AP]: 3,
       [DamageType.MISSILE]: 4,
       [DamageType.FIRE]: 5,
       [DamageType.ELECTRIC]: 3,
+      [DamageType.RADIATION]: 4,
     }
     const color = colors[dmgType] ?? 0xffffff
     const size = sizes[dmgType] ?? 3
@@ -793,9 +932,12 @@ export class Combat extends Phaser.Events.EventEmitter {
     const flashColors: Record<DamageType, number> = {
       [DamageType.BULLET]: 0xffff44,
       [DamageType.EXPLOSIVE]: 0xff8844,
+      [DamageType.HE]: 0xff6622,
+      [DamageType.AP]: 0xffcc77,
       [DamageType.MISSILE]: 0xff8844,
       [DamageType.FIRE]: 0xff6600,
       [DamageType.ELECTRIC]: 0x66aaff,
+      [DamageType.RADIATION]: 0x99ff55,
     }
     const iso = cartToScreen(x, y)
     const flash = this.scene.add.graphics()
@@ -851,7 +993,12 @@ export class Combat extends Phaser.Events.EventEmitter {
       }
       if (fakeChainAttack.damage <= 0) break
 
-      const dmg = this.calculateDamage(fakeChainAttack, this.getTargetCategory(nextTarget), nextTarget.def.stats.armor)
+      const dmg = this.calculateDamage(
+        fakeChainAttack,
+        this.getTargetCategory(nextTarget),
+        this.getEffectiveArmor(nextTarget),
+        this.getArmorType(nextTarget),
+      )
       nextTarget.takeDamage(dmg, attacker.playerId)
       this.createChainArc(anchorX, anchorY, nextTarget.x, nextTarget.y)
 

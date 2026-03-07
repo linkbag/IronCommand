@@ -5,7 +5,7 @@
 // ============================================================
 
 import type { BuildingDef, FactionSide } from '../types'
-import { DamageType } from '../types'
+import { DamageType, ArmorType } from '../types'
 import { FACTIONS } from '../data/factions'
 import type { FactionId } from '../types'
 
@@ -173,6 +173,7 @@ export const BUILDING_DEFS: Record<string, BuildingDef> = {
     id: 'fortress_wall',
     name: 'Fortress Wall',
     category: 'defense',
+    armorType: ArmorType.CONCRETE,
     side: null,
     factionExclusive: null,
     spriteKey: 'bld_wall',
@@ -180,8 +181,8 @@ export const BUILDING_DEFS: Record<string, BuildingDef> = {
     providespower: 0,
     produces: [],
     stats: {
-      maxHp: 300,
-      armor: 0.4,
+      maxHp: 1,
+      armor: 0.95,
       speed: 0,
       sightRange: 1,
       cost: 100,
@@ -487,11 +488,12 @@ export const BUILDING_DEFS: Record<string, BuildingDef> = {
     id: 'tesla_reactor',
     name: 'Tesla Reactor',
     category: 'power',
+    armorType: ArmorType.STEEL,
     side: 'collective',
     factionExclusive: null,
     spriteKey: 'bld_tesla_reactor',
     footprint: { w: 2, h: 2 },
-    providespower: 150,
+    providespower: 300,
     produces: [],
     stats: {
       maxHp: 400,

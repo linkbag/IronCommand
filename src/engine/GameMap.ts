@@ -973,12 +973,12 @@ export class GameMap {
       const row = Math.floor(key / this.data.width)
       const tile = this.getTile(col, row)
 
-      // Partially depleted ore/gem tiles regenerate; fully depleted (grass) tiles do NOT
+      // Only ore regenerates. Gems are finite like RA2.
       if (!tile) {
         this.depletedOreTiles.delete(key)
         continue
       }
-      if (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS) {
+      if (tile.terrain !== TerrainType.ORE) {
         this.depletedOreTiles.delete(key)
         continue
       }
@@ -989,7 +989,7 @@ export class GameMap {
 
       // Adjacent ore speeds up regen slightly
       const adjacentBonus = this.hasAdjacentOre(col, row) ? 1.3 : 1.0
-      const maxAmt = tile.terrain === TerrainType.GEMS ? GEMS_TILE_MAX : ORE_TILE_MAX
+      const maxAmt = ORE_TILE_MAX
       const regenAmount = Math.floor(ORE_REGEN_RATE * adjacentBonus)
       tile.oreAmount = Math.min(maxAmt, tile.oreAmount + regenAmount)
 
@@ -1010,8 +1010,8 @@ export class GameMap {
     const changed: Array<{ col: number; row: number }> = []
     for (const { col, row } of this.oreTiles) {
       const tile = this.getTile(col, row)
-      if (!tile || (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS)) continue
-      const maxAmt = tile.terrain === TerrainType.GEMS ? GEMS_TILE_MAX : ORE_TILE_MAX
+      if (!tile || tile.terrain !== TerrainType.ORE) continue
+      const maxAmt = ORE_TILE_MAX
       if (tile.oreAmount > 0 && tile.oreAmount < maxAmt) {
         tile.oreAmount = Math.min(maxAmt, tile.oreAmount + ORE_REGEN_RATE)
         changed.push({ col, row })

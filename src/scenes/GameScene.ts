@@ -298,10 +298,28 @@ export class GameScene extends Phaser.Scene {
         const idx = this.fogAnchorSources.indexOf(sightSource)
         if (idx >= 0) this.fogAnchorSources.splice(idx, 1)
       })
+
+      if ('footprint' in target.def) {
+        if (target.def.id === 'barracks' || target.def.id === 'war_factory') {
+          this.production.grantSpyVeterancyBonus(spy.playerId, target.def.id)
+        }
+        if (target.def.id === 'ore_refinery') {
+          const victimCredits = this.economy.getCredits(target.playerId)
+          const stolen = Math.min(2000, victimCredits)
+          if (stolen > 0) {
+            this.economy.deductCredits(target.playerId, stolen)
+            this.economy.addCredits(spy.playerId, stolen)
+          }
+        }
+        if (target.def.id === 'battle_lab') {
+          this.economy.addCredits(spy.playerId, 1000)
+        }
+      }
+
       // Sacrifice the spy
       spy.takeDamage(spy.hp + 100, spy.playerId)
       const hud = this.scene.get('HUDScene')
-      if (hud) hud.events.emit('evaAlert', { message: 'Spy infiltrated! Enemy base revealed.', type: 'success' })
+      if (hud) hud.events.emit('evaAlert', { message: 'Spy infiltration successful.', type: 'success' })
       console.log(`[Spy] Infiltrated building at (${target.x}, ${target.y}) owned by player ${target.playerId}`)
     })
 
@@ -786,7 +804,7 @@ export class GameScene extends Phaser.Scene {
   private isAdjacentToOwnBuildings(
     col: number, row: number, w: number, h: number, playerId: number
   ): boolean {
-    const maxDist = 3  // tiles
+    const maxDist = 1  // tiles
     const buildings = this.entityMgr.getBuildingsForPlayer(playerId)
     if (buildings.length === 0) return true  // first building can go anywhere
 
