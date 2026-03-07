@@ -19,6 +19,10 @@ export class Production extends Phaser.Events.EventEmitter {
   // Per-building production queues (buildingId → queue items with progress tracking)
   private queues: Map<string, BuildQueueItem[]>
 
+  // Primary production building per category per player
+  // Key: "playerId:category" (e.g., "0:barracks"), Value: buildingId
+  private primaryProducers: Map<string, string> = new Map()
+
   constructor(entityManager: EntityManager, economy: Economy) {
     super()
     this.em = entityManager
@@ -212,8 +216,15 @@ export class Production extends Phaser.Events.EventEmitter {
       const def = UNIT_DEFS[item.defId] ?? BUILDING_DEFS[item.defId]
       if (!def) continue
 
+      // RA2-style: multiple same-type production buildings grant speed bonus
+      // Each extra building of the same type adds +35% production speed (diminishing)
+      const sameTypeCount = buildings.filter(
+        b => b.def.id === building.def.id && b.state === 'active'
+      ).length
+      const multiFactoryBonus = 1 + (sameTypeCount - 1) * 0.35
+
       const buildTimeMs = def.stats.buildTime * 1000
-      const progressInc = (delta / buildTimeMs) * speedMult
+      const progressInc = (delta / buildTimeMs) * speedMult * multiFactoryBonus
       item.progress = Math.min(1, item.progress + progressInc)
 
       // Sync to building
@@ -235,10 +246,13 @@ export class Production extends Phaser.Events.EventEmitter {
     const buildingDef = BUILDING_DEFS[defId]
 
     if (unitDef) {
-      // Spawn near producer exit so the unit is always visible and then move to rally point.
+      // Spawn from the primary producer of this type (player-selectable)
+      const primaryId = this.getPrimaryProducer(playerId, producer.def.id)
+      const spawnBuilding = primaryId ? (this.em.getBuilding(primaryId) ?? producer) : producer
+
       const spawnPos = {
-        x: producer.x + producer.def.footprint.w * TILE_SIZE / 2 + TILE_SIZE,
-        y: producer.y,
+        x: spawnBuilding.x + spawnBuilding.def.footprint.w * TILE_SIZE / 2 + TILE_SIZE,
+        y: spawnBuilding.y,
       }
       const unit = this.em.createUnit(playerId, defId, spawnPos.x, spawnPos.y)
       if (unit) {
@@ -249,8 +263,8 @@ export class Production extends Phaser.Events.EventEmitter {
           unit.emit('find_ore_field', unit.x, unit.y, (target: { x: number; y: number } | null) => {
             if (target) unit.giveOrder({ type: 'harvest', target })
           })
-        } else if (producer.rallyPoint) {
-          unit.giveOrder({ type: 'move', target: producer.rallyPoint })
+        } else if (spawnBuilding.rallyPoint) {
+          unit.giveOrder({ type: 'move', target: spawnBuilding.rallyPoint })
         }
         console.log('[Pipeline] Production.onProductionComplete unit', { producerId, defId, unitId: unit.id, playerId })
         this.emit('unit_produced', producerId, defId, unit.id, playerId)
@@ -259,6 +273,67 @@ export class Production extends Phaser.Events.EventEmitter {
       // Building production complete — notify scene to place it
       this.emit('building_produced', producerId, defId, playerId)
     }
+  }
+
+  // ── Primary producer selection ────────────────────────────────
+
+  /**
+   * Set a building as the primary producer for its type.
+   * Units will spawn from this building. Click a barracks/war factory to set it as primary.
+   */
+  setPrimaryProducer(playerId: number, buildingId: string): void {
+    const building = this.em.getBuilding(buildingId)
+    if (!building || building.playerId !== playerId) return
+    const key = `${playerId}:${building.def.id}`
+    this.primaryProducers.set(key, buildingId)
+    console.log(`[Production] Primary producer set: ${building.def.id} → ${buildingId}`)
+    this.emit('primary_producer_changed', playerId, building.def.id, buildingId)
+  }
+
+  /**
+   * Get the primary producer building for a given type.
+   * Falls back to any active building of that type if primary is destroyed.
+   */
+  getPrimaryProducer(playerId: number, producerDefId: string): string | null {
+    const key = `${playerId}:${producerDefId}`
+    const primaryId = this.primaryProducers.get(key)
+
+    // Validate it still exists and is active
+    if (primaryId) {
+      const building = this.em.getBuilding(primaryId)
+      if (building && building.state === 'active' && building.playerId === playerId) {
+        return primaryId
+      }
+      // Primary is dead/invalid — clear it
+      this.primaryProducers.delete(key)
+    }
+
+    // Fallback: first active building of this type
+    const fallback = this.em.getBuildingsForPlayer(playerId)
+      .find(b => b.def.id === producerDefId && b.state === 'active')
+    if (fallback) {
+      this.primaryProducers.set(key, fallback.id)
+      return fallback.id
+    }
+    return null
+  }
+
+  /**
+   * Check if a building is the primary producer for its type
+   */
+  isPrimaryProducer(playerId: number, buildingId: string): boolean {
+    const building = this.em.getBuilding(buildingId)
+    if (!building) return false
+    return this.getPrimaryProducer(playerId, building.def.id) === buildingId
+  }
+
+  /**
+   * Get the multi-factory speed bonus for display (e.g., "2x War Factory → +35% speed")
+   */
+  getSpeedBonus(playerId: number, producerDefId: string): number {
+    const count = this.em.getBuildingsForPlayer(playerId)
+      .filter(b => b.def.id === producerDefId && b.state === 'active').length
+    return 1 + (count - 1) * 0.35
   }
 
   // ── Getters ──────────────────────────────────────────────────
