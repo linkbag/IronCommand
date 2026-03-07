@@ -1406,14 +1406,14 @@ export class GameScene extends Phaser.Scene {
       const tr = Math.floor(u.y / TILE_SIZE)
       if (tc < 0 || tc >= width || tr < 0 || tr >= height) { u.setVisible(false); continue }
       const fog = tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
-      if (fog === FogState.VISIBLE) {
+      if (fog === FogState.VISIBLE || fog === FogState.EXPLORED) {
         // Mirage Tank stealth: nearly invisible when stationary (enemy perspective)
         if (u.stealthed && u.def.id === 'mirage_tank') {
           u.setVisible(true)
           u.setAlpha(0.15) // barely visible shimmer
         } else {
           u.setVisible(true)
-          if (!u.invulnerable) u.setAlpha(1)
+          if (!u.invulnerable) u.setAlpha(fog === FogState.EXPLORED ? 0.6 : 1)
         }
       } else { u.setVisible(false) }
     }
