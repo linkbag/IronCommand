@@ -151,7 +151,7 @@ export class Pathfinder {
    * @param isAir  true = ignore terrain passability (flying units)
    * @returns array of TileCoords, empty if no path found
    */
-  findPath(start: TileCoord, goal: TileCoord, isAir = false, movingUnitId?: string, _movingPlayerId?: number): TileCoord[] {
+  findPath(start: TileCoord, goal: TileCoord, isAir = false, movingUnitId?: string, _movingPlayerId?: number, isNaval = false): TileCoord[] {
     const { width, height } = this.mapRef.data
     // Bounds check
     if (
@@ -171,10 +171,10 @@ export class Pathfinder {
     }
 
     // Goal tile itself must be passable; expand search up to 20 tiles
-    if (!this.isWalkable(goal.col, goal.row, isAir)) {
-      const fallback = this.nearestPassable(goal, 20)
+    if (!this.isWalkable(goal.col, goal.row, isAir, isNaval)) {
+      const fallback = this.nearestPassable(goal, 20, isNaval)
       if (!fallback) return []
-      return this.findPath(start, fallback, isAir, movingUnitId, _movingPlayerId)
+      return this.findPath(start, fallback, isAir, movingUnitId, _movingPlayerId, isNaval)
     }
 
     const occupancy = this.buildOccupancyCostMap(movingUnitId)
@@ -223,14 +223,14 @@ export class Pathfinder {
         const nc = current.col + dir.dc
         const nr = current.row + dir.dr
         if (nc < 0 || nc >= width || nr < 0 || nr >= height) continue
-        if (!this.isWalkable(nc, nr, isAir)) continue
+        if (!this.isWalkable(nc, nr, isAir, isNaval)) continue
 
         const nKey = encodeCoord(nc, nr, width)
         if (closedSet.has(nKey)) continue
 
         // Diagonal: only if both cardinal neighbors are passable
         if (dir.cost > 1 && !isAir) {
-          if (!this.isWalkable(current.col, nr, false) || !this.isWalkable(nc, current.row, false)) continue
+          if (!this.isWalkable(current.col, nr, false, isNaval) || !this.isWalkable(nc, current.row, false, isNaval)) continue
         }
 
         const g = current.g + dir.cost + this.getOccupancyPenalty(nc, nr, occupancy)
@@ -255,7 +255,7 @@ export class Pathfinder {
     return []  // Completely unreachable (e.g., start itself is isolated)
   }
 
-  private nearestPassable(origin: TileCoord, radius: number): TileCoord | null {
+  private nearestPassable(origin: TileCoord, radius: number, isNaval = false): TileCoord | null {
     const { width, height } = this.mapRef.data
     let bestDist = Infinity
     let best: TileCoord | null = null
@@ -264,7 +264,7 @@ export class Pathfinder {
         for (let dr = -r; dr <= r; dr++) {
           if (Math.abs(dc) !== r && Math.abs(dr) !== r) continue
           const c = origin.col + dc, row = origin.row + dr
-          if (c >= 0 && c < width && row >= 0 && row < height && this.isWalkable(c, row, false)) {
+          if (c >= 0 && c < width && row >= 0 && row < height && this.isWalkable(c, row, false, isNaval)) {
             const dist = Math.abs(dc) + Math.abs(dr)
             if (dist < bestDist) {
               bestDist = dist
@@ -363,9 +363,14 @@ export class Pathfinder {
   }
 
   // Pathing intentionally ignores fog of war; only terrain walkability blocks movement.
-  private isWalkable(col: number, row: number, isAir: boolean): boolean {
+  private isWalkable(col: number, row: number, isAir: boolean, isNaval = false): boolean {
     if (isAir) return true
     const tile = this.mapRef.getTile(col, row)
-    return !!tile && tile.passable
+    if (!tile) return false
+    if (isNaval) {
+      // Naval units can only move on water (and bridges)
+      return tile.terrain === 1 || tile.terrain === 6  // WATER=1, BRIDGE=6
+    }
+    return tile.passable
   }
 }

@@ -176,8 +176,19 @@ export class GameScene extends Phaser.Scene {
     this.pathfinder = new Pathfinder(this.gameMap)
 
     // Wire IRTSScene methods (Unit calls these via scene cast)
-    this.findPath = (from, to, playerId, unitId) =>
-      this.pathfinder.findPath(from, to, false, unitId, playerId)
+    this.findPath = (from, to, playerId, unitId) => {
+      // Determine movement mode: air ignores terrain, naval needs water
+      let isAir = false
+      let isNaval = false
+      if (unitId) {
+        const unit = this.entityMgr?.getUnit(unitId)
+        if (unit) {
+          isAir = unit.def.category === 'aircraft'
+          isNaval = unit.def.category === 'naval'
+        }
+      }
+      return this.pathfinder.findPath(from, to, isAir, unitId, playerId, isNaval)
+    }
     this.worldToTile = (x, y) => this.gameMap.worldToTile(x, y)
     this.tileToWorld = (col, row) => this.gameMap.tileToWorld(col, row)
     } catch (e) { console.error('[IC] CRASH in section 2 (pathfinder):', e); throw e }
@@ -621,11 +632,33 @@ export class GameScene extends Phaser.Scene {
     this.registry.set('canPlaceBuilding', (defId: string, col: number, row: number) => {
       const def = BUILDING_DEFS[defId]
       if (!def) return false
-      if (!this.isAdjacentToOwnBuildings(col, row, def.footprint.w, def.footprint.h, 0)) return false
+      const isShipyard = defId === 'naval_shipyard'
+      // Shipyard requires water tiles; other buildings require land
+      if (!isShipyard) {
+        if (!this.isAdjacentToOwnBuildings(col, row, def.footprint.w, def.footprint.h, 0)) return false
+      }
       for (let r = 0; r < def.footprint.h; r++) {
         for (let c = 0; c < def.footprint.w; c++) {
-          if (!this.gameMap.isBuildable(col + c, row + r)) return false
+          const tile = this.gameMap.getTile(col + c, row + r)
+          if (!tile) return false
+          if (isShipyard) {
+            // Shipyard must be placed on water
+            if (tile.terrain !== TerrainType.WATER) return false
+          } else {
+            if (!this.gameMap.isBuildable(col + c, row + r)) return false
+          }
         }
+      }
+      // Shipyard must be adjacent to own buildings OR to shoreline (within 3 tiles of land)
+      if (isShipyard) {
+        let nearLand = false
+        for (let r = -3; r <= def.footprint.h + 2 && !nearLand; r++) {
+          for (let c = -3; c <= def.footprint.w + 2 && !nearLand; c++) {
+            const t = this.gameMap.getTile(col + c, row + r)
+            if (t && t.terrain !== TerrainType.WATER && t.passable) nearLand = true
+          }
+        }
+        if (!nearLand) return false
       }
       return true
     })
@@ -748,23 +781,31 @@ export class GameScene extends Phaser.Scene {
         return
       }
 
-      // Build radius check: must be within radius of an existing structure
-      if (!this.isAdjacentToOwnBuildings(data.tileCol, data.tileRow, def.footprint.w, def.footprint.h, 0)) {
-        const hud = this.scene.get('HUDScene')
-        if (hud) {
-          hud.events.emit('evaAlert', { message: 'Must build near existing structures', type: 'danger' })
-          hud.events.emit('placementRejected', { defId: data.defId })
+      const isShipyard = data.defId === 'naval_shipyard'
+
+      // Shipyard skips adjacency check but needs water; others need build radius
+      if (!isShipyard) {
+        if (!this.isAdjacentToOwnBuildings(data.tileCol, data.tileRow, def.footprint.w, def.footprint.h, 0)) {
+          const hud = this.scene.get('HUDScene')
+          if (hud) {
+            hud.events.emit('evaAlert', { message: 'Must build near existing structures', type: 'danger' })
+            hud.events.emit('placementRejected', { defId: data.defId })
+          }
+          return
         }
-        return
       }
 
-      // Check tiles are buildable
+      // Check tiles — shipyard needs water, others need buildable land
       for (let r = 0; r < def.footprint.h; r++) {
         for (let c = 0; c < def.footprint.w; c++) {
-          if (!this.gameMap.isBuildable(data.tileCol + c, data.tileRow + r)) {
+          const tile = this.gameMap.getTile(data.tileCol + c, data.tileRow + r)
+          const blocked = isShipyard
+            ? (!tile || tile.terrain !== TerrainType.WATER)
+            : (!tile || !this.gameMap.isBuildable(data.tileCol + c, data.tileRow + r))
+          if (blocked) {
             const hud = this.scene.get('HUDScene')
             if (hud) {
-              hud.events.emit('evaAlert', { message: 'Cannot build here', type: 'danger' })
+              hud.events.emit('evaAlert', { message: isShipyard ? 'Shipyard must be on water' : 'Cannot build here', type: 'danger' })
               hud.events.emit('placementRejected', { defId: data.defId })
             }
             return
