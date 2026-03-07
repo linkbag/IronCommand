@@ -987,13 +987,14 @@ export class HUDScene extends Phaser.Scene {
       return
     }
 
-    // RA2: One building at a time per Construction Yard
+    // Separate build queues: buildings, defenses, and units can build in parallel
+    // But within each category, only one at a time
     if (isBuildingTab) {
-      const alreadyBuilding = this.buildItems.some(
-        bi => (bi.tab === 'buildings' || bi.tab === 'defenses') && bi.id !== item.id && this.buildProgress.has(bi.id)
+      const sameCategory = this.buildItems.some(
+        bi => bi.tab === item.tab && bi.id !== item.id && this.buildProgress.has(bi.id)
       )
-      if (alreadyBuilding) {
-        this.showAlert('Already constructing a building', 'danger')
+      if (sameCategory) {
+        this.showAlert(`Already constructing a ${item.tab === 'defenses' ? 'defense' : 'building'}`, 'danger')
         return
       }
     }
