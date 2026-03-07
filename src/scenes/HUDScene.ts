@@ -8,7 +8,7 @@ import type { Player, GameState, FactionSide } from '../types'
 import { FogState, TILE_SIZE } from '../types'
 import { FACTIONS } from '../data/factions'
 import { UNIT_DEFS, getAvailableUnitIds } from '../entities/UnitDefs'
-import { BUILDING_DEFS, getAvailableBuildingIds, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
+import { BUILDING_DEFS, getAvailableBuildingIds, NEUTRAL_BUILDING_IDS, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
 import { cartToScreen, screenToCart, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond, getIsoWorldBounds } from '../engine/IsoUtils'
 
 // ── Layout constants ───────────────────────────────────────────────────
@@ -35,6 +35,7 @@ const SUPERWEAPON_TIMERS: Record<string, number> = {
   iron_curtain: 180000,    // 3 min
 }
 const SUPERWEAPON_IDS = new Set(Object.keys(SUPERWEAPON_TIMERS))
+const NEUTRAL_BUILDING_ID_SET = new Set(NEUTRAL_BUILDING_IDS)
 
 // ── Colours ────────────────────────────────────────────────────────────
 const HUD_BG      = 0x0a0a1a
@@ -86,7 +87,7 @@ function getBuildItems(factionId: string): BuildableItem[] {
   const buildingIds = getAvailableBuildingIds(factionId)
   for (const id of buildingIds) {
     const def = BUILDING_DEFS[id]
-    if (!def || id === 'construction_yard') continue // CY is never built from panel
+    if (!def || id === 'construction_yard' || NEUTRAL_BUILDING_ID_SET.has(id)) continue // CY + neutrals are never built from panel
     const tab: BuildTab = (def.category === 'defense') ? 'defenses' : 'buildings'
     items.push({
       id: def.id,
