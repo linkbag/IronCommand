@@ -451,50 +451,151 @@ export class Building extends Phaser.GameObjects.Container {
     return (r << 16) | (g << 8) | c
   }
 
-  private fillPolygon(g: Phaser.GameObjects.Graphics, points: Array<{ x: number; y: number }>): void {
-    if (points.length === 0) return
-    g.beginPath()
-    g.moveTo(points[0].x, points[0].y)
-    for (let i = 1; i < points.length; i++) g.lineTo(points[i].x, points[i].y)
-    g.closePath()
-    g.fillPath()
-  }
-
   private drawIsoBox(
     g: Phaser.GameObjects.Graphics,
     dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
     palette: { top: number; left: number; right: number; line: number },
   ): void {
-    const top = { x: 0, y: dims.topY - dims.halfH }
-    const right = { x: dims.halfW, y: dims.topY }
-    const bottom = { x: 0, y: dims.topY + dims.halfH }
-    const left = { x: -dims.halfW, y: dims.topY }
-    const leftBottom = { x: -dims.halfW, y: dims.baseY }
-    const rightBottom = { x: dims.halfW, y: dims.baseY }
-    const centerBottom = { x: 0, y: dims.baseY + dims.halfH }
+    const { halfW, halfH, baseY, topY } = dims
+
+    g.fillStyle(palette.top, 1)
+    g.fillTriangle(0, topY - halfH, halfW, topY, 0, topY + halfH)
+    g.fillTriangle(0, topY - halfH, -halfW, topY, 0, topY + halfH)
 
     g.fillStyle(palette.left, 1)
-    this.fillPolygon(g, [left, bottom, centerBottom, leftBottom])
-    g.fillStyle(palette.right, 1)
-    this.fillPolygon(g, [right, bottom, centerBottom, rightBottom])
-    g.fillStyle(palette.top, 1)
-    this.fillPolygon(g, [top, right, bottom, left])
+    g.fillTriangle(-halfW, topY, 0, topY + halfH, 0, baseY + halfH)
+    g.fillTriangle(-halfW, topY, 0, baseY + halfH, -halfW, baseY)
 
-    g.lineStyle(1, palette.line, 0.75)
-    g.strokeLineShape(new Phaser.Geom.Line(top.x, top.y, right.x, right.y))
-    g.strokeLineShape(new Phaser.Geom.Line(right.x, right.y, bottom.x, bottom.y))
-    g.strokeLineShape(new Phaser.Geom.Line(bottom.x, bottom.y, left.x, left.y))
-    g.strokeLineShape(new Phaser.Geom.Line(left.x, left.y, top.x, top.y))
-    g.strokeLineShape(new Phaser.Geom.Line(left.x, left.y, leftBottom.x, leftBottom.y))
-    g.strokeLineShape(new Phaser.Geom.Line(right.x, right.y, rightBottom.x, rightBottom.y))
-    g.strokeLineShape(new Phaser.Geom.Line(bottom.x, bottom.y, centerBottom.x, centerBottom.y))
+    g.fillStyle(palette.right, 1)
+    g.fillTriangle(halfW, topY, 0, topY + halfH, 0, baseY + halfH)
+    g.fillTriangle(halfW, topY, 0, baseY + halfH, halfW, baseY)
+
+    g.lineStyle(1, palette.line, 0.6)
+    g.lineBetween(0, topY - halfH, halfW, topY)
+    g.lineBetween(halfW, topY, 0, topY + halfH)
+    g.lineBetween(0, topY + halfH, -halfW, topY)
+    g.lineBetween(-halfW, topY, 0, topY - halfH)
+    g.lineBetween(-halfW, topY, -halfW, baseY)
+    g.lineBetween(halfW, topY, halfW, baseY)
+    g.lineBetween(0, topY + halfH, 0, baseY + halfH)
   }
 
   private drawDropShadow(dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number }): void {
     const s = this.dropShadow
     s.clear()
-    s.fillStyle(0x000000, 0.35)
-    s.fillEllipse(0, dims.baseY + 10, dims.halfW * 2.1, Math.max(12, dims.halfH * 1.5))
+    s.fillStyle(0x000000, 0.25)
+    s.fillEllipse(0, dims.baseY + 8, dims.halfW * 1.6, Math.max(8, dims.halfH * 1.05))
+  }
+
+  private fillQuad(
+    g: Phaser.GameObjects.Graphics,
+    p1: { x: number; y: number },
+    p2: { x: number; y: number },
+    p3: { x: number; y: number },
+    p4: { x: number; y: number },
+  ): void {
+    g.fillTriangle(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y)
+    g.fillTriangle(p1.x, p1.y, p3.x, p3.y, p4.x, p4.y)
+  }
+
+  private fillRectWithTriangles(g: Phaser.GameObjects.Graphics, x: number, y: number, w: number, h: number): void {
+    this.fillQuad(g, { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h })
+  }
+
+  private pointOnTopFace(
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    u: number,
+    v: number,
+  ): { x: number; y: number } {
+    return {
+      x: (u - v) * dims.halfW,
+      y: dims.topY + (u + v - 1) * dims.halfH,
+    }
+  }
+
+  private pointOnLeftWall(
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    u: number,
+    v: number,
+  ): { x: number; y: number } {
+    const left = { x: -dims.halfW, y: dims.topY }
+    const bottom = { x: 0, y: dims.topY + dims.halfH }
+    const leftBottom = { x: -dims.halfW, y: dims.baseY }
+    return {
+      x: left.x + (bottom.x - left.x) * u + (leftBottom.x - left.x) * v,
+      y: left.y + (bottom.y - left.y) * u + (leftBottom.y - left.y) * v,
+    }
+  }
+
+  private pointOnRightWall(
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    u: number,
+    v: number,
+  ): { x: number; y: number } {
+    const right = { x: dims.halfW, y: dims.topY }
+    const bottom = { x: 0, y: dims.topY + dims.halfH }
+    const rightBottom = { x: dims.halfW, y: dims.baseY }
+    return {
+      x: right.x + (bottom.x - right.x) * u + (rightBottom.x - right.x) * v,
+      y: right.y + (bottom.y - right.y) * u + (rightBottom.y - right.y) * v,
+    }
+  }
+
+  private fillLeftWallQuad(
+    g: Phaser.GameObjects.Graphics,
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    u0: number,
+    u1: number,
+    v0: number,
+    v1: number,
+  ): void {
+    const p1 = this.pointOnLeftWall(dims, u0, v0)
+    const p2 = this.pointOnLeftWall(dims, u1, v0)
+    const p3 = this.pointOnLeftWall(dims, u1, v1)
+    const p4 = this.pointOnLeftWall(dims, u0, v1)
+    this.fillQuad(g, p1, p2, p3, p4)
+  }
+
+  private fillRightWallQuad(
+    g: Phaser.GameObjects.Graphics,
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    u0: number,
+    u1: number,
+    v0: number,
+    v1: number,
+  ): void {
+    const p1 = this.pointOnRightWall(dims, u0, v0)
+    const p2 = this.pointOnRightWall(dims, u1, v0)
+    const p3 = this.pointOnRightWall(dims, u1, v1)
+    const p4 = this.pointOnRightWall(dims, u0, v1)
+    this.fillQuad(g, p1, p2, p3, p4)
+  }
+
+  private drawTopPrism(
+    g: Phaser.GameObjects.Graphics,
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    u0: number,
+    v0: number,
+    u1: number,
+    v1: number,
+    height: number,
+    colors: { top: number; left: number; right: number },
+  ): void {
+    const b00 = this.pointOnTopFace(dims, u0, v0)
+    const b10 = this.pointOnTopFace(dims, u1, v0)
+    const b11 = this.pointOnTopFace(dims, u1, v1)
+    const b01 = this.pointOnTopFace(dims, u0, v1)
+    const t00 = { x: b00.x, y: b00.y - height }
+    const t10 = { x: b10.x, y: b10.y - height }
+    const t11 = { x: b11.x, y: b11.y - height }
+    const t01 = { x: b01.x, y: b01.y - height }
+
+    g.fillStyle(colors.left, 1)
+    this.fillQuad(g, t01, t11, b11, b01)
+    g.fillStyle(colors.right, 1)
+    this.fillQuad(g, t10, t11, b11, b10)
+    g.fillStyle(colors.top, 1)
+    this.fillQuad(g, t00, t10, t11, t01)
   }
 
   private drawBuildingDetails(
@@ -509,8 +610,11 @@ export class Building extends Phaser.GameObjects.Container {
 
     switch (this.def.id) {
       case 'construction_yard':
-        g.fillStyle(0xd8bf57, 0.95)
-        g.fillRect(hw * 0.35, roofY - hh * 1.1, 5, hh * 1.8)
+        this.drawTopPrism(g, dims, 0.7, 0.28, 0.8, 0.38, hh * 1.25, {
+          top: 0xf1dd7f,
+          left: 0xd8bf57,
+          right: 0xaa953e,
+        })
         g.fillTriangle(hw * 0.37, roofY - hh * 1.05, -hw * 0.2, roofY - hh * 1.15, hw * 0.85, roofY - hh * 1.3)
         g.lineStyle(1, 0xd9d9d9, 0.6)
         for (let i = 0; i < 4; i++) {
@@ -520,7 +624,7 @@ export class Building extends Phaser.GameObjects.Container {
         return
       case 'barracks':
         g.fillStyle(0x1d2a1f, 0.82)
-        g.fillRect(-hw * 0.16, wallBottom - hh * 0.85, hw * 0.32, hh * 0.82)
+        this.fillLeftWallQuad(g, dims, 0.28, 0.5, 0.46, 0.84)
         g.lineStyle(2, 0xc4c4c4, 0.9)
         g.lineBetween(hw * 0.52, roofY - hh * 0.75, hw * 0.52, roofY - hh * 1.3)
         g.fillStyle(0x6e7d2d, 0.95)
@@ -528,17 +632,20 @@ export class Building extends Phaser.GameObjects.Container {
         return
       case 'war_factory':
         g.fillStyle(0x343434, 0.85)
-        g.fillRect(-hw * 0.5, wallBottom - hh * 1.0, hw * 1.0, hh * 0.95)
+        this.fillRightWallQuad(g, dims, 0.2, 0.84, 0.28, 0.9)
         g.lineStyle(1.5, 0x7b7b7b, 0.9)
         for (let y = wallBottom - hh * 0.95; y <= wallBottom - hh * 0.1; y += 4) {
           g.lineBetween(-hw * 0.48, y, hw * 0.48, y)
         }
-        g.fillStyle(0x4b4b4b, 1)
-        g.fillRect(hw * 0.56, roofY - hh * 0.95, 7, hh * 1.3)
+        this.drawTopPrism(g, dims, 0.82, 0.22, 0.9, 0.3, hh * 1.1, {
+          top: 0x7a7a7a,
+          left: 0x595959,
+          right: 0x4b4b4b,
+        })
         g.fillStyle(0x909090, 0.45)
         g.fillCircle(hw * 0.6, roofY - hh * 1.1, 5)
         g.fillStyle(0x605949, 0.8)
-        g.fillRect(-hw * 0.8, wallBottom - hh * 0.35, hw * 0.42, 4)
+        this.fillRectWithTriangles(g, -hw * 0.8, wallBottom - hh * 0.35, hw * 0.42, 4)
         return
       case 'ore_refinery':
         g.fillStyle(0x8f6f2c, 0.88)
@@ -549,27 +656,40 @@ export class Building extends Phaser.GameObjects.Container {
         g.fillCircle(-hw * 0.72, wallBottom - hh * 0.2, 2)
         g.fillCircle(-hw * 0.61, wallBottom - hh * 0.15, 2)
         g.fillStyle(0x2f2f2f, 0.85)
-        g.fillRect(hw * 0.1, wallBottom - hh * 0.9, hw * 0.5, hh * 0.82)
+        this.fillRightWallQuad(g, dims, 0.28, 0.72, 0.35, 0.86)
         return
       case 'power_plant':
         g.fillStyle(0x86b8a2, 0.95)
         g.fillEllipse(0, roofY - hh * 0.3, hw * 1.1, hh * 0.9)
-        g.fillStyle(0x3b5450, 0.95)
-        g.fillRect(hw * 0.42, roofY - hh * 0.9, 5, hh * 0.95)
-        g.fillRect(hw * 0.6, roofY - hh * 0.8, 4, hh * 0.8)
+        this.drawTopPrism(g, dims, 0.72, 0.2, 0.79, 0.28, hh * 0.95, {
+          top: 0x5f7673,
+          left: 0x4f6764,
+          right: 0x3b5450,
+        })
+        this.drawTopPrism(g, dims, 0.82, 0.18, 0.88, 0.24, hh * 0.82, {
+          top: 0x5f7673,
+          left: 0x4f6764,
+          right: 0x3b5450,
+        })
         return
       case 'tesla_reactor':
         g.fillStyle(0x3d4248, 1)
         g.fillEllipse(0, roofY - hh * 0.25, hw * 1.08, hh * 0.86)
-        g.fillStyle(0x8f2020, 0.95)
-        g.fillRect(0, roofY - hh * 1.0, 4, hh * 0.7)
+        this.drawTopPrism(g, dims, 0.51, 0.48, 0.56, 0.53, hh * 0.72, {
+          top: 0xb44444,
+          left: 0xa53535,
+          right: 0x8f2020,
+        })
         g.lineStyle(1.2, 0x6ab4ff, 0.9)
         g.lineBetween(2, roofY - hh * 1.0, -8, roofY - hh * 1.2)
         g.lineBetween(-8, roofY - hh * 1.2, 7, roofY - hh * 1.27)
         return
       case 'air_force_command':
-        g.fillStyle(0x4c5b6f, 0.95)
-        g.fillRect(-hw * 0.14, roofY - hh * 1.25, hw * 0.28, hh * 1.2)
+        this.drawTopPrism(g, dims, 0.44, 0.44, 0.56, 0.56, hh * 1.18, {
+          top: 0x6f8094,
+          left: 0x58697e,
+          right: 0x4c5b6f,
+        })
         g.fillStyle(0xa5b6c9, 0.95)
         g.fillCircle(0, roofY - hh * 1.35, 7)
         g.lineStyle(1.3, 0x7fb3ff, 0.65)
@@ -579,8 +699,11 @@ export class Building extends Phaser.GameObjects.Container {
         g.lineBetween(-hw * 0.45, roofY - hh * 0.42, hw * 0.45, roofY - hh * 0.06)
         return
       case 'radar_tower':
-        g.fillStyle(0x464646, 0.95)
-        g.fillRect(-4, roofY - hh * 1.4, 8, hh * 1.45)
+        this.drawTopPrism(g, dims, 0.48, 0.48, 0.55, 0.55, hh * 1.35, {
+          top: 0x5b5b5b,
+          left: 0x515151,
+          right: 0x464646,
+        })
         g.fillStyle(0x93a9bd, 0.95)
         g.fillEllipse(0, roofY - hh * 1.48, hw * 0.7, hh * 0.45)
         g.lineStyle(1, 0xdceeff, 0.65)
@@ -608,8 +731,11 @@ export class Building extends Phaser.GameObjects.Container {
         g.lineBetween(hw * 0.26, roofY - hh * 0.7, hw * 0.5, roofY - hh * 0.7)
         return
       case 'tesla_coil':
-        g.fillStyle(0x3f4752, 1)
-        g.fillRect(-5, roofY - hh * 1.5, 10, hh * 1.52)
+        this.drawTopPrism(g, dims, 0.46, 0.46, 0.56, 0.56, hh * 1.4, {
+          top: 0x586372,
+          left: 0x495362,
+          right: 0x3f4752,
+        })
         g.fillStyle(0x9fb6cc, 0.95)
         g.fillCircle(0, roofY - hh * 1.55, 4)
         g.lineStyle(1.6, 0x77beff, 1)
@@ -618,8 +744,11 @@ export class Building extends Phaser.GameObjects.Container {
         g.lineBetween(8, roofY - hh * 1.97, -4, roofY - hh * 1.72)
         return
       case 'prism_tower':
-        g.fillStyle(0x46505b, 0.98)
-        g.fillRect(-4, roofY - hh * 1.45, 8, hh * 1.45)
+        this.drawTopPrism(g, dims, 0.48, 0.48, 0.56, 0.56, hh * 1.35, {
+          top: 0x5c6773,
+          left: 0x505a66,
+          right: 0x46505b,
+        })
         g.fillStyle(0xa8e6ff, 0.96)
         g.fillTriangle(0, roofY - hh * 1.9, -9, roofY - hh * 1.45, 9, roofY - hh * 1.45)
         g.lineStyle(1.2, 0xe5fbff, 0.85)
@@ -633,13 +762,13 @@ export class Building extends Phaser.GameObjects.Container {
         g.fillStyle(0x6d6d6d, 0.92)
         g.fillEllipse(0, roofY - hh * 0.22, hw * 0.92, hh * 0.72)
         g.fillStyle(0x303030, 1)
-        g.fillRect(hw * 0.2, roofY - hh * 0.38, hw * 0.42, 4)
+        this.fillRectWithTriangles(g, hw * 0.2, roofY - hh * 0.38, hw * 0.42, 4)
         g.lineStyle(1, 0xa59172, 0.6)
         g.lineBetween(-hw * 0.5, dims.baseY + hh * 0.2, hw * 0.5, dims.baseY + hh * 0.2)
         return
       case 'fortress_wall':
         g.fillStyle(0x8a8a8a, 0.9)
-        g.fillRect(-hw * 0.75, wallBottom - hh * 0.55, hw * 1.5, hh * 0.42)
+        this.fillRectWithTriangles(g, -hw * 0.75, wallBottom - hh * 0.55, hw * 1.5, hh * 0.42)
         g.lineStyle(1, 0x676767, 0.8)
         g.lineBetween(-hw * 0.55, wallBottom - hh * 0.2, -hw * 0.3, wallBottom - hh * 0.35)
         g.lineBetween(hw * 0.3, wallBottom - hh * 0.35, hw * 0.55, wallBottom - hh * 0.2)
@@ -657,11 +786,14 @@ export class Building extends Phaser.GameObjects.Container {
         return
       case 'nuclear_silo':
         g.fillStyle(0x3d3d3d, 0.9)
-        g.fillRect(-hw * 0.36, roofY - hh * 0.2, hw * 0.72, hh * 0.26)
+        this.fillRectWithTriangles(g, -hw * 0.36, roofY - hh * 0.2, hw * 0.72, hh * 0.26)
         g.lineStyle(1.4, 0xcfa34a, 0.9)
         g.lineBetween(-hw * 0.32, roofY - hh * 0.08, hw * 0.32, roofY - hh * 0.08)
-        g.fillStyle(0x5a5a5a, 0.92)
-        g.fillRect(-hw * 0.08, roofY - hh * 1.15, hw * 0.16, hh * 1.05)
+        this.drawTopPrism(g, dims, 0.45, 0.45, 0.55, 0.55, hh * 1.02, {
+          top: 0x6f6f6f,
+          left: 0x646464,
+          right: 0x5a5a5a,
+        })
         g.lineStyle(1.2, 0xd94747, 0.8)
         g.lineBetween(-hw * 0.58, wallBottom - hh * 0.14, -hw * 0.2, wallBottom - hh * 0.26)
         g.lineBetween(hw * 0.2, wallBottom - hh * 0.26, hw * 0.58, wallBottom - hh * 0.14)
@@ -679,8 +811,11 @@ export class Building extends Phaser.GameObjects.Container {
         g.strokeCircle(0, roofY - hh * 0.3, Math.max(6, hw * 0.2))
         break
       case 'defense':
-        g.fillStyle(0x393939, 0.95)
-        g.fillRect(-2, roofY - hh * 0.75, 4, hh * 0.72)
+        this.drawTopPrism(g, dims, 0.49, 0.49, 0.54, 0.54, hh * 0.72, {
+          top: 0x4c4c4c,
+          left: 0x444444,
+          right: 0x393939,
+        })
         break
       case 'tech':
         g.lineStyle(1.2, 0x8dc6ff, 0.8)
