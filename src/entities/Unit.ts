@@ -6,7 +6,7 @@
 
 import Phaser from 'phaser'
 import type { UnitDef, Order, TileCoord, Position } from '../types'
-import { TILE_SIZE } from '../types'
+import { TILE_SIZE, HARVESTER_CAPACITY, ORE_PER_LOAD, GEMS_PER_LOAD, ORE_HARVEST_RATE, REFINERY_PROCESS_RATE } from '../types'
 import { cartToScreen } from '../engine/IsoUtils'
 
 export type UnitState = 'idle' | 'moving' | 'attacking' | 'harvesting' | 'dying'
@@ -75,7 +75,9 @@ export class Unit extends Phaser.GameObjects.Container {
 
   // Harvest state
   private harvestTimer: number
-  private cargoAmount: number
+  private cargoLoads: number
+  private cargoValue: number
+  private unloadTimer: number
   private harvestCapacity: number
   private refineryId: string | null
 
@@ -120,8 +122,10 @@ export class Unit extends Phaser.GameObjects.Container {
     this.target = null
 
     this.harvestTimer = 0
-    this.cargoAmount = 0
-    this.harvestCapacity = 1500
+    this.cargoLoads = 0
+    this.cargoValue = 0
+    this.unloadTimer = 0
+    this.harvestCapacity = HARVESTER_CAPACITY
     this.refineryId = null
 
     this.isSelected = false
@@ -218,11 +222,12 @@ export class Unit extends Phaser.GameObjects.Container {
   }
 
   getCargoAmount(): number {
-    return this.cargoAmount
+    return this.cargoValue
   }
 
   setCargoAmount(amount: number): void {
-    this.cargoAmount = amount
+    this.cargoValue = Math.max(0, Math.floor(amount))
+    this.cargoLoads = Math.min(this.harvestCapacity, Math.ceil(this.cargoValue / ORE_PER_LOAD))
   }
 
   /** RA2 Veterancy: record a kill and rank up if threshold met */
@@ -239,12 +244,27 @@ export class Unit extends Phaser.GameObjects.Container {
 
   /** RA2 Veterancy damage multiplier: 1.0 / 1.2 / 1.5 */
   getVeterancyDamageMultiplier(): number {
-    return this.veterancy >= 2 ? 1.5 : this.veterancy >= 1 ? 1.2 : 1.0
+    return this.veterancy >= 2 ? 1.5 : this.veterancy >= 1 ? 1.25 : 1.0
   }
 
   /** RA2 Veterancy fire rate multiplier: 1.0 / 1.1 / 1.2 */
   getVeterancyFireRateMultiplier(): number {
     return this.veterancy >= 2 ? 1.2 : this.veterancy >= 1 ? 1.1 : 1.0
+  }
+
+  /** RA2 veterancy armor bonus: 1.0 / 1.25 / 1.5 */
+  getVeterancyArmorMultiplier(): number {
+    return this.veterancy >= 2 ? 1.5 : this.veterancy >= 1 ? 1.25 : 1.0
+  }
+
+  /** Force veterancy rank (used by spy infiltration bonuses) */
+  setVeterancy(rank: 0 | 1 | 2): void {
+    const oldRank = this.veterancy
+    this.veterancy = rank
+    this.kills = rank >= 2 ? Math.max(this.kills, 7) : rank >= 1 ? Math.max(this.kills, 3) : this.kills
+    if (this.veterancy > oldRank) {
+      this.emit('unit_promoted', this, this.veterancy)
+    }
   }
 
   /** Iron Curtain: make unit invulnerable for durationMs */
@@ -310,6 +330,11 @@ export class Unit extends Phaser.GameObjects.Container {
         // Visibility will be handled by GameScene.updateEntityVisibility
         this.emit('stealth_changed', this, this.stealthed)
       }
+    }
+
+    // Elite self-heal (RA2): slow passive regeneration while alive.
+    if (this.veterancy >= 2 && this.hp > 0 && this.hp < this.def.stats.maxHp) {
+      this.heal((delta / 1000) * 4)
     }
 
     switch (this.state) {
@@ -757,30 +782,38 @@ export class Unit extends Phaser.GameObjects.Container {
   // ── Private: harvest ─────────────────────────────────────────
 
   private updateHarvest(delta: number): void {
-    const HARVEST_TIME = 3000  // ms per harvest action
+    const HARVEST_TIME = 1000  // ms per load
     const DUMP_RANGE = TILE_SIZE * 3
 
-    // Priority: if we're near a refinery with cargo, unload immediately.
-    // This must run before the "cargo full" branch, otherwise the harvester
-    // can get stuck re-issuing return-to-refinery without ever dumping.
-    if (this.cargoAmount > 0 && this.refineryId) {
+    // Priority: if we're near a refinery with cargo, process unloading at 1 load/sec.
+    if (this.cargoLoads > 0 && this.refineryId) {
       this.emit('get_entity_pos', this.refineryId, (pos: Position | null) => {
         if (pos) {
           const dist = Phaser.Math.Distance.Between(this.x, this.y, pos.x, pos.y)
           if (dist < DUMP_RANGE) {
-            // Dump cargo
-            this.emit('dump_ore', this.playerId, this.cargoAmount)
-            this.cargoAmount = 0
-            // Go back to ore
-            this.emit('find_ore_field', this.x, this.y, (target: Position | null) => {
-              if (target) this.startMoveTo(target)
-            })
+            this.unloadTimer += delta
+            const unloadIntervalMs = 1000 / Math.max(0.01, REFINERY_PROCESS_RATE)
+            while (this.unloadTimer >= unloadIntervalMs && this.cargoLoads > 0) {
+              this.unloadTimer -= unloadIntervalMs
+              const perLoad = Math.max(1, Math.round(this.cargoValue / this.cargoLoads))
+              this.emit('dump_ore', this.playerId, perLoad)
+              this.cargoValue = Math.max(0, this.cargoValue - perLoad)
+              this.cargoLoads--
+            }
+            if (this.cargoLoads <= 0) {
+              this.cargoLoads = 0
+              this.cargoValue = 0
+              this.unloadTimer = 0
+              this.emit('find_ore_field', this.x, this.y, (target: Position | null) => {
+                if (target) this.startMoveTo(target)
+              })
+            }
           }
         }
       })
     }
 
-    if (this.cargoAmount >= this.harvestCapacity) {
+    if (this.cargoLoads >= this.harvestCapacity) {
       // Full — return to refinery
       this.emit('find_refinery', this.playerId, (ref: IEntityRef | null) => {
         if (ref) {
@@ -788,16 +821,10 @@ export class Unit extends Phaser.GameObjects.Container {
           if (this.def.id === 'chrono_miner') {
             // Chrono Miner signature behavior: teleport back to refinery to unload.
             this.setPosition(ref.x, ref.y)
-            this.emit('dump_ore', this.playerId, this.cargoAmount)
-            this.cargoAmount = 0
-            console.log('[ChronoMiner] Teleported to refinery and unloaded ore', {
+            console.log('[ChronoMiner] Teleported to refinery for unload', {
               unitId: this.id,
               refineryId: ref.id,
               playerId: this.playerId,
-            })
-            this.emit('find_ore_field', this.x, this.y, (target: Position | null) => {
-              if (target) this.startMoveTo(target)
-              else this.state = 'idle'
             })
             return
           }
@@ -811,17 +838,13 @@ export class Unit extends Phaser.GameObjects.Container {
 
     // Check if adjacent to an ore tile
     this.emit('check_ore_at', this.x, this.y, (oreAmount: number, tilePos: Position, isGems?: boolean) => {
-      if (oreAmount > 0 && this.cargoAmount < this.harvestCapacity) {
+      if (oreAmount > 0 && this.cargoLoads < this.harvestCapacity) {
         this.harvestTimer += delta
         if (this.harvestTimer >= HARVEST_TIME) {
           this.harvestTimer = 0
-          // New ore system: extract up to 100 ore units per tick
-          // Credit value: 100 for ore, 200 for gems
-          const extractRate = 100
-          const creditValue = isGems ? 200 : 100
-          const harvested = Math.min(creditValue, this.harvestCapacity - this.cargoAmount)
-          this.cargoAmount += harvested
-          this.emit('harvest_ore', tilePos, extractRate)
+          this.cargoLoads += 1
+          this.cargoValue += isGems ? GEMS_PER_LOAD : ORE_PER_LOAD
+          this.emit('harvest_ore', tilePos, ORE_HARVEST_RATE)
         }
       } else if (oreAmount <= 0) {
         // No ore here — find next ore field

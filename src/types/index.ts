@@ -104,15 +104,29 @@ export interface AttackStats {
 export enum DamageType {
   BULLET = 'bullet',
   EXPLOSIVE = 'explosive',
+  HE = 'he',
+  AP = 'ap',
   FIRE = 'fire',
   ELECTRIC = 'electric',
+  RADIATION = 'radiation',
   MISSILE = 'missile',
+}
+
+export enum ArmorType {
+  NONE = 'none',
+  LIGHT = 'light',
+  MEDIUM = 'medium',
+  HEAVY = 'heavy',
+  WOOD = 'wood',
+  STEEL = 'steel',
+  CONCRETE = 'concrete',
 }
 
 export interface UnitDef {
   id: string
   name: string
   category: UnitCategory
+  armorType?: ArmorType
   side: FactionSide | null    // null = available to both sides (e.g. Engineer, MCV)
   stats: EntityStats
   attack: AttackStats | null  // null = non-combat (e.g. harvester)
@@ -124,6 +138,7 @@ export interface BuildingDef {
   id: string
   name: string
   category: BuildingCategory
+  armorType?: ArmorType
   side: FactionSide | null    // null = available to both sides
   stats: EntityStats
   attack: AttackStats | null  // null = non-defensive
@@ -199,15 +214,17 @@ export const ISO_TILE_H = 32   // isometric diamond height
 export const MAP_DEFAULT_WIDTH = 128
 export const MAP_DEFAULT_HEIGHT = 128
 export const STARTING_CREDITS = 10000
-export const ORE_PER_LOAD = 500
-export const HARVESTER_CAPACITY = 1500
+export const ORE_PER_LOAD = 25
+export const GEMS_PER_LOAD = 50
+export const HARVESTER_CAPACITY = 20
+export const REFINERY_PROCESS_RATE = 1 // loads/sec
 export const POWER_LOW_THRESHOLD = 0.5  // build/production slows below this
 
 // ── Ore system constants ─────────────────────────────────────
 export const ORE_TILE_MAX = 2000        // max ore amount per tile
 export const GEMS_TILE_MAX = 3000       // max gems amount per tile
-export const ORE_HARVEST_VALUE = 100    // credits per harvest tick from ore
-export const GEMS_HARVEST_VALUE = 200   // credits per harvest tick from gems
-export const ORE_HARVEST_RATE = 100     // ore units extracted per harvest tick
+export const ORE_HARVEST_VALUE = ORE_PER_LOAD
+export const GEMS_HARVEST_VALUE = GEMS_PER_LOAD
+export const ORE_HARVEST_RATE = 100     // ore units extracted per load
 export const ORE_REGEN_RATE = 20        // ore units regenerated per tick (20% of mining speed)
 export const NEUTRAL_PLAYER_ID = -1     // neutral/capturable buildings

@@ -22,6 +22,7 @@ export class Production extends Phaser.Events.EventEmitter {
   // Primary production building per category per player
   // Key: "playerId:category" (e.g., "0:barracks"), Value: buildingId
   private primaryProducers: Map<string, string> = new Map()
+  private spyVeterancyBonus: Map<number, { infantry: boolean; vehicles: boolean }> = new Map()
 
   constructor(entityManager: EntityManager, economy: Economy) {
     super()
@@ -44,7 +45,7 @@ export class Production extends Phaser.Events.EventEmitter {
   ): boolean {
     // Validate the producer building exists
     const producer = this.em.getBuilding(producerId)
-    if (!producer || producer.playerId !== playerId || producer.state !== 'active') {
+    if (!producer || producer.playerId !== playerId || (producer.state !== 'active' && producer.state !== 'low_power')) {
       return false
     }
 
@@ -208,7 +209,7 @@ export class Production extends Phaser.Events.EventEmitter {
     const buildings = this.em.getBuildingsForPlayer(playerId)
 
     for (const building of buildings) {
-      if (building.state !== 'active') continue
+      if (building.state !== 'active' && building.state !== 'low_power') continue
       const queue = this.queues.get(building.id)
       if (!queue || queue.length === 0) continue
 
@@ -219,7 +220,7 @@ export class Production extends Phaser.Events.EventEmitter {
       // RA2-style: multiple same-type production buildings grant speed bonus
       // Each extra building of the same type adds +35% production speed (diminishing)
       const sameTypeCount = buildings.filter(
-        b => b.def.id === building.def.id && b.state === 'active'
+        b => b.def.id === building.def.id && (b.state === 'active' || b.state === 'low_power')
       ).length
       const multiFactoryBonus = 1 + (sameTypeCount - 1) * 0.35
 
@@ -256,6 +257,14 @@ export class Production extends Phaser.Events.EventEmitter {
       }
       const unit = this.em.createUnit(playerId, defId, spawnPos.x, spawnPos.y)
       if (unit) {
+        const bonus = this.spyVeterancyBonus.get(playerId)
+        if (bonus?.infantry && unit.def.category === 'infantry') {
+          unit.setVeterancy(1)
+        }
+        if (bonus?.vehicles && (unit.def.category === 'vehicle' || unit.def.category === 'harvester' || unit.def.category === 'naval')) {
+          unit.setVeterancy(1)
+        }
+
         // Auto-harvest if harvester
         if (unit.def.category === 'harvester') {
           const refinery = this.em.getNearestRefinery(unit.x, unit.y, playerId)
@@ -301,7 +310,7 @@ export class Production extends Phaser.Events.EventEmitter {
     // Validate it still exists and is active
     if (primaryId) {
       const building = this.em.getBuilding(primaryId)
-      if (building && building.state === 'active' && building.playerId === playerId) {
+      if (building && (building.state === 'active' || building.state === 'low_power') && building.playerId === playerId) {
         return primaryId
       }
       // Primary is dead/invalid — clear it
@@ -310,7 +319,7 @@ export class Production extends Phaser.Events.EventEmitter {
 
     // Fallback: first active building of this type
     const fallback = this.em.getBuildingsForPlayer(playerId)
-      .find(b => b.def.id === producerDefId && b.state === 'active')
+      .find(b => b.def.id === producerDefId && (b.state === 'active' || b.state === 'low_power'))
     if (fallback) {
       this.primaryProducers.set(key, fallback.id)
       return fallback.id
@@ -332,8 +341,15 @@ export class Production extends Phaser.Events.EventEmitter {
    */
   getSpeedBonus(playerId: number, producerDefId: string): number {
     const count = this.em.getBuildingsForPlayer(playerId)
-      .filter(b => b.def.id === producerDefId && b.state === 'active').length
+      .filter(b => b.def.id === producerDefId && (b.state === 'active' || b.state === 'low_power')).length
     return 1 + (count - 1) * 0.35
+  }
+
+  grantSpyVeterancyBonus(playerId: number, targetDefId: string): void {
+    const existing = this.spyVeterancyBonus.get(playerId) ?? { infantry: false, vehicles: false }
+    if (targetDefId === 'barracks') existing.infantry = true
+    if (targetDefId === 'war_factory') existing.vehicles = true
+    this.spyVeterancyBonus.set(playerId, existing)
   }
 
   // ── Getters ──────────────────────────────────────────────────
