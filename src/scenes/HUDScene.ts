@@ -9,6 +9,7 @@ import { FogState, TILE_SIZE } from '../types'
 import { FACTIONS } from '../data/factions'
 import { UNIT_DEFS, getAvailableUnitIds } from '../entities/UnitDefs'
 import { BUILDING_DEFS, getAvailableBuildingIds, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
+import { cartToIso, isoToCart, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond, getIsoWorldBounds } from '../engine/IsoUtils'
 
 // ── Layout constants ───────────────────────────────────────────────────
 const SIDEBAR_W       = 220
@@ -303,8 +304,13 @@ export class HUDScene extends Phaser.Scene {
       const rx = ptr.x - x
       const ry = ptr.y - y
       const map = this.gameState.map
-      const wx = Phaser.Math.Clamp((rx / w) * map.width * TILE_SIZE, 0, map.width * TILE_SIZE - 1)
-      const wy = Phaser.Math.Clamp((ry / h) * map.height * TILE_SIZE, 0, map.height * TILE_SIZE - 1)
+      const bounds = getIsoWorldBounds(map.width, map.height)
+      const isoX = Phaser.Math.Clamp((rx / w) * bounds.width - bounds.offsetX, -bounds.offsetX, bounds.width - bounds.offsetX)
+      const isoY = Phaser.Math.Clamp((ry / h) * bounds.height, 0, bounds.height)
+      const cart = isoToCart(isoX, isoY)
+      const wx = Phaser.Math.Clamp(cart.x, 0, map.width * TILE_SIZE - 1)
+      const wy = Phaser.Math.Clamp(cart.y, 0, map.height * TILE_SIZE - 1)
+      const isoCenter = cartToIso(wx, wy)
 
       if ((ptr.button ?? 0) === 2 || ptr.rightButtonDown()) {
         const selectedIds = (this.registry.get('selectedIds') as string[]) ?? []
@@ -321,8 +327,8 @@ export class HUDScene extends Phaser.Scene {
         return
       }
 
-      this.registry.set('camTargetX', wx - this.sidebarX / 2)
-      this.registry.set('camTargetY', wy - this.scale.height / 2)
+      this.registry.set('camTargetX', isoCenter.x - this.sidebarX / 2)
+      this.registry.set('camTargetY', isoCenter.y - this.scale.height / 2)
     })
   }
 
@@ -1428,10 +1434,9 @@ export class HUDScene extends Phaser.Scene {
     if (!ptr.leftButtonDown()) return
     if (ptr.x >= this.sidebarX) return           // clicked sidebar
 
-    const camX   = (this.registry.get('camX') as number) ?? 0
-    const camY   = (this.registry.get('camY') as number) ?? 0
-    const tileCol = Math.floor((ptr.x + camX) / 32)
-    const tileRow = Math.floor((ptr.y + camY) / 32)
+    const world = this.pointerScreenToCart(ptr.x, ptr.y)
+    const tileCol = Math.floor(world.x / TILE_SIZE)
+    const tileRow = Math.floor(world.y / TILE_SIZE)
 
     // Pre-check validity — don't exit placement if invalid
     const canPlace = this.registry.get('canPlaceBuilding') as
@@ -1459,10 +1464,9 @@ export class HUDScene extends Phaser.Scene {
     if (!ptr.leftButtonDown()) return
     if (ptr.x >= this.sidebarX) return
 
-    const camX = (this.registry.get('camX') as number) ?? 0
-    const camY = (this.registry.get('camY') as number) ?? 0
-    const worldX = ptr.x + camX
-    const worldY = ptr.y + camY
+    const world = this.pointerScreenToCart(ptr.x, ptr.y)
+    const worldX = world.x
+    const worldY = world.y
 
     const gs = this.scene.get('GameScene')
     if (gs) {
@@ -1660,8 +1664,9 @@ export class HUDScene extends Phaser.Scene {
     if (!this.gameState?.map) return
 
     const map    = this.gameState.map
-    const scaleX = this.mmW / map.width
-    const scaleY = this.mmH / map.height
+    const bounds = getIsoWorldBounds(map.width, map.height)
+    const scaleX = this.mmW / bounds.width
+    const scaleY = this.mmH / bounds.height
     const ox     = this.sidebarX + 4
     const oy     = this.minimapY
 
@@ -1686,6 +1691,8 @@ export class HUDScene extends Phaser.Scene {
       }
       // Sample every Nth tile for performance
       const step = Math.max(1, Math.floor(1 / Math.max(scaleX, scaleY)))
+      const miniTileW = Math.max(1, ISO_TILE_W * scaleX)
+      const miniTileH = Math.max(1, ISO_TILE_H * scaleY)
       for (let row = 0; row < map.height; row += step) {
         for (let col = 0; col < map.width; col += step) {
           const tile = map.tiles[row]?.[col]
@@ -1695,13 +1702,12 @@ export class HUDScene extends Phaser.Scene {
             tile.fogState === FogState.HIDDEN ? 0x000000
             : tile.fogState === FogState.EXPLORED ? dimColor(terrainColor)
             : terrainColor
+          const iso = cartToIso(col * TILE_SIZE, row * TILE_SIZE)
+          const mx = ox + (iso.x + bounds.offsetX) * scaleX
+          const my = oy + iso.y * scaleY
           tg.fillStyle(color, 1)
-          tg.fillRect(
-            ox + col * scaleX,
-            oy + row * scaleY,
-            Math.ceil(scaleX * step),
-            Math.ceil(scaleY * step),
-          )
+          drawIsoDiamond(tg, mx - miniTileW / 2, my, miniTileW * step, miniTileH * step)
+          tg.fillPath()
         }
       }
     }
@@ -1724,8 +1730,9 @@ export class HUDScene extends Phaser.Scene {
 
         // Friendly = green, enemy = red for clear minimap contrast.
         const color = isOwn ? 0x4ade80 : 0xe94560
-        const mx = ox + (e.x / 32) * scaleX
-        const my = oy + (e.y / 32) * scaleY
+        const iso = cartToIso(e.x, e.y)
+        const mx = ox + (iso.x + bounds.offsetX) * scaleX
+        const my = oy + iso.y * scaleY
         const sz = e.type === 'building' ? 3 : 2
         g.fillStyle(color, 1)
         g.fillRect(mx - sz / 2, my - sz / 2, sz, sz)
@@ -1735,10 +1742,10 @@ export class HUDScene extends Phaser.Scene {
     // Camera viewport rectangle (white)
     const camX = (this.registry.get('camX') as number) ?? 0
     const camY = (this.registry.get('camY') as number) ?? 0
-    const vw   = (this.sidebarX / 32) * scaleX
-    const vh   = (this.scale.height / 32) * scaleY
-    const vx   = ox + (camX / 32) * scaleX
-    const vy   = oy + (camY / 32) * scaleY
+    const vw   = this.sidebarX * scaleX
+    const vh   = this.scale.height * scaleY
+    const vx   = ox + camX * scaleX
+    const vy   = oy + camY * scaleY
     g.lineStyle(1, 0xffffff, 0.6)
     g.strokeRect(vx, vy, vw, vh)
   }
@@ -2032,12 +2039,15 @@ export class HUDScene extends Phaser.Scene {
     this.ghost.setVisible(true)
     this.ghostLabel.setVisible(true)
 
-    const camX    = (this.registry.get('camX') as number) ?? 0
-    const camY    = (this.registry.get('camY') as number) ?? 0
-    const tileCol = Math.floor((ptr.x + camX) / 32)
-    const tileRow = Math.floor((ptr.y + camY) / 32)
-    const snapX   = tileCol * 32 - camX
-    const snapY   = tileRow * 32 - camY
+    const camX = (this.registry.get('camX') as number) ?? 0
+    const camY = (this.registry.get('camY') as number) ?? 0
+    const world = this.pointerScreenToCart(ptr.x, ptr.y)
+    const tileCol = Math.floor(world.x / TILE_SIZE)
+    const tileRow = Math.floor(world.y / TILE_SIZE)
+    const tileToScreen = (col: number, row: number) => {
+      const iso = cartToIso(col * TILE_SIZE, row * TILE_SIZE)
+      return { x: iso.x - camX, y: iso.y - camY }
+    }
 
     // Check actual validity via GameScene
     const canPlace = this.registry.get('canPlaceBuilding') as
@@ -2067,11 +2077,11 @@ export class HUDScene extends Phaser.Scene {
       g.fillStyle(0x44ff44, 0.06)
       for (const key of rangeTiles) {
         const [tc, tr] = key.split(',').map(Number)
-        const rx = tc * 32 - camX
-        const ry = tr * 32 - camY
+        const p = tileToScreen(tc, tr)
         // Only draw tiles visible on screen
-        if (rx > -32 && rx < this.sidebarX && ry > -32 && ry < 720) {
-          g.fillRect(rx, ry, 32, 32)
+        if (p.x > -ISO_TILE_W && p.x < this.sidebarX + ISO_TILE_W && p.y > -ISO_TILE_H && p.y < this.scale.height + ISO_TILE_H) {
+          drawIsoDiamond(g, p.x - ISO_TILE_W / 2, p.y, ISO_TILE_W, ISO_TILE_H)
+          g.fillPath()
         }
       }
       // Draw range border
@@ -2082,10 +2092,10 @@ export class HUDScene extends Phaser.Scene {
         const isEdge = !rangeTiles.has(`${tc-1},${tr}`) || !rangeTiles.has(`${tc+1},${tr}`) ||
                        !rangeTiles.has(`${tc},${tr-1}`) || !rangeTiles.has(`${tc},${tr+1}`)
         if (isEdge) {
-          const rx = tc * 32 - camX
-          const ry = tr * 32 - camY
-          if (rx > -32 && rx < this.sidebarX && ry > -32 && ry < 720) {
-            g.strokeRect(rx, ry, 32, 32)
+          const p = tileToScreen(tc, tr)
+          if (p.x > -ISO_TILE_W && p.x < this.sidebarX + ISO_TILE_W && p.y > -ISO_TILE_H && p.y < this.scale.height + ISO_TILE_H) {
+            drawIsoDiamond(g, p.x - ISO_TILE_W / 2, p.y, ISO_TILE_W, ISO_TILE_H)
+            g.strokePath()
           }
         }
       }
@@ -2094,13 +2104,16 @@ export class HUDScene extends Phaser.Scene {
     // Building footprint ghost — green if valid, red if invalid
     const col = valid ? 0x44ff44 : 0xff4444
     g.fillStyle(col, 0.35)
-    g.fillRect(snapX, snapY, 64, 64)
     g.lineStyle(2, col, 0.85)
-    g.strokeRect(snapX, snapY, 64, 64)
-    // inner grid
-    g.lineStyle(1, col, 0.25)
-    g.lineBetween(snapX + 32, snapY, snapX + 32, snapY + 64)
-    g.lineBetween(snapX, snapY + 32, snapX + 64, snapY + 32)
+    for (let r = 0; r < 2; r++) {
+      for (let c = 0; c < 2; c++) {
+        const p = tileToScreen(tileCol + c, tileRow + r)
+        drawIsoDiamond(g, p.x - ISO_TILE_W / 2, p.y, ISO_TILE_W, ISO_TILE_H)
+        g.fillPath()
+        drawIsoDiamond(g, p.x - ISO_TILE_W / 2, p.y, ISO_TILE_W, ISO_TILE_H)
+        g.strokePath()
+      }
+    }
 
     this.ghostLabel.setPosition(ptr.x + 14, ptr.y - 22)
     this.ghostLabel.setText(valid ? 'Click to place' : '✗ Out of range')
@@ -2124,5 +2137,11 @@ export class HUDScene extends Phaser.Scene {
     const { powerGenerated, powerConsumed } = this.humanPlayer
     if (powerGenerated <= 0) return 0.5
     return powerConsumed > powerGenerated ? 0.5 : 1.0
+  }
+
+  private pointerScreenToCart(screenX: number, screenY: number): { x: number; y: number } {
+    const camX = (this.registry.get('camX') as number) ?? 0
+    const camY = (this.registry.get('camY') as number) ?? 0
+    return isoToCart(screenX + camX, screenY + camY)
   }
 }

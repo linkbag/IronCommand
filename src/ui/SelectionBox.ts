@@ -4,6 +4,13 @@
 // ============================================================
 
 import Phaser from 'phaser'
+import { cartToIso } from '../engine/IsoUtils'
+
+export interface SelectionCandidate {
+  id: string
+  x: number
+  y: number
+}
 
 export class SelectionBox {
   private graphics: Phaser.GameObjects.Graphics
@@ -67,6 +74,30 @@ export class SelectionBox {
     this.graphics.clear()
 
     return { x: this.startX, y: this.startY, width: 0, height: 0 }
+  }
+
+  getEntitiesInScreenRect(
+    entities: SelectionCandidate[],
+    endScreenX: number,
+    endScreenY: number,
+    camOffX: number,
+    camOffY: number,
+  ): string[] {
+    const x1 = Math.min(this.startX, endScreenX)
+    const y1 = Math.min(this.startY, endScreenY)
+    const x2 = Math.max(this.startX, endScreenX)
+    const y2 = Math.max(this.startY, endScreenY)
+
+    const selected: string[] = []
+    for (const e of entities) {
+      const iso = cartToIso(e.x, e.y)
+      const sx = iso.x - camOffX
+      const sy = iso.y - camOffY
+      if (sx >= x1 && sx <= x2 && sy >= y1 && sy <= y2) {
+        selected.push(e.id)
+      }
+    }
+    return selected
   }
 
   /**

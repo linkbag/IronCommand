@@ -992,7 +992,7 @@ export class BootScene extends Phaser.Scene {
     const size = 32
     const g = this.make.graphics({ x: 0, y: 0 }, false)
     g.lineStyle(2, 0x00ff00, 0.9)
-    g.strokeEllipse(size / 2, size / 2, size - 4, (size - 4) * 0.4)
+    g.strokeEllipse(size / 2, size / 2, size - 4, (size - 4) * 0.5)
     g.generateTexture('selection_circle', size, size)
     g.destroy()
   }

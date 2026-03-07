@@ -3,6 +3,7 @@ import { FogState, TILE_SIZE } from '../types'
 import type { GameMap as GameMapData } from '../types'
 import type { GameMap } from './GameMap'
 import type { RTSCamera } from './Camera'
+import { cartToIso, isoToCart, getIsoWorldBounds, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from './IsoUtils'
 
 // ── Terrain colors (minimap scale) ───────────────────────────
 // Using flat single colors for performance at minimap resolution
@@ -55,6 +56,9 @@ export class Minimap {
   // Scale factors: world → minimap pixels
   private scaleX: number
   private scaleY: number
+  private isoOffsetX: number
+  private isoWidth: number
+  private isoHeight: number
 
   constructor(scene: Phaser.Scene, gameMap: GameMap, camera: RTSCamera) {
     this.scene = scene
@@ -66,8 +70,12 @@ export class Minimap {
     this.screenY = this.margin
 
     const mapData = gameMap.data
-    this.scaleX = this.size / mapData.width
-    this.scaleY = this.size / mapData.height
+    const bounds = getIsoWorldBounds(mapData.width, mapData.height)
+    this.isoOffsetX = bounds.offsetX
+    this.isoWidth = bounds.width
+    this.isoHeight = bounds.height
+    this.scaleX = this.size / this.isoWidth
+    this.scaleY = this.size / this.isoHeight
 
     // RenderTexture for terrain (draw once)
     this.terrainRender = scene.add.renderTexture(this.screenX, this.screenY, this.size, this.size)
@@ -104,6 +112,8 @@ export class Minimap {
     const { tiles, width, height } = this.gameMap.data
     this.terrainRender.clear()
     const g = this.scene.add.graphics()
+    const miniTileW = Math.max(1, ISO_TILE_W * this.scaleX)
+    const miniTileH = Math.max(1, ISO_TILE_H * this.scaleY)
 
     for (let row = 0; row < height; row++) {
       for (let col = 0; col < width; col++) {
@@ -113,12 +123,12 @@ export class Minimap {
           tile.fogState === FogState.HIDDEN ? 0x000000
           : tile.fogState === FogState.EXPLORED ? dimColor(terrainColor)
           : terrainColor
-        const px = Math.floor(col * this.scaleX)
-        const py = Math.floor(row * this.scaleY)
-        const pw = Math.max(1, Math.ceil(this.scaleX))
-        const ph = Math.max(1, Math.ceil(this.scaleY))
+        const iso = cartToIso(col * TILE_SIZE, row * TILE_SIZE)
+        const px = (iso.x + this.isoOffsetX) * this.scaleX
+        const py = iso.y * this.scaleY
         g.fillStyle(color)
-        g.fillRect(px, py, pw, ph)
+        drawIsoDiamond(g, px - miniTileW / 2, py, miniTileW, miniTileH)
+        g.fillPath()
       }
     }
 
@@ -133,8 +143,6 @@ export class Minimap {
     g.clear()
 
     // Entity dots
-    const mapW = this.gameMap.worldWidth
-    const mapH = this.gameMap.worldHeight
     const map = this.gameMap.data
     for (const dot of entityDots) {
       const tc = Math.floor(dot.worldX / TILE_SIZE)
@@ -142,8 +150,9 @@ export class Minimap {
       const fog = map.tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
       const canShow = dot.alwaysVisible || dot.isFriendly || fog === FogState.VISIBLE
       if (!canShow) continue
-      const px = this.screenX + (dot.worldX / mapW) * this.size
-      const py = this.screenY + (dot.worldY / mapH) * this.size
+      const iso = cartToIso(dot.worldX, dot.worldY)
+      const px = this.screenX + (iso.x + this.isoOffsetX) * this.scaleX
+      const py = this.screenY + iso.y * this.scaleY
       g.fillStyle(dot.color)
       g.fillCircle(px, py, 1.5)
     }
@@ -156,14 +165,12 @@ export class Minimap {
     g.clear()
     this.drawBorderRect(g)
 
-    const mapW = this.gameMap.worldWidth
-    const mapH = this.gameMap.worldHeight
     const view = this.rtsCamera.worldView
 
-    const rx = this.screenX + (view.x / mapW) * this.size
-    const ry = this.screenY + (view.y / mapH) * this.size
-    const rw = (view.width  / mapW) * this.size
-    const rh = (view.height / mapH) * this.size
+    const rx = this.screenX + view.x * this.scaleX
+    const ry = this.screenY + view.y * this.scaleY
+    const rw = view.width * this.scaleX
+    const rh = view.height * this.scaleY
 
     g.lineStyle(1, 0xffffff, 0.9)
     g.strokeRect(rx, ry, rw, rh)
@@ -190,9 +197,11 @@ export class Minimap {
       ) {
         const fracX = (px - this.screenX) / this.size
         const fracY = (py - this.screenY) / this.size
-        const worldX = fracX * this.gameMap.worldWidth
-        const worldY = fracY * this.gameMap.worldHeight
-        this.rtsCamera.snapTo(worldX, worldY)
+        const isoX = fracX * this.isoWidth - this.isoOffsetX
+        const isoY = fracY * this.isoHeight
+        const cart = isoToCart(isoX, isoY)
+        const center = cartToIso(cart.x, cart.y)
+        this.rtsCamera.snapTo(center.x, center.y)
       }
     })
   }
