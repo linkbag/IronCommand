@@ -665,7 +665,7 @@ export class GameScene extends Phaser.Scene {
         return
       }
 
-      // Adjacency check: must be within 3 tiles of existing building
+      // Build radius check: must be within radius of an existing structure
       if (!this.isAdjacentToOwnBuildings(data.tileCol, data.tileRow, def.footprint.w, def.footprint.h, 0)) {
         const hud = this.scene.get('HUDScene')
         if (hud) {
@@ -875,26 +875,53 @@ export class GameScene extends Phaser.Scene {
     })
   }
 
-  // ── Building adjacency check ────────────────────────────────────
+  // ── Building placement radius check ─────────────────────────────
+
+  private getBuildRadiusForBuilding(defId: string): number {
+    return defId === 'construction_yard' ? 8 : 5
+  }
+
+  private getFootprintBounds(col: number, row: number, w: number, h: number): { minCol: number; maxCol: number; minRow: number; maxRow: number } {
+    return {
+      minCol: col,
+      maxCol: col + w - 1,
+      minRow: row,
+      maxRow: row + h - 1,
+    }
+  }
 
   private isAdjacentToOwnBuildings(
     col: number, row: number, w: number, h: number, playerId: number
   ): boolean {
-    const maxDist = 1  // tiles
     const buildings = this.entityMgr.getBuildingsForPlayer(playerId)
     if (buildings.length === 0) return true  // first building can go anywhere
 
+    const proposed = this.getFootprintBounds(col, row, w, h)
+
     for (const b of buildings) {
       if (b.state === 'dying') continue
-      for (const tile of b.occupiedTiles) {
-        for (let r = 0; r < h; r++) {
-          for (let c = 0; c < w; c++) {
-            const dc = Math.abs(tile.col - (col + c))
-            const dr = Math.abs(tile.row - (row + r))
-            if (dc <= maxDist && dr <= maxDist) return true
-          }
-        }
-      }
+      const existing = this.getFootprintBounds(
+        b.occupiedTiles[0].col,
+        b.occupiedTiles[0].row,
+        b.def.footprint.w,
+        b.def.footprint.h,
+      )
+
+      // Edge-to-edge Chebyshev distance between existing and proposed footprints.
+      const dx = proposed.minCol > existing.maxCol
+        ? proposed.minCol - existing.maxCol
+        : existing.minCol > proposed.maxCol
+          ? existing.minCol - proposed.maxCol
+          : 0
+      const dy = proposed.minRow > existing.maxRow
+        ? proposed.minRow - existing.maxRow
+        : existing.minRow > proposed.maxRow
+          ? existing.minRow - proposed.maxRow
+          : 0
+
+      const edgeDist = Math.max(dx, dy)
+      const maxDist = this.getBuildRadiusForBuilding(b.def.id)
+      if (edgeDist <= maxDist) return true
     }
     return false
   }

@@ -2166,18 +2166,28 @@ export class HUDScene extends Phaser.Scene {
     const g = this.ghost
     g.clear()
 
-    // Show buildable range overlay (green tint around existing buildings)
+    // Show buildable range overlay using the same edge-distance logic as GameScene.
     const em = this.registry.get('entityMgr') as
-      { getBuildingsForPlayer(id: number): { occupiedTiles: { col: number; row: number }[]; state: string }[] } | undefined
+      { getBuildingsForPlayer(id: number): { occupiedTiles: { col: number; row: number }[]; state: string; def: { id: string; footprint: { w: number; h: number } } }[] } | undefined
     if (em) {
       const buildings = em.getBuildingsForPlayer(0)
       const rangeTiles = new Set<string>()
+      const getRadius = (defId: string) => defId === 'construction_yard' ? 8 : 5
       for (const b of buildings) {
         if (b.state === 'dying') continue
-        for (const tile of b.occupiedTiles) {
-          for (let dr = -3; dr <= 3; dr++) {
-            for (let dc = -3; dc <= 3; dc++) {
-              rangeTiles.add(`${tile.col + dc},${tile.row + dr}`)
+        if (b.occupiedTiles.length === 0) continue
+        const radius = getRadius(b.def.id)
+        const minCol = b.occupiedTiles[0].col
+        const minRow = b.occupiedTiles[0].row
+        const maxCol = minCol + b.def.footprint.w - 1
+        const maxRow = minRow + b.def.footprint.h - 1
+
+        for (let tr = minRow - radius; tr <= maxRow + radius; tr++) {
+          for (let tc = minCol - radius; tc <= maxCol + radius; tc++) {
+            const dx = tc < minCol ? (minCol - tc) : tc > maxCol ? (tc - maxCol) : 0
+            const dy = tr < minRow ? (minRow - tr) : tr > maxRow ? (tr - maxRow) : 0
+            if (Math.max(dx, dy) <= radius) {
+              rangeTiles.add(`${tc},${tr}`)
             }
           }
         }
