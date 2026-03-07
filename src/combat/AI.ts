@@ -1,6 +1,7 @@
 // ============================================================
 // IRON COMMAND — Computer AI
-// Build order, harvesting, scouting, and timed attack waves
+// Full tech tree, defenses, harassment, adaptation, smart targeting,
+// base defense reaction, economy expansion, advanced army composition
 // ============================================================
 
 import type { EntityManager } from '../entities/EntityManager'
@@ -8,7 +9,7 @@ import type { Economy } from '../economy/Economy'
 import type { Production } from '../economy/Production'
 import type { GameState, FactionSide, FactionId } from '../types'
 import { TILE_SIZE } from '../types'
-import { UNIT_DEFS, getBasicInfantryDefId, getMainTankDefId, getHarvesterDefId } from '../entities/UnitDefs'
+import { UNIT_DEFS, getBasicInfantryDefId, getMainTankDefId, getHarvesterDefId, getFactionUnitIds } from '../entities/UnitDefs'
 import { BUILDING_DEFS, getPowerBuildingDefId } from '../entities/BuildingDefs'
 import { FACTIONS } from '../data/factions'
 import type { Unit } from '../entities/Unit'
@@ -24,6 +25,8 @@ type PendingWave = {
   holdMs: number
 }
 
+// ── Constants ──────────────────────────────────────────────────
+
 const TICK_INTERVAL: Record<AIDifficulty, number> = {
   easy: 4000,
   medium: 2500,
@@ -36,15 +39,9 @@ const INFANTRY_BEFORE_WAR_FACTORY: Record<AIDifficulty, number> = {
   hard: 6,
 }
 
-const TANKS_BEFORE_ATTACK: Record<AIDifficulty, number> = {
-  easy: 2,
-  medium: 3,
-  hard: 5,
-}
-
 const ATTACK_INTERVAL_MS: Record<AIDifficulty, { min: number; max: number }> = {
   easy: { min: 180000, max: 240000 },
-  medium: { min: 120000, max: 180000 }, // 2-3 minutes
+  medium: { min: 120000, max: 180000 },
   hard: { min: 90000, max: 130000 },
 }
 
@@ -56,6 +53,38 @@ const ATTACK_WAVE_SIZE: Record<AIDifficulty, { min: number; max: number }> = {
 
 const STAGING_HOLD_MS = 9000
 
+const HARASS_INTERVAL_MS: Record<AIDifficulty, number> = {
+  easy: 150000,
+  medium: 90000,
+  hard: 50000,
+}
+
+const DEFENSE_TARGET: Record<AIDifficulty, number> = {
+  easy: 1,
+  medium: 2,
+  hard: 3,
+}
+
+const MAX_ARMY: Record<AIDifficulty, number> = {
+  easy: 18,
+  medium: 28,
+  hard: 40,
+}
+
+const BASE_DEFENSE_RADIUS: Record<AIDifficulty, number> = {
+  easy: 8,
+  medium: 12,
+  hard: 15,
+}
+
+const DEFENDER_RESPONSE_RADIUS: Record<AIDifficulty, number> = {
+  easy: 15,
+  medium: 25,
+  hard: 40,
+}
+
+// ── Helpers ────────────────────────────────────────────────────
+
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min
 }
@@ -63,6 +92,14 @@ function randomInt(min: number, max: number): number {
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n))
 }
+
+function dist(ax: number, ay: number, bx: number, by: number): number {
+  const dx = ax - bx
+  const dy = ay - by
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+// ══════════════════════════════════════════════════════════════
 
 export class AI {
   private playerId: number
@@ -77,6 +114,7 @@ export class AI {
   private tickTimer: number
   private attackTimer: number
   private scoutTimer: number
+  private harassTimer: number
   private isAttacking: boolean
 
   private nextAttackWindowMs: number
@@ -86,6 +124,8 @@ export class AI {
 
   private mapWidthTiles = 0
   private mapHeightTiles = 0
+
+  private enemyComposition: { infantry: number; vehicles: number; aircraft: number }
 
   constructor(
     playerId: number,
@@ -107,12 +147,15 @@ export class AI {
     this.tickTimer = 0
     this.attackTimer = 0
     this.scoutTimer = 0
+    this.harassTimer = 0
     this.isAttacking = false
 
     this.nextAttackWindowMs = this.nextAttackWindow()
     this.pendingWave = null
     this.lastStandTriggered = false
     this.updateLogged = false
+
+    this.enemyComposition = { infantry: 0, vehicles: 0, aircraft: 0 }
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -129,6 +172,7 @@ export class AI {
     this.tickTimer += delta
     this.attackTimer += delta
     this.scoutTimer += delta
+    this.harassTimer += delta
 
     this.updatePendingWave(delta)
 
@@ -142,19 +186,21 @@ export class AI {
   // ── AI tick ───────────────────────────────────────────────────
 
   private tick(gameState: GameState): void {
-    // Skip if player has no CY and no buildings at all — they're defeated
     const buildings = this.em.getBuildingsForPlayer(this.playerId)
     if (buildings.length === 0) return
 
     this.updatePhase()
+    this.assessEnemyComposition(gameState)
     this.ensureHarvesting(gameState)
 
-    if (this.handleLastStand(gameState)) {
-      return
-    }
+    if (this.handleLastStand(gameState)) return
 
-    this.followBuildOrder(gameState)
+    this.defendBase(gameState)
+    this.followTechTree(gameState)
+    this.expandEconomy(gameState)
+    this.buildDefenses()
     this.buildArmy(gameState)
+    this.considerHarassment(gameState)
     this.considerAttacking(gameState)
 
     if (this.phase === 'mid' || this.phase === 'late') {
@@ -169,12 +215,31 @@ export class AI {
   // ── Phase management ─────────────────────────────────────────
 
   private updatePhase(): void {
-    const hasWarFactory = this.hasActiveBuilding('war_factory')
     const hasBattleLab = this.hasActiveBuilding('battle_lab')
+    const hasMidTech = this.side === 'alliance'
+      ? this.hasActiveBuilding('air_force_command')
+      : this.hasActiveBuilding('radar_tower')
+    const hasWarFactory = this.hasActiveBuilding('war_factory')
 
     if (hasBattleLab) this.phase = 'late'
-    else if (hasWarFactory) this.phase = 'mid'
+    else if (hasMidTech || hasWarFactory) this.phase = 'mid'
     else this.phase = 'early'
+  }
+
+  // ── Enemy assessment ─────────────────────────────────────────
+
+  private assessEnemyComposition(gameState: GameState): void {
+    let infantry = 0, vehicles = 0, aircraft = 0
+    for (const p of gameState.players) {
+      if (p.id === this.playerId || p.isDefeated) continue
+      for (const u of this.em.getUnitsForPlayer(p.id)) {
+        if (u.state === 'dying') continue
+        if (u.def.category === 'infantry') infantry++
+        else if (u.def.category === 'vehicle') vehicles++
+        else if (u.def.category === 'aircraft') aircraft++
+      }
+    }
+    this.enemyComposition = { infantry, vehicles, aircraft }
   }
 
   // ── Economy / harvesting ─────────────────────────────────────
@@ -188,7 +253,10 @@ export class AI {
       b => b.def.id === 'ore_refinery' && b.state === 'active',
     )
 
-    const desiredHarvesters = Math.max(1, refineries.length)
+    const desiredHarvesters = this.difficulty === 'hard'
+      ? Math.max(1, refineries.length * 2)
+      : Math.max(1, refineries.length)
+
     if (harvesters.length < desiredHarvesters) {
       this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState)
     }
@@ -203,150 +271,179 @@ export class AI {
     }
   }
 
-  // ── Build order ──────────────────────────────────────────────
+  // ── Economy expansion ────────────────────────────────────────
 
-  private followBuildOrder(gameState: GameState): void {
+  private expandEconomy(gameState: GameState): void {
+    const credits = this.economy.getCredits(this.playerId)
+    const refCount = this.countBuildings('ore_refinery')
+    const threshold = this.difficulty === 'easy' ? 3000 : 2000
+    const maxRef = this.difficulty === 'hard' ? 3 : 2
+
+    if (credits > threshold && refCount < maxRef) {
+      if (this.tryBuildBuilding('ore_refinery', true)) {
+        console.log(`[AI] Player ${this.playerId} expanding economy — refinery #${refCount + 1}`)
+      }
+    }
+  }
+
+  // ── Tech tree ────────────────────────────────────────────────
+
+  private followTechTree(gameState: GameState): void {
     const powerId = getPowerBuildingDefId(this.side)
     const basicInfantry = getBasicInfantryDefId(this.side)
-    const mainTank = getMainTankDefId(this.side)
 
-    // Required sequence: Power → Barracks → Infantry → War Factory → Tanks → Attack
+    // 1. Power first
     if (!this.hasBuildingPlacedOrConstructing(powerId)) {
       this.tryBuildBuilding(powerId)
       return
     }
 
+    // 2. Barracks
     if (!this.hasBuildingPlacedOrConstructing('barracks')) {
       this.tryBuildBuilding('barracks')
       return
     }
 
+    // 3. Ore Refinery
+    if (!this.hasBuildingPlacedOrConstructing('ore_refinery')) {
+      this.tryBuildBuilding('ore_refinery')
+      return
+    }
+
+    // 4. Some infantry before War Factory
     const infantryCount = this.getCombatInfantryCount()
     if (infantryCount < INFANTRY_BEFORE_WAR_FACTORY[this.difficulty]) {
       this.queueUnitIfPossible(basicInfantry, gameState)
       return
     }
 
+    // 5. War Factory
     if (!this.hasBuildingPlacedOrConstructing('war_factory')) {
       this.tryBuildBuilding('war_factory')
       return
     }
 
-    const tankCount = this.countUnitsByDef(mainTank)
-    if (tankCount < TANKS_BEFORE_ATTACK[this.difficulty]) {
-      this.queueUnitIfPossible(mainTank, gameState)
+    // 6. Extra power if needed before mid-tech
+    if (this.needsMorePower()) {
+      this.buildExtraPower()
+      return
     }
-  }
 
-  private tryBuildBuilding(defId: string): boolean {
-    const def = BUILDING_DEFS[defId]
-    if (!def) return false
-
-    if (!this.hasActiveBuilding('construction_yard')) return false
-    if (this.hasBuildingPlacedOrConstructing(defId)) return false
-
-    if (!this.production.checkPrerequisites(this.playerId, defId)) return false
-    if (this.economy.getCredits(this.playerId) < def.stats.cost) return false
-
-    const placeTile = this.findBuildingPlacement(defId)
-    if (!placeTile) return false
-
-    // Deduct credits and place
-    if (this.economy.deductCredits(this.playerId, def.stats.cost)) {
-      const building = this.em.createBuilding(this.playerId, defId, placeTile.col, placeTile.row)
-      // AI buildings are instantly active (no construction delay)
-      if (building) {
-        building.state = 'active'
-        building.setAlpha(1)
-        console.log(`[AI] Player ${this.playerId} started ${defId} at (${placeTile.col}, ${placeTile.row})`)
+    // 7. Mid-game tech building
+    const midTechId = this.side === 'alliance' ? 'air_force_command' : 'radar_tower'
+    if (!this.hasBuildingPlacedOrConstructing(midTechId)) {
+      const tanksNeeded = this.difficulty === 'easy' ? 3 : 1
+      if (this.countUnitsByCategory('vehicle') >= tanksNeeded) {
+        this.tryBuildBuilding(midTechId)
       }
-      return true
+      return
     }
 
-    this.economy.addCredits(this.playerId, def.stats.cost)
-    return false
+    // 8. More power for late-game
+    if (this.needsMorePower()) {
+      this.buildExtraPower()
+      return
+    }
+
+    // 9. Battle Lab
+    if (!this.hasBuildingPlacedOrConstructing('battle_lab')) {
+      if (this.difficulty !== 'easy' || this.getCombatUnits().length >= 12) {
+        this.tryBuildBuilding('battle_lab')
+      }
+    }
   }
 
-  private findBuildingPlacement(defId: string): { col: number; row: number } | null {
-    const def = BUILDING_DEFS[defId]
-    if (!def) return null
+  // ── Power management ─────────────────────────────────────────
 
+  private needsMorePower(): boolean {
+    const buildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state === 'active')
+    let totalPower = 0
+    for (const b of buildings) {
+      totalPower += b.def.providespower
+    }
+    return totalPower < 50
+  }
+
+  private buildExtraPower(): boolean {
+    // Collective late-game: prefer nuclear reactor (500 power)
+    if (this.side === 'collective' && this.hasActiveBuilding('radar_tower')) {
+      if (this.tryBuildBuilding('nuclear_reactor', true)) return true
+    }
+    return this.tryBuildBuilding(getPowerBuildingDefId(this.side), true)
+  }
+
+  // ── Defenses ─────────────────────────────────────────────────
+
+  private buildDefenses(): void {
+    if (!this.hasActiveBuilding('war_factory')) return
+
+    const target = DEFENSE_TARGET[this.difficulty]
+
+    // Early defenses (cheap, available after barracks)
+    const earlyDefId = this.side === 'alliance' ? 'pillbox' : 'sentry_gun'
+    const earlyCount = this.countBuildings(earlyDefId)
+    if (earlyCount < Math.min(2, target)) {
+      this.tryBuildBuilding(earlyDefId, true)
+      return
+    }
+
+    // Late defenses (require mid-tech building)
+    const midTechId = this.side === 'alliance' ? 'air_force_command' : 'radar_tower'
+    if (!this.hasActiveBuilding(midTechId)) return
+
+    const lateDefId = this.side === 'alliance' ? 'prism_tower' : 'tesla_coil'
+    const lateCount = this.countBuildings(lateDefId)
+    if (lateCount + earlyCount < target) {
+      this.tryBuildBuilding(lateDefId, true)
+    }
+  }
+
+  // ── Base defense reaction ────────────────────────────────────
+
+  private defendBase(gameState: GameState): void {
     const buildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state !== 'dying')
-    if (buildings.length === 0) return null
+    if (buildings.length === 0) return
 
-    const anchor = buildings.find(b => b.def.id === 'construction_yard' && b.state === 'active') ?? buildings[0]
-    const anchorCol = Math.floor((anchor.x - anchor.def.footprint.w * TILE_SIZE / 2) / TILE_SIZE)
-    const anchorRow = Math.floor((anchor.y - anchor.def.footprint.h * TILE_SIZE / 2) / TILE_SIZE)
+    const baseRadiusPx = BASE_DEFENSE_RADIUS[this.difficulty] * TILE_SIZE
+    let threatPos: { x: number; y: number } | null = null
 
-    for (let radius = 1; radius <= 15; radius++) {
-      for (let dr = -radius; dr <= radius; dr++) {
-        for (let dc = -radius; dc <= radius; dc++) {
-          if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
-
-          const col = anchorCol + dc * (def.footprint.w + 1)
-          const row = anchorRow + dr * (def.footprint.h + 1)
-
-          if (col < 0 || row < 0) continue
-          if (this.mapWidthTiles > 0 && col + def.footprint.w > this.mapWidthTiles) continue
-          if (this.mapHeightTiles > 0 && row + def.footprint.h > this.mapHeightTiles) continue
-
-          if (this.isTileFree(col, row, def.footprint.w, def.footprint.h)) {
-            return { col, row }
+    outer:
+    for (const p of gameState.players) {
+      if (p.id === this.playerId || p.isDefeated) continue
+      for (const eu of this.em.getUnitsForPlayer(p.id)) {
+        if (eu.state === 'dying' || !eu.def.attack) continue
+        for (const b of buildings) {
+          if (dist(eu.x, eu.y, b.x, b.y) < baseRadiusPx) {
+            threatPos = { x: eu.x, y: eu.y }
+            break outer
           }
         }
       }
     }
 
-    return null
-  }
+    if (!threatPos) return
 
-  private isTileFree(col: number, row: number, w: number, h: number): boolean {
-    for (const b of this.em.getAllBuildings()) {
-      if (b.state === 'dying') continue
-      for (const tile of b.occupiedTiles) {
-        for (let r = 0; r < h; r++) {
-          for (let c = 0; c < w; c++) {
-            if (tile.col === col + c && tile.row === row + r) {
-              return false
-            }
-          }
-        }
+    const responseRadiusPx = DEFENDER_RESPONSE_RADIUS[this.difficulty] * TILE_SIZE
+    const defenders = this.getCombatUnits().filter(u => u.state === 'idle')
+    let rallied = 0
+
+    for (const u of defenders) {
+      if (dist(u.x, u.y, threatPos.x, threatPos.y) < responseRadiusPx) {
+        u.giveOrder({ type: 'attackMove', target: threatPos })
+        rallied++
       }
     }
-    return true
-  }
 
-  private queueUnitIfPossible(defId: string, gameState: GameState): boolean {
-    const def = UNIT_DEFS[defId]
-    if (!def) return false
-
-    const producer = this.findProducerFor(defId)
-    if (!producer) return false
-
-    // Keep queues short so the AI can react and mix units.
-    if (producer.productionQueue.length >= 3) return false
-
-    if (this.economy.getCredits(this.playerId) < def.stats.cost) return false
-
-    return this.production.queueProduction(
-      this.playerId,
-      producer.id,
-      defId,
-      gameState,
-    )
+    if (rallied > 0) {
+      console.log(`[AI] Player ${this.playerId} rallied ${rallied} units to defend base`)
+    }
   }
 
   // ── Army building ────────────────────────────────────────────
 
   private buildArmy(gameState: GameState): void {
     const combatUnits = this.getCombatUnits()
-    const maxArmyByDifficulty: Record<AIDifficulty, number> = {
-      easy: 18,
-      medium: 28,
-      hard: 40,
-    }
-
-    if (combatUnits.length >= maxArmyByDifficulty[this.difficulty]) return
+    if (combatUnits.length >= MAX_ARMY[this.difficulty]) return
 
     const unitToBuild = this.chooseUnitToBuild()
     if (!unitToBuild) return
@@ -357,55 +454,175 @@ export class AI {
   private chooseUnitToBuild(): string | null {
     const hasBarracks = this.hasActiveBuilding('barracks')
     const hasWarFactory = this.hasActiveBuilding('war_factory')
-
     if (!hasBarracks && !hasWarFactory) return null
 
     const basicInf = getBasicInfantryDefId(this.side)
     const mainTank = getMainTankDefId(this.side)
-    const antiAirInf = this.side === 'alliance' ? 'rocketeer' : 'flak_trooper'
 
-    const units = this.em.getUnitsForPlayer(this.playerId).filter(u => u.state !== 'dying')
-    const infantryCount = units.filter(u => u.def.category === 'infantry').length
-    const vehicleCount = units.filter(u => u.def.category === 'vehicle').length
-
-    if (!hasWarFactory) return hasBarracks ? basicInf : null
-    if (!hasBarracks) return mainTank
-
+    // Easy mode: simple mix with slight variety
     if (this.difficulty === 'easy') {
-      return vehicleCount < 2 ? mainTank : basicInf
+      if (!hasWarFactory) return hasBarracks ? basicInf : null
+      const vehicles = this.countUnitsByCategory('vehicle')
+      if (vehicles < 3) return mainTank
+      return Math.random() < 0.7 ? basicInf : mainTank
     }
 
-    if (this.difficulty === 'medium') {
-      if (vehicleCount < Math.max(3, Math.floor(infantryCount * 0.6))) return mainTank
-      if (infantryCount < 6) return basicInf
-      return Math.random() < 0.6 ? mainTank : antiAirInf
-    }
+    // Medium/Hard: weighted pool with counters and advanced units
+    const pool = this.buildUnitPool()
+    if (pool.length === 0) return hasBarracks ? basicInf : mainTank
 
-    // hard
-    if (vehicleCount < Math.max(6, infantryCount)) return mainTank
-    return Math.random() < 0.7 ? mainTank : antiAirInf
+    return pool[randomInt(0, pool.length - 1)]
   }
 
-  private findProducerFor(unitDefId: string): Building | null {
-    const unitDef = UNIT_DEFS[unitDefId]
-    if (!unitDef) return null
+  private buildUnitPool(): string[] {
+    const pool: string[] = []
+    const basicInf = getBasicInfantryDefId(this.side)
+    const mainTank = getMainTankDefId(this.side)
 
-    const producingBuildingIds: Record<string, string[]> = {
-      infantry: ['barracks'],
-      vehicle: ['war_factory'],
-      aircraft: [this.side === 'alliance' ? 'air_force_command' : 'war_factory'],
-      naval: ['naval_shipyard'],
-      harvester: ['ore_refinery', 'war_factory'],
+    // Core units always heavily weighted
+    if (this.canProduceUnit(basicInf)) {
+      pool.push(basicInf, basicInf)
+    }
+    if (this.canProduceUnit(mainTank)) {
+      pool.push(mainTank, mainTank, mainTank)
     }
 
-    const buildingIds = producingBuildingIds[unitDef.category] ?? []
-    const buildings = this.em.getBuildingsForPlayer(this.playerId)
+    // ── Side-specific mid-tier ──
+    if (this.side === 'alliance') {
+      if (this.canProduceUnit('ifv')) pool.push('ifv')
+      if (this.canProduceUnit('rocketeer')) pool.push('rocketeer')
+      if (this.canProduceUnit('mirage_tank')) pool.push('mirage_tank')
+    } else {
+      if (this.canProduceUnit('flak_track')) pool.push('flak_track')
+      if (this.canProduceUnit('tesla_trooper')) pool.push('tesla_trooper', 'tesla_trooper')
+      if (this.canProduceUnit('v3_launcher')) pool.push('v3_launcher')
+    }
 
-    for (const bId of buildingIds) {
-      // Prefer buildings that aren't already producing (shorter queue)
-      const candidates = buildings.filter(b => b.def.id === bId && b.state === 'active')
-      const free = candidates.find(b => b.productionQueue.length === 0) ?? candidates[0]
-      if (free) return free
+    // ── Late-tier heavy units ──
+    if (this.phase === 'late') {
+      if (this.side === 'collective') {
+        if (this.canProduceUnit('apocalypse_tank')) pool.push('apocalypse_tank', 'apocalypse_tank')
+        if (this.canProduceUnit('kirov')) pool.push('kirov')
+      }
+    }
+
+    // ── Faction-exclusive units ──
+    const exclusives = getFactionUnitIds(this.factionId)
+    for (const id of exclusives) {
+      const def = UNIT_DEFS[id]
+      if (def?.attack && this.canProduceUnit(id)) {
+        pool.push(id)
+        if (this.difficulty === 'hard') pool.push(id) // double weight on hard
+      }
+    }
+
+    // ── Counter-based adjustments ──
+    const { infantry: ei, vehicles: ev, aircraft: ea } = this.enemyComposition
+
+    // Enemy heavy vehicles → more anti-tank
+    if (ev > ei + 2) {
+      if (this.side === 'collective') {
+        if (this.canProduceUnit('tesla_trooper')) pool.push('tesla_trooper', 'tesla_trooper')
+      } else {
+        if (this.canProduceUnit('mirage_tank')) pool.push('mirage_tank')
+      }
+    }
+
+    // Enemy heavy infantry → splash damage
+    if (ei > ev + 3) {
+      if (this.side === 'collective') {
+        if (this.canProduceUnit('flak_track')) pool.push('flak_track', 'flak_track')
+      } else {
+        if (this.canProduceUnit('ifv')) pool.push('ifv')
+      }
+    }
+
+    // Enemy aircraft → anti-air
+    if (ea > 2) {
+      if (this.side === 'alliance') {
+        if (this.canProduceUnit('ifv')) pool.push('ifv', 'ifv', 'ifv')
+        if (this.canProduceUnit('rocketeer')) pool.push('rocketeer', 'rocketeer')
+      } else {
+        if (this.canProduceUnit('flak_track')) pool.push('flak_track', 'flak_track', 'flak_track')
+        if (this.canProduceUnit('flak_trooper')) pool.push('flak_trooper', 'flak_trooper')
+      }
+    }
+
+    return pool
+  }
+
+  private canProduceUnit(defId: string): boolean {
+    const def = UNIT_DEFS[defId]
+    if (!def) return false
+
+    // Faction availability
+    const sideMatch = def.side === this.side || def.side === null
+    const exclusiveMatch = def.factionExclusive === null || def.factionExclusive === this.factionId
+    if (!sideMatch || !exclusiveMatch) return false
+
+    // Producer building exists and active
+    if (!this.findProducerFor(defId)) return false
+
+    // Prerequisite buildings active
+    for (const prereq of def.stats.prerequisites) {
+      if (!this.hasActiveBuilding(prereq)) return false
+    }
+
+    return true
+  }
+
+  // ── Harassment ───────────────────────────────────────────────
+
+  private considerHarassment(gameState: GameState): void {
+    if (this.harassTimer < HARASS_INTERVAL_MS[this.difficulty]) return
+    this.harassTimer = 0
+
+    // Need enough army before diverting units
+    if (this.getCombatUnits().length < 8) return
+
+    // Find fast idle units for raiding
+    const fastUnits = this.getCombatUnits().filter(
+      u => u.state === 'idle' && u.def.stats.speed >= 3,
+    )
+    if (fastUnits.length < 2) return
+
+    const target = this.findHarassTarget(gameState)
+    if (!target) return
+
+    const raidSize = clamp(
+      this.difficulty === 'hard' ? 4 : this.difficulty === 'medium' ? 3 : 2,
+      2,
+      fastUnits.length,
+    )
+
+    for (let i = 0; i < raidSize; i++) {
+      fastUnits[i].giveOrder({ type: 'attackMove', target })
+    }
+
+    console.log(`[AI] Player ${this.playerId} sending ${raidSize}-unit harassment raid`)
+  }
+
+  private findHarassTarget(gameState: GameState): { x: number; y: number } | null {
+    for (const p of gameState.players) {
+      if (p.id === this.playerId || p.isDefeated) continue
+
+      // Prefer enemy harvesters
+      const harvesters = this.em.getUnitsForPlayer(p.id).filter(
+        u => u.def.category === 'harvester' && u.state !== 'dying',
+      )
+      if (harvesters.length > 0) {
+        const h = harvesters[randomInt(0, harvesters.length - 1)]
+        return { x: h.x, y: h.y }
+      }
+
+      // Otherwise target ore refineries
+      const refineries = this.em.getBuildingsForPlayer(p.id).filter(
+        b => b.def.id === 'ore_refinery' && b.state !== 'dying',
+      )
+      if (refineries.length > 0) {
+        const r = refineries[randomInt(0, refineries.length - 1)]
+        return { x: r.x, y: r.y }
+      }
     }
 
     return null
@@ -526,20 +743,36 @@ export class AI {
     }
   }
 
+  // ── Strategic attack targeting ───────────────────────────────
+
   private findAttackTarget(gameState: GameState): { x: number; y: number } | null {
-    const enemyPlayer = gameState.players.find(
-      p => p.id !== this.playerId && !p.isDefeated,
-    )
-    if (!enemyPlayer) return null
+    const allEnemyBuildings: Building[] = []
+    for (const p of gameState.players) {
+      if (p.id === this.playerId || p.isDefeated) continue
+      allEnemyBuildings.push(
+        ...this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying'),
+      )
+    }
 
-    const enemyBuildings = this.em.getBuildingsForPlayer(enemyPlayer.id)
-    if (enemyBuildings.length === 0) return null
+    if (allEnemyBuildings.length === 0) return null
 
-    const cyard = enemyBuildings.find(b => b.def.id === 'construction_yard' && b.state !== 'dying')
-    const target = cyard ?? enemyBuildings.find(b => b.state !== 'dying')
-    if (!target) return null
+    // Priority: power → refineries → war factories → barracks → CY → any
+    const priorities = [
+      ['power_plant', 'tesla_reactor', 'nuclear_reactor'],
+      ['ore_refinery'],
+      ['war_factory'],
+      ['barracks'],
+      ['construction_yard'],
+    ]
 
-    return { x: target.x, y: target.y }
+    for (const group of priorities) {
+      const target = allEnemyBuildings.find(b => group.includes(b.def.id))
+      if (target) return { x: target.x, y: target.y }
+    }
+
+    // Fallback: any building
+    const any = allEnemyBuildings[0]
+    return { x: any.x, y: any.y }
   }
 
   // ── Last stand ───────────────────────────────────────────────
@@ -616,6 +849,131 @@ export class AI {
     }
   }
 
+  // ── Building construction ────────────────────────────────────
+
+  private tryBuildBuilding(defId: string, allowDuplicate = false): boolean {
+    const def = BUILDING_DEFS[defId]
+    if (!def) return false
+
+    if (!this.hasActiveBuilding('construction_yard')) return false
+    if (!allowDuplicate && this.hasBuildingPlacedOrConstructing(defId)) return false
+
+    if (!this.production.checkPrerequisites(this.playerId, defId)) return false
+    if (this.economy.getCredits(this.playerId) < def.stats.cost) return false
+
+    const placeTile = this.findBuildingPlacement(defId)
+    if (!placeTile) return false
+
+    // Deduct credits and place
+    if (this.economy.deductCredits(this.playerId, def.stats.cost)) {
+      const building = this.em.createBuilding(this.playerId, defId, placeTile.col, placeTile.row)
+      // AI buildings are instantly active (no construction delay)
+      if (building) {
+        building.state = 'active'
+        building.setAlpha(1)
+        console.log(`[AI] Player ${this.playerId} started ${defId} at (${placeTile.col}, ${placeTile.row})`)
+      }
+      return true
+    }
+
+    this.economy.addCredits(this.playerId, def.stats.cost)
+    return false
+  }
+
+  private findBuildingPlacement(defId: string): { col: number; row: number } | null {
+    const def = BUILDING_DEFS[defId]
+    if (!def) return null
+
+    const buildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state !== 'dying')
+    if (buildings.length === 0) return null
+
+    const anchor = buildings.find(b => b.def.id === 'construction_yard' && b.state === 'active') ?? buildings[0]
+    const anchorCol = Math.floor((anchor.x - anchor.def.footprint.w * TILE_SIZE / 2) / TILE_SIZE)
+    const anchorRow = Math.floor((anchor.y - anchor.def.footprint.h * TILE_SIZE / 2) / TILE_SIZE)
+
+    for (let radius = 1; radius <= 15; radius++) {
+      for (let dr = -radius; dr <= radius; dr++) {
+        for (let dc = -radius; dc <= radius; dc++) {
+          if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
+
+          const col = anchorCol + dc * (def.footprint.w + 1)
+          const row = anchorRow + dr * (def.footprint.h + 1)
+
+          if (col < 0 || row < 0) continue
+          if (this.mapWidthTiles > 0 && col + def.footprint.w > this.mapWidthTiles) continue
+          if (this.mapHeightTiles > 0 && row + def.footprint.h > this.mapHeightTiles) continue
+
+          if (this.isTileFree(col, row, def.footprint.w, def.footprint.h)) {
+            return { col, row }
+          }
+        }
+      }
+    }
+
+    return null
+  }
+
+  private isTileFree(col: number, row: number, w: number, h: number): boolean {
+    for (const b of this.em.getAllBuildings()) {
+      if (b.state === 'dying') continue
+      for (const tile of b.occupiedTiles) {
+        for (let r = 0; r < h; r++) {
+          for (let c = 0; c < w; c++) {
+            if (tile.col === col + c && tile.row === row + r) {
+              return false
+            }
+          }
+        }
+      }
+    }
+    return true
+  }
+
+  private queueUnitIfPossible(defId: string, gameState: GameState): boolean {
+    const def = UNIT_DEFS[defId]
+    if (!def) return false
+
+    const producer = this.findProducerFor(defId)
+    if (!producer) return false
+
+    // Keep queues short so the AI can react and mix units.
+    if (producer.productionQueue.length >= 3) return false
+
+    if (this.economy.getCredits(this.playerId) < def.stats.cost) return false
+
+    return this.production.queueProduction(
+      this.playerId,
+      producer.id,
+      defId,
+      gameState,
+    )
+  }
+
+  private findProducerFor(unitDefId: string): Building | null {
+    const unitDef = UNIT_DEFS[unitDefId]
+    if (!unitDef) return null
+
+    const producingBuildingIds: Record<string, string[]> = {
+      infantry: ['barracks'],
+      vehicle: ['war_factory'],
+      aircraft: [this.side === 'alliance' ? 'air_force_command' : 'war_factory'],
+      naval: ['naval_shipyard'],
+      harvester: ['ore_refinery', 'war_factory'],
+    }
+
+    const buildingIds = producingBuildingIds[unitDef.category] ?? []
+    const buildings = this.em.getBuildingsForPlayer(this.playerId)
+
+    for (const bId of buildingIds) {
+      // Prefer buildings that aren't already producing (shorter queue)
+      const candidates = buildings.filter(b => b.def.id === bId && b.state === 'active')
+      const free = candidates.find(b => b.productionQueue.length === 0) ?? candidates[0]
+      if (free) return free
+    }
+
+    return null
+  }
+
   // ── Helpers ──────────────────────────────────────────────────
 
   private nextAttackWindow(): number {
@@ -635,6 +993,12 @@ export class AI {
     )
   }
 
+  private countBuildings(defId: string): number {
+    return this.em.getBuildingsForPlayer(this.playerId).filter(
+      b => b.def.id === defId && b.state !== 'dying',
+    ).length
+  }
+
   private getCombatUnits(): Unit[] {
     return this.em.getUnitsForPlayer(this.playerId).filter(
       u => u.state !== 'dying' && u.def.category !== 'harvester' && u.def.attack !== null,
@@ -647,9 +1011,9 @@ export class AI {
     ).length
   }
 
-  private countUnitsByDef(defId: string): number {
+  private countUnitsByCategory(category: string): number {
     return this.em.getUnitsForPlayer(this.playerId).filter(
-      u => u.state !== 'dying' && u.def.id === defId,
+      u => u.state !== 'dying' && u.def.category === category,
     ).length
   }
 
