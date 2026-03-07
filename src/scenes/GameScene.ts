@@ -84,6 +84,9 @@ export class GameScene extends Phaser.Scene {
   private playerBuildingsDestroyed = 0
   private lastCombatMs = 0
   private staleMateBoostActive = false
+  private paused = false
+  private pauseOverlay?: Phaser.GameObjects.Rectangle
+  private pauseText?: Phaser.GameObjects.Text
 
   constructor() {
     super({ key: 'GameScene' })
@@ -122,6 +125,11 @@ export class GameScene extends Phaser.Scene {
     this.playerBuildingsDestroyed = 0
     this.lastCombatMs = 0
     this.staleMateBoostActive = false
+    this.paused = false
+    this.pauseOverlay?.destroy()
+    this.pauseOverlay = undefined
+    this.pauseText?.destroy()
+    this.pauseText = undefined
   }
 
   create() {
@@ -406,6 +414,22 @@ export class GameScene extends Phaser.Scene {
     this.selectionRect = this.add.graphics()
     this.selectionRect.setScrollFactor(0).setDepth(200)
 
+    this.pauseOverlay = this.add.rectangle(
+      this.scale.width / 2,
+      this.scale.height / 2,
+      this.scale.width,
+      this.scale.height,
+      0x000000,
+      0.45,
+    ).setScrollFactor(0).setDepth(9000).setVisible(false)
+    this.pauseText = this.add.text(this.scale.width / 2, this.scale.height / 2, 'PAUSED', {
+      fontFamily: 'monospace',
+      fontSize: '48px',
+      color: '#ffffff',
+      stroke: '#000000',
+      strokeThickness: 4,
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(9001).setVisible(false)
+
     // ── 14. Camera at player spawn (convert to iso coords) ────
     const startPos = this.getSpawnPositionForPlayer(this.gameState.localPlayerId)
     if (startPos) {
@@ -479,6 +503,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
+    if (this.paused) return
     try { this._updateInternal(delta) } catch (e) {
       console.error('[IC] update() error:', e)
       this.gameOver = true  // Stop further updates
@@ -1489,8 +1514,9 @@ export class GameScene extends Phaser.Scene {
       this.selectionRect.clear()
     })
 
-    // ESC — deselect all
-    this.input.keyboard!.on('keydown-ESC', () => this.deselectAll())
+    // ESC / P — toggle pause
+    this.input.keyboard!.on('keydown-ESC', () => this.togglePause())
+    this.input.keyboard!.on('keydown-P', () => this.togglePause())
 
     // S — stop selected units (only if units selected; otherwise let WASD handle camera)
     this.input.keyboard!.on('keydown-S', () => {
@@ -1526,13 +1552,6 @@ export class GameScene extends Phaser.Scene {
         }
       })
       if (this.selectedIds.size > 0) this.showUnitAck('Guard position')
-    })
-
-    // P — patrol mode: next click becomes patrol point.
-    this.input.keyboard!.on('keydown-P', () => {
-      if (this.selectedIds.size === 0) return
-      this.cursorMode = 'patrol'
-      this.showUnitAck('Patrol: click destination')
     })
 
     // D — deploy (GI/Conscript toggle fortified, MCV deploy/undeploy)
@@ -1586,6 +1605,12 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard!.on('keyup-Z', () => {
       this.waypointMode = false
     })
+  }
+
+  private togglePause(): void {
+    this.paused = !this.paused
+    this.pauseOverlay?.setVisible(this.paused)
+    this.pauseText?.setVisible(this.paused)
   }
 
   // ── Isometric input helper ───────────────────────────────────────

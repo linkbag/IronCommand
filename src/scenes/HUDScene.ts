@@ -50,6 +50,7 @@ const POWER_RED    = 0xcc4444
 
 // ── Types ──────────────────────────────────────────────────────────────
 type BuildTab   = 'buildings' | 'defenses' | 'infantry' | 'vehicles' | 'aircraft'
+const UNIT_BUILD_TABS: BuildTab[] = ['infantry', 'vehicles', 'aircraft']
 type AlertType  = 'success' | 'warning' | 'danger' | 'info'
 type CursorMode = 'normal' | 'sell' | 'repair' | 'attackMove' | 'placement'
 
@@ -159,7 +160,7 @@ export class HUDScene extends Phaser.Scene {
 
   private buildProgress:  Map<string, number> = new Map()  // 0-1
   private buildTimers:    Map<string, number> = new Map()  // ms remaining
-  private buildQueueCnt:  Map<string, number> = new Map()
+  private unitBuildQueues: Map<BuildTab, Array<string>> = new Map()
   private pendingPlace:   Set<string>         = new Set()  // ready to place
   private creditsPaid:    Map<string, number> = new Map()  // credits already deducted for item
 
@@ -238,6 +239,7 @@ export class HUDScene extends Phaser.Scene {
     // Populate dynamic build items based on human player's faction
     const factionId = this.gameState?.players?.find(p => !p.isAI)?.faction ?? 'usa'
     this.buildItems = getBuildItems(factionId)
+    this.unitBuildQueues = new Map(UNIT_BUILD_TABS.map(tab => [tab, [] as string[]]))
 
     this.switchTab('buildings')
   }
@@ -588,6 +590,31 @@ export class HUDScene extends Phaser.Scene {
 
   /** Right-click on build button: cancel production or remove from queue */
   private onBuildRightClick(item: BuildableItem) {
+    const isUnitTab = UNIT_BUILD_TABS.includes(item.tab)
+    if (isUnitTab) {
+      const queue = this.getUnitQueue(item.tab)
+      if (queue.length <= 0) return
+
+      const queueLenBefore = queue.length
+      const activeId = this.getActiveBuildIdForTab(item.tab)
+      const removedDefId = queue.pop()!
+      const removedItem = this.buildItems.find(i => i.id === removedDefId)
+      let refund = 0
+
+      if (queueLenBefore === 1 && activeId === removedDefId) {
+        refund = this.creditsPaid.get(activeId) ?? 0
+        if (this.humanPlayer && refund > 0) this.humanPlayer.credits += refund
+        this.buildProgress.delete(activeId)
+        this.buildTimers.delete(activeId)
+        this.creditsPaid.delete(activeId)
+      }
+
+      this.startNextQueuedUnitBuild(item.tab)
+      const msgLabel = removedItem?.label ?? removedDefId
+      this.showAlert(`${msgLabel} removed from queue${refund > 0 ? ` ($${Math.floor(refund)} refunded)` : ''}`, 'warning')
+      return
+    }
+
     // Cancel active build
     if (this.buildProgress.has(item.id)) {
       const paid = this.creditsPaid.get(item.id) ?? 0
@@ -596,19 +623,11 @@ export class HUDScene extends Phaser.Scene {
       this.buildTimers.delete(item.id)
       this.creditsPaid.delete(item.id)
       const gs = this.scene.get('GameScene')
-      if (gs) gs.events.emit('cancelProduction', { defId: item.id, type: (item.tab === 'buildings' || item.tab === 'defenses') ? 'building' : 'unit', refund: paid })
+      if (gs) gs.events.emit('cancelProduction', { defId: item.id, type: 'building', refund: paid })
       this.showAlert(`${item.label} cancelled ($${Math.floor(paid)} refunded)`, 'warning')
       return
     }
-    // Cancel from queue
-    const q = this.buildQueueCnt.get(item.id) ?? 0
-    if (q > 0) {
-      if (this.humanPlayer) this.humanPlayer.credits += item.cost
-      this.buildQueueCnt.set(item.id, q - 1)
-      if (q - 1 === 0) this.buildQueueCnt.delete(item.id)
-      this.showAlert(`${item.label} removed from queue ($${item.cost} refunded)`, 'warning')
-      return
-    }
+
     // Cancel pending placement
     if (this.pendingPlace.has(item.id)) {
       this.exitPlacement(true)
@@ -1146,11 +1165,57 @@ export class HUDScene extends Phaser.Scene {
     }
   }
 
+  private getUnitQueue(tab: BuildTab): string[] {
+    let queue = this.unitBuildQueues.get(tab)
+    if (!queue) {
+      queue = []
+      this.unitBuildQueues.set(tab, queue)
+    }
+    return queue
+  }
+
+  private getActiveBuildIdForTab(tab: BuildTab): string | null {
+    for (const id of this.buildProgress.keys()) {
+      const item = this.buildItems.find(i => i.id === id)
+      if (item && item.tab === tab) return id
+    }
+    return null
+  }
+
+  private startBuildItem(item: BuildableItem): void {
+    this.buildProgress.set(item.id, 0)
+    // 1.5x faster than default build times
+    this.buildTimers.set(item.id, item.buildTime * 1000 / 1.5)
+    this.creditsPaid.set(item.id, 0)
+
+    const gs = this.scene.get('GameScene')
+    if (gs) gs.events.emit('startProduction', {
+      defId: item.id,
+      type: (item.tab === 'buildings' || item.tab === 'defenses') ? 'building' : 'unit',
+    })
+  }
+
+  private startNextQueuedUnitBuild(tab: BuildTab): void {
+    if (!UNIT_BUILD_TABS.includes(tab)) return
+    const queue = this.getUnitQueue(tab)
+    if (queue.length <= 0) return
+    if (this.getActiveBuildIdForTab(tab)) return
+    const nextId = queue[0]
+    const nextItem = this.buildItems.find(i => i.id === nextId && i.tab === tab)
+    if (!nextItem) {
+      queue.shift()
+      this.startNextQueuedUnitBuild(tab)
+      return
+    }
+    this.startBuildItem(nextItem)
+  }
+
   private onBuildClick(item: BuildableItem) {
     const player = this.humanPlayer
     if (!player) return
 
     const isBuildingTab = item.tab === 'buildings' || item.tab === 'defenses'
+    const isUnitTab = UNIT_BUILD_TABS.includes(item.tab)
 
     // Superweapon activation: if ready, enter target selection mode
     if (SUPERWEAPON_IDS.has(item.id) && this.superweaponReady.has(item.id)) {
@@ -1170,48 +1235,20 @@ export class HUDScene extends Phaser.Scene {
       return
     }
 
-    // ── Production queue constraints ──────────────────────────────
-    // Max 100 total pending units across all queues
-    const MAX_UNIT_QUEUE = 100
-    const isUnitTab = !isBuildingTab
-    if (isUnitTab) {
-      let totalPending = 0
-      for (const [id, cnt] of this.buildQueueCnt) totalPending += cnt
-      for (const id of this.buildProgress.keys()) {
-        if (!this.buildItems.find(bi => bi.id === id && (bi.tab === 'buildings' || bi.tab === 'defenses'))) {
-          totalPending++
-        }
-      }
-      if (totalPending >= MAX_UNIT_QUEUE) {
-        this.showAlert(`Unit queue full (max ${MAX_UNIT_QUEUE})`, 'danger')
-        return
-      }
-    }
-
-    // Within each tab category, only ONE unit type can be in production at a time.
-    // You can build infantry + vehicles + aircraft simultaneously (different tabs),
-    // but NOT two different tank types (same tab).
-    const sameCategoryDifferentType = this.buildItems.some(
-      bi => bi.tab === item.tab && bi.id !== item.id && this.buildProgress.has(bi.id)
-    )
-    if (sameCategoryDifferentType) {
-      const categoryLabel = isBuildingTab
-        ? (item.tab === 'defenses' ? 'defense' : 'building')
-        : item.tab
-      this.showAlert(`Already producing a different ${categoryLabel} type`, 'danger')
-      return
-    }
-
-    // Queue if already building this SAME item type (stack more of the same unit)
-    if (this.buildProgress.has(item.id)) {
-      if (isBuildingTab) {
+    if (isBuildingTab) {
+      if (this.buildProgress.has(item.id)) {
         this.showAlert('Already constructing this building', 'danger')
         return
       }
-      const q = (this.buildQueueCnt.get(item.id) ?? 0) + 1
-      this.buildQueueCnt.set(item.id, q)
-      this.showAlert(`${item.label} queued (${q} pending)`, 'info')
-      return
+
+      const sameCategoryDifferentType = this.buildItems.some(
+        bi => bi.tab === item.tab && bi.id !== item.id && this.buildProgress.has(bi.id)
+      )
+      if (sameCategoryDifferentType) {
+        const categoryLabel = item.tab === 'defenses' ? 'defense' : 'building'
+        this.showAlert(`Already producing a different ${categoryLabel} type`, 'danger')
+        return
+      }
     }
 
     // Superweapon limit: max 1 of each type
@@ -1244,14 +1281,20 @@ export class HUDScene extends Phaser.Scene {
       return
     }
 
-    this.buildProgress.set(item.id, 0)
-    // 1.5x faster than default build times
-    this.buildTimers.set(item.id, item.buildTime * 1000 / 1.5)
-    this.creditsPaid.set(item.id, 0)
+    if (isUnitTab) {
+      const queue = this.getUnitQueue(item.tab)
+      if (queue.length >= 100) {
+        this.showAlert('Queue full (max 100)', 'danger')
+        return
+      }
+      queue.push(item.id)
+      this.startNextQueuedUnitBuild(item.tab)
+      const queued = queue.filter(defId => defId === item.id).length
+      this.showAlert(`${item.label} queued (${queued})`, 'info')
+      return
+    }
 
-    const gs = this.scene.get('GameScene')
-    if (gs) gs.events.emit('startProduction', { defId: item.id, type: (item.tab === 'buildings' || item.tab === 'defenses') ? 'building' : 'unit' })
-
+    this.startBuildItem(item)
     this.showAlert(`Building: ${item.label}`, 'info')
   }
 
@@ -1919,20 +1962,18 @@ export class HUDScene extends Phaser.Scene {
       this.creditsPaid.delete(id)
       const item = this.buildItems.find(i => i.id === id)!
 
-      // Process queue
-      const q = this.buildQueueCnt.get(id) ?? 0
-      if (q > 0) {
-        this.buildQueueCnt.set(id, q - 1)
-        if (q - 1 === 0) this.buildQueueCnt.delete(id)
-        this.buildProgress.set(id, 0)
-        this.buildTimers.set(id, item.buildTime * 1000)
-      }
-
       if (item.tab === 'buildings' || item.tab === 'defenses') {
         this.pendingPlace.add(id)
         this.showAlert(`${item.label} ready — place it!`, 'success')
         this.enterPlacement(id)
       } else {
+        const queue = this.getUnitQueue(item.tab)
+        if (queue[0] === id) queue.shift()
+        else {
+          const idx = queue.indexOf(id)
+          if (idx >= 0) queue.splice(idx, 1)
+        }
+        this.startNextQueuedUnitBuild(item.tab)
         this.showAlert(`${item.label} ready`, 'success')
         const gs = this.scene.get('GameScene')
         if (gs) gs.events.emit('unitProduced', { defId: id })
@@ -1965,7 +2006,9 @@ export class HUDScene extends Phaser.Scene {
 
       btn._readyTxt?.setText(pending ? 'PLACE' : '')
 
-      const q = this.buildQueueCnt.get(item.id) ?? 0
+      const q = UNIT_BUILD_TABS.includes(item.tab)
+        ? this.getUnitQueue(item.tab).filter(defId => defId === item.id).length
+        : 0
       btn._queueTxt?.setText(q > 0 ? `+${q}` : '')
       btn._hotkeyTxt?.setAlpha(this.checkPrerequisites(item.id) ? 1 : 0.35)
 
