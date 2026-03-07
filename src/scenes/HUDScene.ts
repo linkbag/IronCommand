@@ -675,7 +675,7 @@ export class HUDScene extends Phaser.Scene {
         // ore/dollar
         g.fillStyle(0xffdd00, 1); g.fillTriangle(-5, 4, 0, -4, 5, 4) // ore pile
         break
-      case 'airfield': case 'air_force_hq':
+      case 'airfield': case 'air_force_hq': case 'air_force_command':
         g.fillStyle(0x445566, 1); g.fillRect(-s, -s+4, s*2, s*2-6)
         // runway + plane
         g.lineStyle(1, 0xcccccc, 0.8); g.lineBetween(-8, 0, 8, 0)
@@ -692,6 +692,41 @@ export class HUDScene extends Phaser.Scene {
         // atom/science
         g.lineStyle(1, 0x88ddff, 1); g.strokeCircle(0, 0, 6)
         g.fillStyle(0xff4444, 1); g.fillCircle(0, 0, 2)
+        break
+      case 'naval_shipyard':
+        g.fillStyle(0x2f5f7a, 1); g.fillRect(-s, -s+4, s*2, s*2-6)
+        g.fillStyle(0x1d4460, 1); g.fillRect(-s, 3, s*2, 5)
+        g.fillStyle(0xdde9f7, 1); g.fillTriangle(-6, 2, 5, 2, 8, -1)
+        break
+      case 'service_depot':
+        g.fillStyle(0x6d654f, 1); g.fillRect(-s+1, -s+4, s*2-2, s*2-6)
+        g.fillStyle(0x1f242c, 1); g.fillRect(-6, 0, 12, 5)
+        g.lineStyle(2, 0xd0d5db, 1); g.lineBetween(0, -7, 0, -3); g.lineBetween(-3, -5, 3, -5)
+        break
+      case 'ore_purifier':
+        g.fillStyle(0x5f7047, 1); g.fillRect(-s+1, -s+4, s*2-2, s*2-6)
+        g.fillStyle(0xffdd00, 1); g.fillTriangle(-6, 4, 0, -3, 6, 4)
+        g.fillStyle(0x9ad76f, 1); g.fillRect(3, -7, 4, 3)
+        break
+      case 'spy_satellite':
+        g.fillStyle(0x39516a, 1); g.fillRect(-s+2, -s+4, s*2-4, s*2-6)
+        g.lineStyle(2, 0x9be0ff, 1); g.lineBetween(0, 3, 0, -3); g.strokeCircle(0, -4, 5)
+        break
+      case 'gap_generator':
+        g.fillStyle(0x4a5a63, 1); g.fillRect(-s+2, -s+4, s*2-4, s*2-6)
+        g.lineStyle(2, 0x9fe4ff, 1); g.strokeCircle(0, 0, 6); g.strokeCircle(0, 0, 3)
+        break
+      case 'psychic_sensor':
+        g.fillStyle(0x5f466f, 1); g.fillRect(-s+2, -s+4, s*2-4, s*2-6)
+        g.lineStyle(2, 0xe483ff, 1); g.strokeCircle(0, 0, 6); g.strokeCircle(0, 0, 3)
+        break
+      case 'grand_cannon':
+        g.fillStyle(0x606060, 1); g.fillCircle(0, 2, 7)
+        g.lineStyle(3, 0xdddddd, 1); g.lineBetween(0, 0, 8, -8)
+        break
+      case 'cloning_vats':
+        g.fillStyle(0x5d4c61, 1); g.fillRect(-s+1, -s+4, s*2-2, s*2-6)
+        g.fillStyle(0x82e0cf, 0.9); g.fillRect(-6, -2, 3, 7); g.fillRect(-1, -2, 3, 7); g.fillRect(4, -2, 3, 7)
         break
       // ── Defenses ──
       case 'fortress_wall': case 'wall':
@@ -728,6 +763,161 @@ export class HUDScene extends Phaser.Scene {
         g.strokeCircle(0, 0, 8); g.strokeCircle(0, 0, 4)
         g.fillStyle(defId === 'chronosphere' ? 0x44ddff : 0xff4444, 0.4)
         g.fillCircle(0, 0, 4)
+        break
+      // ── Infantry ──
+      case 'gi': case 'conscript':
+        g.fillStyle(defId === 'gi' ? 0x9ec0e4 : 0xc78b74, 1); g.fillCircle(-1, -5, 2)
+        g.fillStyle(defId === 'gi' ? 0x5a80b0 : 0x8a3b30, 1); g.fillRect(-3, -2, 5, 8)
+        g.fillStyle(0x222222, 1); g.fillRect(2, -1, 5, 1)
+        break
+      case 'engineer':
+        g.fillStyle(0xffd34d, 1); g.fillRect(-3, -8, 6, 3)
+        g.fillStyle(0x5d7488, 1); g.fillRect(-3, -2, 6, 8)
+        g.fillStyle(0xb0b7bf, 1); g.fillCircle(5, 0, 2)
+        break
+      case 'rocketeer':
+        g.fillStyle(0x5f87b3, 1); g.fillRect(-2, -2, 4, 7)
+        g.fillStyle(0x3d5f84, 1); g.fillRect(-6, -1, 3, 5); g.fillRect(3, -1, 3, 5)
+        g.fillStyle(0xffaa44, 1); g.fillTriangle(-5, 5, -3, 9, -1, 5); g.fillTriangle(1, 5, 3, 9, 5, 5)
+        break
+      case 'spy':
+        g.fillStyle(0x1d1d1d, 1); g.fillRect(-4, -9, 8, 2); g.fillRect(-2, -10, 4, 1)
+        g.fillStyle(0x2f3644, 1); g.fillRect(-3, -3, 6, 9)
+        break
+      case 'attack_dog':
+        g.fillStyle(0x654938, 1); g.fillRect(-6, -1, 9, 4); g.fillTriangle(3, -1, 8, 1, 3, 3)
+        g.fillStyle(0x3a2b1f, 1); g.fillRect(-5, 3, 1, 4); g.fillRect(-2, 3, 1, 4); g.fillRect(1, 3, 1, 4)
+        break
+      case 'tanya':
+        g.fillStyle(0xddd0c6, 1); g.fillCircle(0, -5, 2)
+        g.fillStyle(0x3a638f, 1); g.fillRect(-3, -2, 6, 8)
+        g.fillStyle(0x333333, 1); g.fillRect(-6, 0, 2, 1); g.fillRect(4, 0, 2, 1)
+        break
+      case 'chrono_legionnaire':
+        g.lineStyle(1, 0xeffaff, 1); g.strokeCircle(0, 0, 8)
+        g.fillStyle(0x78d7ff, 1); g.fillRect(-3, -2, 6, 8)
+        g.fillStyle(0xeffaff, 1); g.fillCircle(0, -5, 2)
+        break
+      case 'sniper':
+        g.fillStyle(0x4d5e4d, 1); g.fillRect(-7, 1, 12, 3)
+        g.fillStyle(0xb8c2a4, 1); g.fillCircle(-7, 0, 1)
+        g.fillStyle(0x222222, 1); g.fillRect(4, 0, 6, 1)
+        break
+      case 'flak_trooper':
+        g.fillStyle(0x7c5142, 1); g.fillRect(-4, -3, 7, 10)
+        g.fillStyle(0x9f9f9f, 1); g.fillRect(3, -1, 5, 3)
+        break
+      case 'tesla_trooper':
+        g.fillStyle(0x67e2ff, 0.35); g.fillCircle(0, 0, 9)
+        g.fillStyle(0x6b2f8a, 1); g.fillRect(-4, -3, 8, 10)
+        g.lineStyle(2, 0x67e2ff, 1); g.lineBetween(4, -1, 8, -5)
+        break
+      case 'crazy_ivan':
+        g.fillStyle(0x8b5a3c, 1); g.fillRect(-3, -2, 6, 8)
+        g.fillStyle(0x222222, 1); g.fillCircle(6, 0, 2); g.fillRect(5, -2, 2, 2)
+        break
+      case 'yuri':
+        g.lineStyle(1, 0xe483ff, 1); g.strokeEllipse(0, -5, 10, 4); g.strokeEllipse(0, -5, 14, 6)
+        g.fillStyle(0x5e3d8c, 1); g.fillRect(-3, -2, 6, 8)
+        break
+      case 'desolator':
+        g.fillStyle(0x5a7540, 1); g.fillRect(-4, -3, 8, 10)
+        g.fillStyle(0x95ff55, 1); g.fillRect(4, -1, 5, 1)
+        break
+      case 'terrorist':
+        g.fillStyle(0x6f3a32, 1); g.fillRect(-3, -2, 6, 8)
+        g.fillStyle(0x222222, 1); g.fillCircle(6, 0, 2)
+        g.fillStyle(0xff4422, 1); g.fillRect(5, -3, 2, 1)
+        break
+      // ── Vehicles / Aircraft / Naval ──
+      case 'grizzly_tank': case 'rhino_tank': case 'mirage_tank': case 'prism_tank':
+      case 'tesla_tank': case 'dragon_tank':
+        g.fillStyle(defId === 'rhino_tank' ? 0x7a3f34 : 0x4f708d, 1)
+        if (defId === 'mirage_tank') g.fillStyle(0x6a8b5d, 1)
+        if (defId === 'prism_tank') g.fillStyle(0x5e82b8, 1)
+        if (defId === 'tesla_tank') g.fillStyle(0x6b3546, 1)
+        if (defId === 'dragon_tank') g.fillStyle(0x7a4230, 1)
+        g.fillRect(-8, -2, 16, 8)
+        g.fillRect(-2, -4, 7, 4)
+        g.lineStyle(2, defId === 'tesla_tank' ? 0x67e2ff : 0xdddddd, 1); g.lineBetween(1, -2, 10, -2)
+        if (defId === 'prism_tank') g.fillStyle(0x9fffff, 1), g.fillTriangle(2, -4, 6, -2, 1, -1)
+        if (defId === 'dragon_tank') g.fillStyle(0xff8f42, 1), g.fillTriangle(10, -2, 7, -4, 7, 0)
+        break
+      case 'apocalypse_tank':
+        g.fillStyle(0x5a2f2f, 1); g.fillRect(-9, -2, 18, 8); g.fillRect(-3, -4, 8, 4)
+        g.lineStyle(2, 0xd39d4c, 1); g.lineBetween(2, -3, 10, -4); g.lineBetween(2, -1, 10, -2)
+        break
+      case 'ifv': case 'flak_track':
+        g.fillStyle(defId === 'ifv' ? 0x3c6f88 : 0x6b4334, 1); g.fillRect(-8, -2, 14, 8); g.fillRect(6, -1, 3, 6)
+        if (defId === 'ifv') g.fillStyle(0xc8d9e8, 1), g.fillRect(-2, -5, 6, 2)
+        if (defId === 'flak_track') g.lineStyle(2, 0xb0b0b0, 1), g.lineBetween(-1, -2, 1, -7), g.lineBetween(3, -2, 5, -7)
+        break
+      case 'v3_launcher':
+        g.fillStyle(0x6f4742, 1); g.fillRect(-8, 0, 13, 6); g.fillRect(5, 1, 4, 5)
+        g.fillStyle(0xe0a83f, 1); g.fillRect(-1, -8, 3, 8); g.fillTriangle(-1, -8, 2, -8, 0, -10)
+        break
+      case 'chrono_miner': case 'war_miner':
+        g.fillStyle(defId === 'chrono_miner' ? 0x4f7ca6 : 0x875733, 1); g.fillRect(-8, -2, 14, 8); g.fillRect(6, -1, 3, 6)
+        g.fillStyle(defId === 'chrono_miner' ? 0x81ecff : 0xd8b368, 1); g.fillRect(-2, 0, 3, 3)
+        break
+      case 'mcv':
+        g.fillStyle(0x55616e, 1); g.fillRect(-9, -2, 18, 8); g.fillRect(-3, -4, 8, 3)
+        break
+      case 'terror_drone':
+        g.fillStyle(0x552f2f, 1); g.fillCircle(0, 0, 5); g.fillStyle(0xff5f5f, 1); g.fillCircle(0, 0, 2)
+        g.lineStyle(2, 0x2b1a1a, 1); g.lineBetween(-6, -5, -3, -2); g.lineBetween(6, -5, 3, -2); g.lineBetween(-6, 5, -3, 2); g.lineBetween(6, 5, 3, 2)
+        break
+      case 'tank_destroyer':
+        g.fillStyle(0x4d6068, 1); g.fillRect(-8, -2, 14, 8); g.fillRect(-2, -4, 6, 4)
+        g.lineStyle(3, 0xd9e6ea, 1); g.lineBetween(1, -2, 10, -2)
+        break
+      case 'mecha_walker': case 'conquistador_mech':
+        g.fillStyle(defId === 'mecha_walker' ? 0x4f697f : 0x6a5a4a, 1)
+        g.fillRect(-3, -4, 6, 9); g.fillRect(-6, -1, 12, 5); g.fillRect(-5, 5, 2, 4); g.fillRect(3, 5, 2, 4)
+        g.lineStyle(2, defId === 'mecha_walker' ? 0x9be0ff : 0xbfd6e0, 1); g.lineBetween(6, -1, 10, -3)
+        break
+      case 'demo_truck':
+        g.fillStyle(0x7f4b3f, 1); g.fillRect(-8, -2, 14, 8); g.fillRect(6, -1, 3, 6)
+        g.fillStyle(0xff4422, 1); g.fillRect(-2, 0, 6, 3)
+        break
+      case 'brahmos_battery':
+        g.fillStyle(0x5b4652, 1); g.fillRect(-9, -1, 14, 7); g.fillRect(5, 0, 4, 6)
+        g.fillStyle(0xffcc88, 1); g.fillRect(-3, -7, 3, 7); g.fillRect(1, -6, 3, 6)
+        break
+      case 'harrier': case 'black_eagle':
+        g.fillStyle(defId === 'black_eagle' ? 0x2f4f7c : 0x406fa4, 1)
+        g.fillTriangle(-8, 2, 8, 2, -1, -5); g.fillTriangle(-8, 2, 8, 2, -1, 9)
+        g.fillStyle(0xd9e7f5, 1); g.fillRect(-1, 0, 8, 2)
+        break
+      case 'nighthawk':
+        g.fillStyle(0x4f5d6b, 1); g.fillRect(-6, -2, 12, 7); g.fillRect(-9, 0, 18, 3)
+        g.lineStyle(2, 0xc7d5de, 1); g.lineBetween(-10, -3, 10, -3)
+        break
+      case 'recon_drone':
+        g.fillStyle(0x789090, 1); g.fillRect(-3, -1, 6, 3); g.fillRect(-8, 0, 4, 1); g.fillRect(4, 0, 4, 1)
+        g.fillStyle(0x8cffef, 1); g.fillCircle(0, 1, 1)
+        break
+      case 'kirov':
+        g.fillStyle(0x7a3f3a, 1); g.fillEllipse(0, 0, 18, 10)
+        g.fillStyle(0x5b2f2a, 1); g.fillRect(-3, 3, 6, 3)
+        g.fillStyle(0xd1a288, 1); g.fillRect(8, -1, 2, 2)
+        break
+      case 'destroyer': case 'aegis_cruiser': case 'aircraft_carrier': case 'dreadnought':
+        g.fillStyle(defId === 'dreadnought' ? 0x6d3f3b : 0x486f94, 1)
+        if (defId === 'aegis_cruiser') g.fillStyle(0x3f6287, 1)
+        if (defId === 'aircraft_carrier') g.fillStyle(0x4a5d71, 1)
+        g.fillTriangle(-8, 4, 7, 4, 10, 1); g.fillRect(-8, -2, 11, 6)
+        if (defId === 'aegis_cruiser') g.fillStyle(0x8ce2ff, 1), g.fillRect(-1, -5, 2, 3), g.fillRect(3, -5, 2, 3)
+        if (defId === 'aircraft_carrier') g.fillStyle(0xf3f6fa, 1), g.fillRect(-4, 1, 8, 1)
+        if (defId === 'dreadnought') g.lineStyle(2, 0xffb184, 1), g.lineBetween(1, -2, 10, -4), g.lineBetween(0, 0, 10, -1)
+        break
+      case 'typhoon_sub':
+        g.fillStyle(0x3b4149, 1); g.fillEllipse(-1, 2, 16, 7); g.fillRect(-3, -4, 5, 3)
+        g.fillStyle(0x8fa0b2, 1); g.fillRect(2, -4, 2, 2)
+        break
+      case 'giant_squid':
+        g.fillStyle(0x5e2f64, 1); g.fillEllipse(0, -1, 10, 8)
+        g.lineStyle(2, 0xc88cff, 1); g.lineBetween(-2, 3, -4, 8); g.lineBetween(0, 3, 0, 9); g.lineBetween(2, 3, 4, 8)
         break
       default:
         // Fallback by tab
