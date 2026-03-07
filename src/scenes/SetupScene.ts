@@ -128,7 +128,7 @@ export class SetupScene extends Phaser.Scene {
 
     // Back button
     const backZone = this.add.zone(60, 25, 100, 40).setInteractive({ cursor: 'pointer' })
-    this.add.text(60, 25, '◀ BACK', {
+    const backText = this.add.text(60, 25, '◀ BACK', {
       fontFamily: 'monospace',
       fontSize: '14px',
       color: '#aaaaaa',
@@ -136,8 +136,6 @@ export class SetupScene extends Phaser.Scene {
     backZone.on('pointerdown', () => this.scene.start('MenuScene'))
     backZone.on('pointerover', () => backText.setColor('#ffffff'))
     backZone.on('pointerout',  () => backText.setColor('#aaaaaa'))
-    const backText = this.children.getByName('backText') as Phaser.GameObjects.Text
-    void backText
   }
 
   private createFactionPanel(width: number, height: number) {
@@ -773,9 +771,10 @@ export class SetupScene extends Phaser.Scene {
   }
 
   private launchMission() {
+    const config: SkirmishConfig = { ...this.config }
     this.cameras.main.fadeOut(400, 0, 0, 0)
     this.cameras.main.once('camerafadeoutcomplete', () => {
-      this.scene.start('GameScene', { config: this.config })
+      this.scene.start('GameScene', { config })
     })
   }
 }
