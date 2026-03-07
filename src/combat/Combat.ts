@@ -14,52 +14,52 @@ import { cartToScreen } from '../engine/IsoUtils'
 
 const DAMAGE_ARMOR_MULTIPLIERS: Record<DamageType, Record<ArmorType, number>> = {
   [DamageType.BULLET]: {
-    [ArmorType.NONE]: 1.5,
+    [ArmorType.NONE]: 1.35,
     [ArmorType.LIGHT]: 1.0,
-    [ArmorType.MEDIUM]: 0.55,
-    [ArmorType.HEAVY]: 0.35,
+    [ArmorType.MEDIUM]: 0.6,
+    [ArmorType.HEAVY]: 0.4,
     [ArmorType.WOOD]: 0.7,
-    [ArmorType.STEEL]: 0.35,
+    [ArmorType.STEEL]: 0.45,
     [ArmorType.CONCRETE]: 0.05,
   },
   [DamageType.EXPLOSIVE]: {
-    [ArmorType.NONE]: 0.65,
+    [ArmorType.NONE]: 1.0,
     [ArmorType.LIGHT]: 1.1,
-    [ArmorType.MEDIUM]: 1.3,
-    [ArmorType.HEAVY]: 1.45,
-    [ArmorType.WOOD]: 1.55,
-    [ArmorType.STEEL]: 1.25,
-    [ArmorType.CONCRETE]: 1.1,
+    [ArmorType.MEDIUM]: 1.0,
+    [ArmorType.HEAVY]: 0.9,
+    [ArmorType.WOOD]: 1.2,
+    [ArmorType.STEEL]: 1.0,
+    [ArmorType.CONCRETE]: 0.8,
   },
   [DamageType.HE]: {
-    [ArmorType.NONE]: 0.75,
-    [ArmorType.LIGHT]: 1.2,
-    [ArmorType.MEDIUM]: 1.35,
-    [ArmorType.HEAVY]: 1.55,
-    [ArmorType.WOOD]: 1.75,
-    [ArmorType.STEEL]: 1.35,
-    [ArmorType.CONCRETE]: 1.2,
+    [ArmorType.NONE]: 1.45,
+    [ArmorType.LIGHT]: 1.25,
+    [ArmorType.MEDIUM]: 0.85,
+    [ArmorType.HEAVY]: 0.65,
+    [ArmorType.WOOD]: 1.2,
+    [ArmorType.STEEL]: 0.75,
+    [ArmorType.CONCRETE]: 0.55,
   },
   [DamageType.AP]: {
     [ArmorType.NONE]: 0.6,
-    [ArmorType.LIGHT]: 0.95,
-    [ArmorType.MEDIUM]: 1.35,
-    [ArmorType.HEAVY]: 1.7,
-    [ArmorType.WOOD]: 0.8,
-    [ArmorType.STEEL]: 1.6,
-    [ArmorType.CONCRETE]: 1.1,
+    [ArmorType.LIGHT]: 0.9,
+    [ArmorType.MEDIUM]: 1.2,
+    [ArmorType.HEAVY]: 1.4,
+    [ArmorType.WOOD]: 1.0,
+    [ArmorType.STEEL]: 1.3,
+    [ArmorType.CONCRETE]: 0.9,
   },
   [DamageType.MISSILE]: {
-    [ArmorType.NONE]: 0.65,
+    [ArmorType.NONE]: 0.9,
     [ArmorType.LIGHT]: 1.1,
-    [ArmorType.MEDIUM]: 1.45,
-    [ArmorType.HEAVY]: 1.5,
-    [ArmorType.WOOD]: 1.15,
-    [ArmorType.STEEL]: 1.45,
-    [ArmorType.CONCRETE]: 0.85,
+    [ArmorType.MEDIUM]: 1.2,
+    [ArmorType.HEAVY]: 1.25,
+    [ArmorType.WOOD]: 1.1,
+    [ArmorType.STEEL]: 1.2,
+    [ArmorType.CONCRETE]: 0.7,
   },
   [DamageType.FIRE]: {
-    [ArmorType.NONE]: 2.0,
+    [ArmorType.NONE]: 1.9,
     [ArmorType.LIGHT]: 1.2,
     [ArmorType.MEDIUM]: 0.6,
     [ArmorType.HEAVY]: 0.35,
@@ -68,19 +68,19 @@ const DAMAGE_ARMOR_MULTIPLIERS: Record<DamageType, Record<ArmorType, number>> = 
     [ArmorType.CONCRETE]: 0.3,
   },
   [DamageType.ELECTRIC]: {
-    [ArmorType.NONE]: 1.15,
-    [ArmorType.LIGHT]: 1.25,
-    [ArmorType.MEDIUM]: 1.25,
-    [ArmorType.HEAVY]: 1.3,
+    [ArmorType.NONE]: 1.1,
+    [ArmorType.LIGHT]: 1.2,
+    [ArmorType.MEDIUM]: 1.3,
+    [ArmorType.HEAVY]: 1.4,
     [ArmorType.WOOD]: 0.7,
-    [ArmorType.STEEL]: 1.5,
+    [ArmorType.STEEL]: 1.45,
     [ArmorType.CONCRETE]: 0.8,
   },
   [DamageType.RADIATION]: {
-    [ArmorType.NONE]: 1.7,
-    [ArmorType.LIGHT]: 1.2,
-    [ArmorType.MEDIUM]: 0.75,
-    [ArmorType.HEAVY]: 0.45,
+    [ArmorType.NONE]: 1.75,
+    [ArmorType.LIGHT]: 1.3,
+    [ArmorType.MEDIUM]: 0.8,
+    [ArmorType.HEAVY]: 0.5,
     [ArmorType.WOOD]: 0.95,
     [ArmorType.STEEL]: 0.35,
     [ArmorType.CONCRETE]: 0.25,
@@ -354,6 +354,9 @@ export class Combat extends Phaser.Events.EventEmitter {
             dmg = Math.ceil(dmg * 0.7)
           }
         }
+        if (attacker instanceof Unit) {
+          dmg = this.applyRoleDamageModifiers(attacker, targetCategory, dmg)
+        }
         const hpBefore = target.hp
         target.takeDamage(dmg, attacker.playerId)
 
@@ -406,6 +409,9 @@ export class Combat extends Phaser.Events.EventEmitter {
               } else if (targetCategory === 'infantry') {
                 dmg = Math.ceil(dmg * 0.7)
               }
+            }
+            if (attacker instanceof Unit) {
+              dmg = this.applyRoleDamageModifiers(attacker, targetCategory, dmg)
             }
             const hpBefore = target.hp
             target.takeDamage(dmg, attacker.playerId)
@@ -804,6 +810,25 @@ export class Combat extends Phaser.Events.EventEmitter {
       x: target.x + Math.cos(angle) * dist,
       y: target.y + Math.sin(angle) * dist,
     }
+  }
+
+  private applyRoleDamageModifiers(attacker: Unit, targetCategory: string, baseDamage: number): number {
+    let dmg = baseDamage
+
+    // GI "deployed" representation: when stationary, GI is a stronger anti-infantry anchor.
+    if (attacker.def.id === 'gi' && attacker.state !== 'moving' && targetCategory === 'infantry') {
+      dmg = Math.ceil(dmg * 1.35)
+    }
+
+    // IFV loadout abstraction: anti-air optimized if equipped for AA, lighter versus armored ground.
+    if (attacker.def.id === 'ifv') {
+      if (targetCategory === 'aircraft') dmg = Math.ceil(dmg * 1.3)
+      if (['vehicle', 'harvester', 'naval', 'base', 'production', 'power', 'defense', 'tech', 'superweapon'].includes(targetCategory)) {
+        dmg = Math.ceil(dmg * 0.8)
+      }
+    }
+
+    return Math.max(1, dmg)
   }
 
   private getArmorType(entity: Unit | Building): ArmorType {
