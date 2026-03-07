@@ -1173,19 +1173,39 @@ export class HUDScene extends Phaser.Scene {
       return
     }
 
-    // Separate build queues: buildings, defenses, and units can build in parallel
-    // But within each category, only one at a time
-    if (isBuildingTab) {
-      const sameCategory = this.buildItems.some(
-        bi => bi.tab === item.tab && bi.id !== item.id && this.buildProgress.has(bi.id)
-      )
-      if (sameCategory) {
-        this.showAlert(`Already constructing a ${item.tab === 'defenses' ? 'defense' : 'building'}`, 'danger')
+    // ── Production queue constraints ──────────────────────────────
+    // Max 100 total pending units across all queues
+    const MAX_UNIT_QUEUE = 100
+    const isUnitTab = !isBuildingTab
+    if (isUnitTab) {
+      let totalPending = 0
+      for (const [id, cnt] of this.buildQueueCnt) totalPending += cnt
+      for (const id of this.buildProgress.keys()) {
+        if (!this.buildItems.find(bi => bi.id === id && (bi.tab === 'buildings' || bi.tab === 'defenses'))) {
+          totalPending++
+        }
+      }
+      if (totalPending >= MAX_UNIT_QUEUE) {
+        this.showAlert(`Unit queue full (max ${MAX_UNIT_QUEUE})`, 'danger')
         return
       }
     }
 
-    // Queue if already building this item
+    // Within each tab category, only ONE unit type can be in production at a time.
+    // You can build infantry + vehicles + aircraft simultaneously (different tabs),
+    // but NOT two different tank types (same tab).
+    const sameCategoryDifferentType = this.buildItems.some(
+      bi => bi.tab === item.tab && bi.id !== item.id && this.buildProgress.has(bi.id)
+    )
+    if (sameCategoryDifferentType) {
+      const categoryLabel = isBuildingTab
+        ? (item.tab === 'defenses' ? 'defense' : 'building')
+        : item.tab
+      this.showAlert(`Already producing a different ${categoryLabel} type`, 'danger')
+      return
+    }
+
+    // Queue if already building this SAME item type (stack more of the same unit)
     if (this.buildProgress.has(item.id)) {
       if (isBuildingTab) {
         this.showAlert('Already constructing this building', 'danger')
@@ -1193,7 +1213,7 @@ export class HUDScene extends Phaser.Scene {
       }
       const q = (this.buildQueueCnt.get(item.id) ?? 0) + 1
       this.buildQueueCnt.set(item.id, q)
-      this.showAlert(`${item.label} queued (+${q})`, 'info')
+      this.showAlert(`${item.label} queued (${q} pending)`, 'info')
       return
     }
 
