@@ -153,239 +153,444 @@ function generateMapData(
   const noise = new ValueNoise(seed)
   const waterNoise = new ValueNoise(seed + 1)
   const forestNoise = new ValueNoise(seed + 2)
-
-  // Template-specific thresholds
   const cfg = {
-    waterThreshold: 0.72,
-    rockThreshold: 0.7,
-    sandThreshold: 0.25,
-    forestThreshold: 0.68,
-    scale: 0.03,
+    waterThreshold: 0.67,
+    sandThreshold: 0.24,
+    forestThreshold: 0.72,
+    rockThreshold: 0.78,
+    scale: 0.028,
     oreMultiplier: 1.0,
-    riverEnabled: true,
-    edgeWater: false,  // Continental: water border around edges
+    maxRockRatio: 0.12,
+    tinyWaterSize: 7,
+    mountainSpine: false,
   }
 
   switch (resolved) {
     case 'continental':
-      cfg.edgeWater = true
+      cfg.mountainSpine = true
+      cfg.tinyWaterSize = 10
       break
     case 'islands':
-      cfg.waterThreshold = 0.55  // Much more water
-      cfg.forestThreshold = 0.72
-      cfg.scale = 0.025
-      cfg.oreMultiplier = 0.8
-      cfg.riverEnabled = false
+      cfg.waterThreshold = 0.60
+      cfg.sandThreshold = 0.30
+      cfg.forestThreshold = 0.76
+      cfg.rockThreshold = 0.84
+      cfg.scale = 0.024
+      cfg.oreMultiplier = 0.85
+      cfg.maxRockRatio = 0.10
+      cfg.tinyWaterSize = 14
       break
     case 'desert':
-      cfg.waterThreshold = 0.88  // Very little water
-      cfg.rockThreshold = 0.6    // More rock clusters
-      cfg.sandThreshold = 0.55   // Much more sand
-      cfg.forestThreshold = 0.92 // Almost no forest
-      cfg.oreMultiplier = 0.7
-      cfg.riverEnabled = false
+      cfg.waterThreshold = 0.82
+      cfg.sandThreshold = 0.44
+      cfg.forestThreshold = 0.96
+      cfg.rockThreshold = 0.86
+      cfg.oreMultiplier = 0.75
+      cfg.maxRockRatio = 0.08
+      cfg.tinyWaterSize = 5
       break
     case 'arctic':
-      cfg.waterThreshold = 0.68
-      cfg.forestThreshold = 0.75
-      cfg.sandThreshold = 0.20   // Less sand (snow-covered)
+      cfg.waterThreshold = 0.64
+      cfg.sandThreshold = 0.28
+      cfg.forestThreshold = 0.92
+      cfg.rockThreshold = 0.82
       cfg.oreMultiplier = 0.9
+      cfg.maxRockRatio = 0.10
+      cfg.tinyWaterSize = 12
       break
     case 'urban':
-      cfg.waterThreshold = 0.82  // Less water
-      cfg.rockThreshold = 0.55   // More rock clusters (ruins)
-      cfg.forestThreshold = 0.85 // Much less forest
+      cfg.waterThreshold = 0.80
+      cfg.sandThreshold = 0.18
+      cfg.forestThreshold = 0.92
+      cfg.rockThreshold = 0.83
       cfg.oreMultiplier = 1.2
-      cfg.riverEnabled = false
+      cfg.maxRockRatio = 0.11
+      cfg.tinyWaterSize = 6
       break
   }
 
-  // Build base tile grid
+  const setTerrain = (tile: TileData, terrain: TerrainType): void => {
+    tile.terrain = terrain
+    tile.oreAmount = 0
+    if (terrain === TerrainType.WATER) {
+      tile.passable = false
+      tile.buildable = false
+      tile.height = 0
+      return
+    }
+    if (terrain === TerrainType.ROCK) {
+      tile.passable = false
+      tile.buildable = false
+      tile.height = 2
+      return
+    }
+    tile.passable = true
+    tile.buildable = terrain !== TerrainType.FOREST && terrain !== TerrainType.ROAD && terrain !== TerrainType.BRIDGE
+    if (terrain === TerrainType.BRIDGE || terrain === TerrainType.ROAD) tile.buildable = false
+  }
+
   const tiles: TileData[][] = Array.from({ length: height }, (_, row) =>
     Array.from({ length: width }, (_, col) => {
-      const n = noise.fractal(col * cfg.scale, row * cfg.scale)
-      const w = waterNoise.fractal(col * cfg.scale * 1.5, row * cfg.scale * 1.5)
-      const f = forestNoise.fractal(col * cfg.scale * 2, row * cfg.scale * 2)
+      const n = noise.fractal(col * cfg.scale, row * cfg.scale, 4)
+      const w = waterNoise.fractal(col * cfg.scale * 1.35, row * cfg.scale * 1.35, 4)
+      const f = forestNoise.fractal(col * cfg.scale * 2.15, row * cfg.scale * 2.15, 3)
+      const edgeDist = Math.min(col, row, width - 1 - col, height - 1 - row)
+      const edgeRatio = Phaser.Math.Clamp(edgeDist / Math.max(1, Math.min(width, height) * 0.46), 0, 1)
 
-      let terrain: TerrainType
-      let passable = true
-      let buildable = true
-
-      // Continental: force water at map edges
-      if (cfg.edgeWater) {
-        const edgeDist = Math.min(col, row, width - 1 - col, height - 1 - row)
-        const edgeFade = 5
-        if (edgeDist < edgeFade) {
-          const edgeFactor = 1.0 - edgeDist / edgeFade
-          if (edgeFactor > 0.5 || w > cfg.waterThreshold - edgeFactor * 0.3) {
-            if (edgeDist <= 1) {
-              return { terrain: TerrainType.WATER, passable: false, buildable: false, oreAmount: 0, fogState: FogState.HIDDEN, occupiedBy: null }
-            }
-          }
-        }
-      }
-
-      // Islands: use distance-from-center modulation for island shapes
+      let waterScore = w
+      if (resolved === 'continental') waterScore += (1 - edgeRatio) * 0.34
+      if (resolved === 'desert') waterScore += 0.15
+      if (resolved === 'urban') waterScore += 0.09
       if (resolved === 'islands') {
-        const ncx = (col / width - 0.5) * 2
-        const ncy = (row / height - 0.5) * 2
-        const distCenter = Math.sqrt(ncx * ncx + ncy * ncy)
-        // Create island clusters: use noise to break up the landmass
-        const islandNoise = noise.fractal(col * 0.04, row * 0.04, 3)
-        const waterChance = w + distCenter * 0.2 - islandNoise * 0.25
-        if (waterChance > cfg.waterThreshold) {
-          return { terrain: TerrainType.WATER, passable: false, buildable: false, oreAmount: 0, fogState: FogState.HIDDEN, occupiedBy: null }
-        }
+        const nx = (col / width - 0.5) * 2
+        const ny = (row / height - 0.5) * 2
+        const dist = Math.hypot(nx, ny)
+        waterScore += dist * 0.24 - noise.fractal(col * 0.05, row * 0.05, 3) * 0.27
       }
 
-      if (w > cfg.waterThreshold) {
-        terrain = TerrainType.WATER
-        passable = false
-        buildable = false
-      } else if (n > cfg.rockThreshold) {
-        terrain = TerrainType.ROCK
-        passable = false
-        buildable = false
-      } else if (n < cfg.sandThreshold) {
-        terrain = TerrainType.SAND
-      } else if (f > cfg.forestThreshold) {
-        terrain = TerrainType.FOREST
-        buildable = false
-      } else {
-        terrain = TerrainType.GRASS
-      }
-
-      return {
-        terrain,
-        passable,
-        buildable,
+      const tile: TileData = {
+        terrain: TerrainType.GRASS,
+        height: 1,
+        passable: true,
+        buildable: true,
         oreAmount: 0,
         fogState: FogState.HIDDEN,
         occupiedBy: null,
-      } satisfies TileData
+      }
+
+      if (waterScore > cfg.waterThreshold) {
+        setTerrain(tile, TerrainType.WATER)
+        return tile
+      }
+
+      if (resolved === 'desert' || n < cfg.sandThreshold) setTerrain(tile, TerrainType.SAND)
+      if (f > cfg.forestThreshold && resolved !== 'desert' && resolved !== 'urban') setTerrain(tile, TerrainType.FOREST)
+
+      const ridge = Math.abs(noise.fractal(col * cfg.scale * 0.75 + 100, row * cfg.scale * 0.75 + 100, 3) - 0.5) * 2
+      let mountainScore = ridge * 0.6 + noise.fractal(col * cfg.scale * 0.66 + 300, row * cfg.scale * 0.66 + 300, 3) * 0.4
+      if (cfg.mountainSpine) {
+        const center = Math.abs(col / width - 0.5) * 2
+        mountainScore += Phaser.Math.Clamp(1 - center * 1.55, 0, 1) * 0.45
+      }
+      if (mountainScore > cfg.rockThreshold && waterScore < cfg.waterThreshold - 0.03) {
+        setTerrain(tile, TerrainType.ROCK)
+      }
+      return tile
     })
   )
 
-  // Desert: convert grass to sand for thematic consistency
-  if (resolved === 'desert') {
-    for (let row = 0; row < height; row++) {
+  const inBounds = (c: number, r: number) => c >= 0 && c < width && r >= 0 && r < height
+  const n8: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
+  const n4: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+
+  const countNeighbors = (col: number, row: number, predicate: (t: TileData) => boolean, diag = true): number => {
+    const dirs = diag ? n8 : n4
+    let c = 0
+    for (const [dc, dr] of dirs) {
+      const nc = col + dc, nr = row + dr
+      if (!inBounds(nc, nr)) continue
+      if (predicate(tiles[nr][nc])) c++
+    }
+    return c
+  }
+
+  const carveLake = (cx: number, cy: number, radius: number): void => {
+    for (let row = cy - radius - 1; row <= cy + radius + 1; row++) {
+      for (let col = cx - radius - 1; col <= cx + radius + 1; col++) {
+        if (!inBounds(col, row)) continue
+        const dx = col - cx
+        const dy = row - cy
+        const d = Math.sqrt(dx * dx + dy * dy)
+        const wobble = noise.fractal(col * 0.18 + 90, row * 0.18 + 45, 2) * 1.2
+        if (d <= radius - 0.35 + wobble) setTerrain(tiles[row][col], TerrainType.WATER)
+      }
+    }
+  }
+
+  const carveMeanderingRiver = (mostlyHorizontal = true, halfWidth = 1): void => {
+    if (mostlyHorizontal) {
+      let y = Math.floor(height * (0.28 + rng() * 0.44))
+      const centerByCol = new Int16Array(width)
       for (let col = 0; col < width; col++) {
-        if (tiles[row][col].terrain === TerrainType.GRASS) {
-          tiles[row][col].terrain = TerrainType.SAND
+        y += Math.floor((rng() - 0.5) * 3)
+        y = Phaser.Math.Clamp(y, 3 + halfWidth, height - 4 - halfWidth)
+        centerByCol[col] = y
+        for (let r = y - halfWidth; r <= y + halfWidth; r++) setTerrain(tiles[r][col], TerrainType.WATER)
+      }
+      for (const bridgeCol of [Math.floor(width * 0.22), Math.floor(width * 0.5), Math.floor(width * 0.78)]) {
+        const cy = centerByCol[bridgeCol]
+        for (let r = cy - (halfWidth + 1); r <= cy + (halfWidth + 1); r++) {
+          if (!inBounds(bridgeCol, r)) continue
+          setTerrain(tiles[r][bridgeCol], TerrainType.BRIDGE)
+          tiles[r][bridgeCol].height = 1
+        }
+      }
+      return
+    }
+    let x = Math.floor(width * (0.28 + rng() * 0.44))
+    for (let row = 0; row < height; row++) {
+      x += Math.floor((rng() - 0.5) * 3)
+      x = Phaser.Math.Clamp(x, 3 + halfWidth, width - 4 - halfWidth)
+      for (let c = x - halfWidth; c <= x + halfWidth; c++) setTerrain(tiles[row][c], TerrainType.WATER)
+    }
+  }
+
+  const connectIslandStraits = (count: number): void => {
+    for (let i = 0; i < count; i++) {
+      const horizontal = rng() > 0.5
+      if (horizontal) {
+        const row = 4 + Math.floor(rng() * (height - 8))
+        for (let col = 2; col < width - 2; col++) {
+          if (tiles[row][col].terrain !== TerrainType.WATER) continue
+          let left = col - 1
+          while (left > 0 && tiles[row][left].terrain === TerrainType.WATER) left--
+          let right = col + 1
+          while (right < width - 1 && tiles[row][right].terrain === TerrainType.WATER) right++
+          const gap = right - left - 1
+          if (gap < 2 || gap > 5) continue
+          for (let c = left + 1; c < right; c++) {
+            if ((c - (left + 1)) % 2 === 0) setTerrain(tiles[row][c], TerrainType.BRIDGE)
+            else setTerrain(tiles[row][c], TerrainType.SAND)
+            tiles[row][c].height = 1
+          }
+          break
+        }
+      } else {
+        const col = 4 + Math.floor(rng() * (width - 8))
+        for (let row = 2; row < height - 2; row++) {
+          if (tiles[row][col].terrain !== TerrainType.WATER) continue
+          let top = row - 1
+          while (top > 0 && tiles[top][col].terrain === TerrainType.WATER) top--
+          let bottom = row + 1
+          while (bottom < height - 1 && tiles[bottom][col].terrain === TerrainType.WATER) bottom++
+          const gap = bottom - top - 1
+          if (gap < 2 || gap > 5) continue
+          for (let r = top + 1; r < bottom; r++) {
+            if ((r - (top + 1)) % 2 === 0) setTerrain(tiles[r][col], TerrainType.BRIDGE)
+            else setTerrain(tiles[r][col], TerrainType.SAND)
+            tiles[r][col].height = 1
+          }
+          break
         }
       }
     }
   }
 
-  // Place ore patches (clusters of 5-10 tiles)
+  const addUrbanRoadGrid = (): void => {
+    const spacing = 9 + Math.floor(rng() * 3)
+    const rowStart = 3 + Math.floor(rng() * 3)
+    const colStart = 3 + Math.floor(rng() * 3)
+    for (let row = rowStart; row < height; row += spacing) {
+      for (let col = 0; col < width; col++) {
+        if (tiles[row][col].terrain === TerrainType.WATER) setTerrain(tiles[row][col], TerrainType.BRIDGE)
+        else if (tiles[row][col].terrain !== TerrainType.ROCK) setTerrain(tiles[row][col], TerrainType.ROAD)
+        tiles[row][col].height = 1
+      }
+    }
+    for (let col = colStart; col < width; col += spacing) {
+      for (let row = 0; row < height; row++) {
+        if (tiles[row][col].terrain === TerrainType.WATER) setTerrain(tiles[row][col], TerrainType.BRIDGE)
+        else if (tiles[row][col].terrain !== TerrainType.ROCK) setTerrain(tiles[row][col], TerrainType.ROAD)
+        tiles[row][col].height = 1
+      }
+    }
+
+    const blockCount = Math.floor((width * height) * 0.0012)
+    for (let i = 0; i < blockCount; i++) {
+      const bw = 2 + Math.floor(rng() * 3)
+      const bh = 2 + Math.floor(rng() * 3)
+      const cx = 6 + Math.floor(rng() * (width - 12))
+      const cy = 6 + Math.floor(rng() * (height - 12))
+      for (let r = cy; r < cy + bh; r++) {
+        for (let c = cx; c < cx + bw; c++) {
+          if (!inBounds(c, r)) continue
+          if (tiles[r][c].terrain === TerrainType.WATER) continue
+          setTerrain(tiles[r][c], TerrainType.ROCK)
+        }
+      }
+    }
+  }
+
+  if (resolved === 'continental') {
+    carveMeanderingRiver(rng() > 0.35, 1)
+    for (let i = 0; i < 2 + Math.floor(rng() * 2); i++) {
+      carveLake(
+        8 + Math.floor(rng() * (width - 16)),
+        8 + Math.floor(rng() * (height - 16)),
+        3 + Math.floor(rng() * 5),
+      )
+    }
+  } else if (resolved === 'islands') {
+    connectIslandStraits(4 + Math.floor(rng() * 3))
+  } else if (resolved === 'desert') {
+    const oasisCount = 3 + Math.floor(rng() * 3)
+    for (let i = 0; i < oasisCount; i++) {
+      const ox = 8 + Math.floor(rng() * (width - 16))
+      const oy = 8 + Math.floor(rng() * (height - 16))
+      const oasisR = 2 + Math.floor(rng() * 2)
+      carveLake(ox, oy, oasisR)
+      for (let r = oy - (oasisR + 2); r <= oy + oasisR + 2; r++) {
+        for (let c = ox - (oasisR + 2); c <= ox + oasisR + 2; c++) {
+          if (!inBounds(c, r)) continue
+          if (tiles[r][c].terrain === TerrainType.WATER) continue
+          if (Math.hypot(c - ox, r - oy) <= oasisR + 1.7) setTerrain(tiles[r][c], TerrainType.GRASS)
+        }
+      }
+    }
+  } else if (resolved === 'arctic') {
+    carveMeanderingRiver(rng() > 0.4, 1)
+    for (let i = 0; i < 2 + Math.floor(rng() * 3); i++) {
+      carveLake(
+        8 + Math.floor(rng() * (width - 16)),
+        8 + Math.floor(rng() * (height - 16)),
+        2 + Math.floor(rng() * 4),
+      )
+    }
+  } else if (resolved === 'urban') {
+    addUrbanRoadGrid()
+    if (rng() > 0.4) carveMeanderingRiver(rng() > 0.5, 1)
+  }
+
+  // Smooth/cohere water bodies: remove tiny puddles and connect near-water voids.
+  for (let pass = 0; pass < 2; pass++) {
+    const edits: Array<{ col: number; row: number; terrain: TerrainType }> = []
+    for (let row = 1; row < height - 1; row++) {
+      for (let col = 1; col < width - 1; col++) {
+        const tile = tiles[row][col]
+        const waterNeighbors = countNeighbors(col, row, t => t.terrain === TerrainType.WATER)
+        if (tile.terrain !== TerrainType.WATER && waterNeighbors >= 6) edits.push({ col, row, terrain: TerrainType.WATER })
+        if (tile.terrain === TerrainType.WATER && waterNeighbors <= 1) edits.push({ col, row, terrain: TerrainType.SAND })
+      }
+    }
+    for (const e of edits) setTerrain(tiles[e.row][e.col], e.terrain)
+  }
+
+  const visitedWater = new Uint8Array(width * height)
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      if (tiles[row][col].terrain !== TerrainType.WATER) continue
+      const idx = row * width + col
+      if (visitedWater[idx]) continue
+      const queue: TileCoord[] = [{ col, row }]
+      const comp: TileCoord[] = []
+      visitedWater[idx] = 1
+      let touchesEdge = false
+      while (queue.length > 0) {
+        const cur = queue.pop()!
+        comp.push(cur)
+        if (cur.col === 0 || cur.row === 0 || cur.col === width - 1 || cur.row === height - 1) touchesEdge = true
+        for (const [dc, dr] of n4) {
+          const nc = cur.col + dc, nr = cur.row + dr
+          if (!inBounds(nc, nr) || tiles[nr][nc].terrain !== TerrainType.WATER) continue
+          const nIdx = nr * width + nc
+          if (visitedWater[nIdx]) continue
+          visitedWater[nIdx] = 1
+          queue.push({ col: nc, row: nr })
+        }
+      }
+      if (comp.length < cfg.tinyWaterSize && !touchesEdge) {
+        for (const p of comp) setTerrain(tiles[p.row][p.col], TerrainType.SAND)
+      }
+    }
+  }
+
+  // Add shore/beach transition and smooth grass/sand boundaries.
+  for (let row = 1; row < height - 1; row++) {
+    for (let col = 1; col < width - 1; col++) {
+      const tile = tiles[row][col]
+      if (tile.terrain === TerrainType.WATER || tile.terrain === TerrainType.BRIDGE) continue
+      const nearWater = countNeighbors(col, row, t => t.terrain === TerrainType.WATER, false) > 0
+      if (nearWater && (tile.terrain === TerrainType.GRASS || tile.terrain === TerrainType.FOREST)) {
+        setTerrain(tile, TerrainType.SAND)
+      }
+    }
+  }
+  for (let pass = 0; pass < 2; pass++) {
+    const updates: Array<{ col: number; row: number; terrain: TerrainType }> = []
+    for (let row = 1; row < height - 1; row++) {
+      for (let col = 1; col < width - 1; col++) {
+        const tile = tiles[row][col]
+        if (tile.terrain === TerrainType.WATER || tile.terrain === TerrainType.BRIDGE || tile.terrain === TerrainType.ROAD) continue
+        const sandNeighbors = countNeighbors(col, row, t => t.terrain === TerrainType.SAND)
+        if (tile.terrain === TerrainType.GRASS && sandNeighbors >= 5) updates.push({ col, row, terrain: TerrainType.SAND })
+        if (tile.terrain === TerrainType.SAND && sandNeighbors <= 1 && countNeighbors(col, row, t => t.terrain === TerrainType.WATER) === 0) {
+          updates.push({ col, row, terrain: TerrainType.GRASS })
+        }
+      }
+    }
+    for (const u of updates) setTerrain(tiles[u.row][u.col], u.terrain)
+  }
+
+  // Reduce cluttered rock into passable rough ground and enforce max 10-12% rocks.
+  for (let row = 1; row < height - 1; row++) {
+    for (let col = 1; col < width - 1; col++) {
+      const tile = tiles[row][col]
+      if (tile.terrain !== TerrainType.ROCK) continue
+      const rockNeighbors = countNeighbors(col, row, t => t.terrain === TerrainType.ROCK)
+      if (rockNeighbors <= 2) setTerrain(tile, TerrainType.SAND)
+    }
+  }
+
+  const rockCells: Array<{ col: number; row: number; keepScore: number }> = []
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      if (tiles[row][col].terrain !== TerrainType.ROCK) continue
+      const clusterScore = countNeighbors(col, row, t => t.terrain === TerrainType.ROCK)
+      const chokeScore = countNeighbors(col, row, t => t.terrain !== TerrainType.WATER && t.terrain !== TerrainType.ROCK, false)
+      rockCells.push({ col, row, keepScore: clusterScore * 2 + chokeScore + rng() * 0.01 })
+    }
+  }
+  const rockCap = Math.floor(width * height * cfg.maxRockRatio)
+  if (rockCells.length > rockCap) {
+    rockCells.sort((a, b) => a.keepScore - b.keepScore)
+    for (let i = 0; i < rockCells.length - rockCap; i++) {
+      const t = rockCells[i]
+      setTerrain(tiles[t.row][t.col], TerrainType.SAND)
+    }
+  }
+
+  // Height field for visual cliffs/plateaus (visual only).
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      const tile = tiles[row][col]
+      if (tile.terrain === TerrainType.WATER) {
+        tile.height = 0
+        continue
+      }
+      if (tile.terrain === TerrainType.ROCK) {
+        tile.height = 2
+        continue
+      }
+      if (tile.terrain === TerrainType.BRIDGE || tile.terrain === TerrainType.ROAD) {
+        tile.height = 1
+        continue
+      }
+      const hNoise = noise.fractal(col * cfg.scale * 0.75 + 70, row * cfg.scale * 0.75 + 120, 3)
+      if (hNoise > 0.74) tile.height = 2
+      else if (hNoise < 0.24 || countNeighbors(col, row, t => t.terrain === TerrainType.WATER, false) > 0) tile.height = 0
+      else tile.height = 1
+      if (resolved === 'urban' && (tile.terrain as number) !== (TerrainType.ROCK as number)) tile.height = 1
+    }
+  }
+
+  // Place ore/gems in coherent land patches.
   const oreCount = Math.floor(width * height * 0.0008 * cfg.oreMultiplier)
   for (let i = 0; i < oreCount; i++) {
     const cx = Math.floor(rng() * (width - 20)) + 10
     const cy = Math.floor(rng() * (height - 20)) + 10
-    const clusterSize = 5 + Math.floor(rng() * 6)
-    // ~20% chance this cluster is gems instead of ore
-    const isGems = rng() < 0.2
+    const clusterSize = 5 + Math.floor(rng() * 7)
+    const isGems = rng() < 0.18
     for (let j = 0; j < clusterSize; j++) {
       const dx = Math.floor((rng() - 0.5) * 8)
       const dy = Math.floor((rng() - 0.5) * 8)
       const tx = cx + dx, ty = cy + dy
-      if (tx >= 0 && tx < width && ty >= 0 && ty < height) {
-        const tile = tiles[ty][tx]
-        if (tile.terrain === TerrainType.GRASS || tile.terrain === TerrainType.SAND) {
-          tile.terrain = isGems ? TerrainType.GEMS : TerrainType.ORE
-          tile.oreAmount = isGems ? GEMS_TILE_MAX : ORE_TILE_MAX
-          // Ore/gem tiles stay passable so harvesters can reach them
-          tile.buildable = false
-        }
-      }
-    }
-  }
-
-  // Carve river (template-dependent)
-  if (cfg.riverEnabled) {
-    const riverRow = Math.floor(height * 0.3 + rng() * height * 0.4)
-    const riverWave = 6
-    for (let col = 0; col < width; col++) {
-      const offset = Math.floor(Math.sin(col * 0.08) * riverWave)
-      for (let r = riverRow + offset - 1; r <= riverRow + offset + 1; r++) {
-        if (r >= 0 && r < height) {
-          tiles[r][col].terrain = TerrainType.WATER
-          tiles[r][col].passable = false
-          tiles[r][col].buildable = false
-          tiles[r][col].oreAmount = 0
-        }
-      }
-    }
-
-    // Place bridges across the river
-    const bridgeCols = [
-      Math.floor(width * 0.25),
-      Math.floor(width * 0.5),
-      Math.floor(width * 0.75),
-    ]
-    for (const bc of bridgeCols) {
-      const offset = Math.floor(Math.sin(bc * 0.08) * riverWave)
-      for (let r = riverRow + offset - 1; r <= riverRow + offset + 1; r++) {
-        if (r >= 0 && r < height) {
-          tiles[r][bc].terrain = TerrainType.BRIDGE
-          tiles[r][bc].passable = true
-          tiles[r][bc].buildable = false
-        }
-      }
-    }
-  }
-
-  // Islands: add bridges between nearby landmasses at strategic points
-  if (resolved === 'islands') {
-    const bridgeCount = 3 + Math.floor(rng() * 3)
-    for (let b = 0; b < bridgeCount; b++) {
-      const bCol = Math.floor(rng() * (width - 20)) + 10
-      const bRow = Math.floor(rng() * (height - 20)) + 10
-      // Try to build a short bridge across water
-      if (tiles[bRow]?.[bCol]?.terrain === TerrainType.WATER) {
-        for (let d = -2; d <= 2; d++) {
-          const r = bRow + d, c = bCol
-          if (r >= 0 && r < height && tiles[r][c].terrain === TerrainType.WATER) {
-            tiles[r][c].terrain = TerrainType.BRIDGE
-            tiles[r][c].passable = true
-            tiles[r][c].buildable = false
-          }
-        }
-      }
-    }
-  }
-
-  // Desert: add oasis water pools
-  if (resolved === 'desert') {
-    const oasisCount = 2 + Math.floor(rng() * 3)
-    for (let i = 0; i < oasisCount; i++) {
-      const ox = Math.floor(rng() * (width - 20)) + 10
-      const oy = Math.floor(rng() * (height - 20)) + 10
-      const oasisR = 2 + Math.floor(rng() * 2)
-      for (let dr = -oasisR; dr <= oasisR; dr++) {
-        for (let dc = -oasisR; dc <= oasisR; dc++) {
-          if (dc * dc + dr * dr > oasisR * oasisR) continue
-          const tx = ox + dc, ty = oy + dr
-          if (tx >= 0 && tx < width && ty >= 0 && ty < height) {
-            tiles[ty][tx].terrain = TerrainType.WATER
-            tiles[ty][tx].passable = false
-            tiles[ty][tx].buildable = false
-            tiles[ty][tx].oreAmount = 0
-          }
-        }
-      }
-      // Ring of grass around oasis
-      for (let dr = -(oasisR + 1); dr <= oasisR + 1; dr++) {
-        for (let dc = -(oasisR + 1); dc <= oasisR + 1; dc++) {
-          const dist2 = dc * dc + dr * dr
-          if (dist2 > oasisR * oasisR && dist2 <= (oasisR + 1) * (oasisR + 1)) {
-            const tx = ox + dc, ty = oy + dr
-            if (tx >= 0 && tx < width && ty >= 0 && ty < height && tiles[ty][tx].terrain === TerrainType.SAND) {
-              tiles[ty][tx].terrain = TerrainType.GRASS
-            }
-          }
-        }
-      }
+      if (!inBounds(tx, ty)) continue
+      const tile = tiles[ty][tx]
+      if (tile.terrain !== TerrainType.GRASS && tile.terrain !== TerrainType.SAND) continue
+      tile.terrain = isGems ? TerrainType.GEMS : TerrainType.ORE
+      tile.oreAmount = isGems ? GEMS_TILE_MAX : ORE_TILE_MAX
+      tile.passable = true
+      tile.buildable = false
     }
   }
 
@@ -401,6 +606,7 @@ function generateMapData(
         const ty = Math.floor(sp.y / TILE_SIZE) + dy
         if (tx >= 0 && tx < width && ty >= 0 && ty < height) {
           tiles[ty][tx].terrain = TerrainType.GRASS
+          tiles[ty][tx].height = 1
           tiles[ty][tx].passable = true
           tiles[ty][tx].buildable = true
           tiles[ty][tx].oreAmount = 0
@@ -877,6 +1083,7 @@ function ensureOreFieldNearSpawn(
       if (t.terrain === TerrainType.WATER || t.terrain === TerrainType.ROCK) continue
       t.terrain = TerrainType.ORE
       t.oreAmount = ORE_TILE_MAX
+      t.height = 1
       t.passable = true
       t.buildable = false
     }
@@ -968,6 +1175,30 @@ export class GameMap {
     const colors = TERRAIN_COLORS[tile.terrain]
     if (!colors) return 0x4a7c3f // fallback grass
     let base = colors[(col + row) % colors.length]
+
+    // Positional shade variation so grass doesn't look flat/repetitive.
+    if (tile.terrain === TerrainType.GRASS) {
+      const v = this.tileHash(col, row, 901)
+      const grassFactor = v < 0.33 ? 0.94 : v < 0.66 ? 1.0 : 1.07
+      base = scaleColor(base, grassFactor)
+    }
+
+    // Shore tint where land meets water.
+    if (tile.terrain === TerrainType.GRASS || tile.terrain === TerrainType.FOREST || tile.terrain === TerrainType.SAND) {
+      const nearWater =
+        this.getTile(col, row - 1)?.terrain === TerrainType.WATER
+        || this.getTile(col - 1, row)?.terrain === TerrainType.WATER
+        || this.getTile(col + 1, row)?.terrain === TerrainType.WATER
+        || this.getTile(col, row + 1)?.terrain === TerrainType.WATER
+      if (nearWater && tile.terrain !== TerrainType.SAND) {
+        base = lerpColor(base, 0xd8c596, 0.24)
+      }
+    }
+
+    // Visual lighting by height only (pathfinding remains unchanged).
+    const heightLight = 1 + (tile.height - 1) * 0.08
+    base = scaleColor(base, heightLight)
+
     // Sun from top-left: subtly brighten NW tiles, darken SE tiles.
     const sun = Phaser.Math.Clamp(((col - row) * -0.02), -0.12, 0.12)
     base = scaleColor(base, 1 + sun)
@@ -1064,22 +1295,48 @@ export class GameMap {
   }
 
   private drawForestDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
-    const treeCount = 2 + Math.floor(this.tileHash(col, row, 40) * 2)
+    const treeCount = 2 + Math.floor(this.tileHash(col, row, 40) * 3)
     for (let i = 0; i < treeCount; i++) {
       const tx = this.tileHash(col, row, 50 + i) * 24 + 18
       const ty = this.tileHash(col, row, 60 + i) * 8 + 10
-      // Shadow underneath
-      g.fillStyle(0x0a1a08, 0.35)
-      g.fillEllipse(px + tx, py + ty + 5, 8, 4)
-      // Canopy shadow spill to ground
-      g.fillStyle(0x0a1a08, 0.22)
-      g.fillEllipse(px + tx + 3, py + ty + 8, 13, 6)
-      // Tree canopy
-      g.fillStyle(0x1a4a16, 1)
-      g.fillCircle(px + tx, py + ty, 5)
-      // Highlight on top-left
-      g.fillStyle(0x2a6a22, 0.5)
-      g.fillCircle(px + tx - 1, py + ty - 2, 2)
+      g.fillStyle(0x0a1a08, 0.25)
+      g.fillEllipse(px + tx, py + ty + 7, 9, 4)
+      g.fillStyle(0x2a6a22, 0.95)
+      g.fillTriangle(
+        px + tx, py + ty - 6,
+        px + tx - 5, py + ty + 4,
+        px + tx + 5, py + ty + 4,
+      )
+      g.fillStyle(0x1f5a1b, 1)
+      g.fillCircle(px + tx, py + ty - 1, 3)
+    }
+  }
+
+  private isRoadLikeTerrain(terrain: TerrainType): boolean {
+    return terrain === TerrainType.ROAD || terrain === TerrainType.BRIDGE
+  }
+
+  private drawRoadDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
+    const top = this.getTile(col, row - 1)
+    const bottom = this.getTile(col, row + 1)
+    const left = this.getTile(col - 1, row)
+    const right = this.getTile(col + 1, row)
+    const cx = px + ISO_TILE_W / 2
+    const cy = py + ISO_TILE_H / 2
+
+    const segments: Array<[number, number]> = []
+    if (top && this.isRoadLikeTerrain(top.terrain)) segments.push([px + ISO_TILE_W / 2, py + 2])
+    if (bottom && this.isRoadLikeTerrain(bottom.terrain)) segments.push([px + ISO_TILE_W / 2, py + ISO_TILE_H - 2])
+    if (left && this.isRoadLikeTerrain(left.terrain)) segments.push([px + 2, py + ISO_TILE_H / 2])
+    if (right && this.isRoadLikeTerrain(right.terrain)) segments.push([px + ISO_TILE_W - 2, py + ISO_TILE_H / 2])
+
+    g.lineStyle(4, 0x3f3f3f, 0.8)
+    for (const [ex, ey] of segments) g.lineBetween(cx, cy, ex, ey)
+    g.lineStyle(2, 0x7b7b7b, 0.45)
+    for (const [ex, ey] of segments) g.lineBetween(cx, cy, (cx + ex) * 0.5, (cy + ey) * 0.5)
+    if (segments.length === 0) {
+      g.fillStyle(0x4a4a4a, 0.5)
+      g.fillCircle(cx, cy, 3)
     }
   }
 
@@ -1135,23 +1392,49 @@ export class GameMap {
     const left = this.getTile(col - 1, row)
     const below = this.getTile(col, row + 1)
     const right = this.getTile(col + 1, row)
-    const blendToWater = tile.terrain === TerrainType.GRASS || tile.terrain === TerrainType.SAND
-    if (blendToWater) {
-      if (above?.terrain === TerrainType.WATER) {
-        g.lineStyle(2, 0x63bfe8, 0.23)
-        g.lineBetween(px + ISO_TILE_W / 2, py + 2, px + 3, py + ISO_TILE_H / 2)
-      }
-      if (left?.terrain === TerrainType.WATER) {
-        g.lineStyle(2, 0x63bfe8, 0.23)
-        g.lineBetween(px + ISO_TILE_W / 2, py + 2, px + ISO_TILE_W - 3, py + ISO_TILE_H / 2)
-      }
+    const isLand = tile.terrain !== TerrainType.WATER && tile.terrain !== TerrainType.BRIDGE
+    if (isLand) {
+      g.lineStyle(2, 0xd8c596, 0.36)
+      if (above?.terrain === TerrainType.WATER) g.lineBetween(px + ISO_TILE_W / 2, py + 1, px + 2, py + ISO_TILE_H / 2)
+      if (left?.terrain === TerrainType.WATER) g.lineBetween(px + ISO_TILE_W / 2, py + 1, px + ISO_TILE_W - 2, py + ISO_TILE_H / 2)
+      if (right?.terrain === TerrainType.WATER) g.lineBetween(px + ISO_TILE_W - 1, py + ISO_TILE_H / 2, px + ISO_TILE_W / 2, py + ISO_TILE_H - 1)
+      if (below?.terrain === TerrainType.WATER) g.lineBetween(px + 1, py + ISO_TILE_H / 2, px + ISO_TILE_W / 2, py + ISO_TILE_H - 1)
     }
-    if (tile.terrain === TerrainType.GRASS) {
-      const sandEdge = above?.terrain === TerrainType.SAND || left?.terrain === TerrainType.SAND || below?.terrain === TerrainType.SAND || right?.terrain === TerrainType.SAND
-      if (sandEdge) {
-        g.lineStyle(1, 0xd1bb8f, 0.22)
-        g.lineBetween(px + 10, py + 15, px + ISO_TILE_W - 10, py + 18)
-      }
+
+    const sandBlend = (other?: TileData | null) => !!other && ((tile.terrain === TerrainType.GRASS && other.terrain === TerrainType.SAND) || (tile.terrain === TerrainType.SAND && other.terrain === TerrainType.GRASS))
+    g.lineStyle(1, 0xcdb47f, 0.28)
+    if (sandBlend(above)) g.lineBetween(px + ISO_TILE_W / 2, py + 3, px + 3, py + ISO_TILE_H / 2)
+    if (sandBlend(left)) g.lineBetween(px + ISO_TILE_W / 2, py + 3, px + ISO_TILE_W - 3, py + ISO_TILE_H / 2)
+    if (sandBlend(right)) g.lineBetween(px + ISO_TILE_W - 3, py + ISO_TILE_H / 2, px + ISO_TILE_W / 2, py + ISO_TILE_H - 3)
+    if (sandBlend(below)) g.lineBetween(px + 3, py + ISO_TILE_H / 2, px + ISO_TILE_W / 2, py + ISO_TILE_H - 3)
+  }
+
+  private drawCliffEdges(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number, tile: TileData): void {
+    const n = this.getTile(col, row - 1)
+    const w = this.getTile(col - 1, row)
+    const s = this.getTile(col, row + 1)
+    const e = this.getTile(col + 1, row)
+    const nHigher = !!n && n.height > tile.height
+    const wHigher = !!w && w.height > tile.height
+    const sHigher = !!s && s.height > tile.height
+    const eHigher = !!e && e.height > tile.height
+
+    if (nHigher || wHigher) {
+      const depth = 0.12 + Math.max((n?.height ?? tile.height) - tile.height, (w?.height ?? tile.height) - tile.height) * 0.08
+      g.fillStyle(0x1a1a1a, depth)
+      g.fillTriangle(
+        px + ISO_TILE_W / 2, py + 1,
+        px + 2, py + ISO_TILE_H / 2,
+        px + ISO_TILE_W - 2, py + ISO_TILE_H / 2,
+      )
+    }
+    if (sHigher) {
+      g.lineStyle(3, 0x1a1a1a, 0.28 + (s.height - tile.height) * 0.13)
+      g.lineBetween(px + 2, py + ISO_TILE_H / 2, px + ISO_TILE_W / 2, py + ISO_TILE_H - 1)
+    }
+    if (eHigher) {
+      g.lineStyle(3, 0x1a1a1a, 0.28 + (e.height - tile.height) * 0.13)
+      g.lineBetween(px + ISO_TILE_W - 2, py + ISO_TILE_H / 2, px + ISO_TILE_W / 2, py + ISO_TILE_H - 1)
     }
   }
 
@@ -1176,9 +1459,11 @@ export class GameMap {
     // Water shimmer
     const shimmerAlpha = [0.12, 0.0, 0.08][this.animFrame]
     for (const { col, row } of this.waterTiles) {
+      const tile = this.getTile(col, row)
+      if (!tile) continue
       const screen = tileToScreen(col, row)
       const px = screen.x + offsetX
-      const py = screen.y
+      const py = screen.y - (tile.height - 1) * 4
       if (!this.isOnScreen(px, py)) continue
       // Shimmer overlay
       if (shimmerAlpha > 0) {
@@ -1203,7 +1488,7 @@ export class GameMap {
       const ratio = Phaser.Math.Clamp(tile.oreAmount / maxAmt, 0, 1)
       const screen = tileToScreen(col, row)
       const px = screen.x + offsetX
-      const py = screen.y
+      const py = screen.y - (tile.height - 1) * 4
       if (!this.isOnScreen(px, py)) continue
       const sx = ((this.animFrame * 9 + col * 13) % 28) + 16
       const sy = ((this.animFrame * 7 + row * 11) % 10) + 8
@@ -1371,6 +1656,7 @@ export class GameMap {
     if (tile.oreAmount <= 0) {
       // Fully depleted — becomes grass, does NOT regenerate
       tile.terrain = TerrainType.GRASS
+      tile.height = 1
       tile.oreAmount = 0
       tile.passable = true
       tile.buildable = true
@@ -1513,7 +1799,7 @@ export class GameMap {
         const tile = tiles[row][col]
         const screen = tileToScreen(col, row)
         const px = screen.x + offsetX
-        const py = screen.y
+        const py = screen.y - (tile.height - 1) * 4
         const sx = px - cameraX
         const sy = py - cameraY
 
@@ -1526,6 +1812,7 @@ export class GameMap {
 
         this.drawTerrainDiamond(g, px, py, this.tileColor(tile, col, row))
         this.drawTerrainTransition(g, px, py, col, row, tile)
+        this.drawCliffEdges(g, px, py, col, row, tile)
 
         switch (tile.terrain) {
           case TerrainType.GRASS:
@@ -1543,6 +1830,9 @@ export class GameMap {
             break
           case TerrainType.BRIDGE:
             this.drawBridgeDetail(g, px, py)
+            break
+          case TerrainType.ROAD:
+            this.drawRoadDetail(g, px, py, col, row)
             break
           case TerrainType.SAND:
             this.drawSandDetail(g, px, py, col, row)
