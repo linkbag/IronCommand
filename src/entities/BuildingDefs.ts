@@ -852,6 +852,7 @@ export const TECH_TREE_ORDER = [
 
 /** IDs of neutral capturable buildings */
 export const NEUTRAL_BUILDING_IDS = ['oil_derrick', 'tech_center', 'neutral_hospital', 'neutral_repair_depot']
+const NEUTRAL_BUILDING_ID_SET = new Set(NEUTRAL_BUILDING_IDS)
 
 /** Superweapon building IDs (max 1 each) */
 export const SUPERWEAPON_BUILDING_IDS = ['nuclear_silo', 'weather_device', 'iron_curtain', 'chronosphere']
@@ -870,6 +871,7 @@ export function getPowerBuildingDefId(side: FactionSide): string {
 export function getAvailableBuildingIds(factionId: string): string[] {
   const side = FACTIONS[factionId as FactionId]?.side ?? 'alliance'
   return Object.keys(BUILDING_DEFS).filter(id => {
+    if (NEUTRAL_BUILDING_ID_SET.has(id)) return false
     const def = BUILDING_DEFS[id]
     const sideMatch = def.side === side || def.side === null
     const exclusiveMatch = def.factionExclusive === null || def.factionExclusive === factionId
@@ -880,6 +882,7 @@ export function getAvailableBuildingIds(factionId: string): string[] {
 /** Get all building IDs available to a given side */
 export function getAvailableBuildingIdsBySide(side: FactionSide, factionId?: string): string[] {
   return Object.keys(BUILDING_DEFS).filter(id => {
+    if (NEUTRAL_BUILDING_ID_SET.has(id)) return false
     const def = BUILDING_DEFS[id]
     const sideMatch = def.side === side || def.side === null
     const exclusiveMatch = def.factionExclusive === null ||

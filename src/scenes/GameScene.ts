@@ -12,7 +12,7 @@ import { Combat } from '../combat/Combat'
 import { Economy } from '../economy/Economy'
 import { Production } from '../economy/Production'
 import { AI } from '../combat/AI'
-import { BUILDING_DEFS, getPowerBuildingDefId, NEUTRAL_BUILDING_IDS, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
+import { BUILDING_DEFS, getPowerBuildingDefId, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
 import { UNIT_DEFS, getHarvesterDefId, getBasicInfantryDefId } from '../entities/UnitDefs'
 import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, FactionSide } from '../types'
 import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL_PLAYER_ID } from '../types'
@@ -1055,7 +1055,16 @@ export class GameScene extends Phaser.Scene {
   private spawnNeutralBuildings(): void {
     const { width, height } = this.gameMap.data
     const startPositions = this.gameMap.data.startPositions
-    const neutralDefs = ['oil_derrick', 'oil_derrick', 'tech_center', 'neutral_hospital', 'neutral_repair_depot']
+    const mapClass = Math.max(width, height) <= 64 ? 'small' :
+      Math.max(width, height) <= 128 ? 'medium' : 'large'
+    const countRanges: Record<'small' | 'medium' | 'large', { min: number; max: number }> = {
+      small: { min: 3, max: 4 },
+      medium: { min: 5, max: 6 },
+      large: { min: 8, max: 10 },
+    }
+    const range = countRanges[mapClass]
+    const targetCount = Phaser.Math.Between(range.min, range.max)
+    const neutralDefs = this.buildNeutralSpawnList(mapClass, targetCount)
     const minDistFromBase = 20  // tiles
 
     let placed = 0
@@ -1113,7 +1122,28 @@ export class GameScene extends Phaser.Scene {
         break
       }
     }
-    console.log(`[Neutral] Placed ${placed} neutral buildings`)
+    console.log(`[Neutral] Map=${mapClass} target=${targetCount}, placed ${placed} neutral buildings`)
+  }
+
+  private buildNeutralSpawnList(
+    mapClass: 'small' | 'medium' | 'large',
+    targetCount: number,
+  ): string[] {
+    // Always include capturable tech variety, then scale up mostly with oil derricks.
+    const base = ['oil_derrick', 'tech_center', 'neutral_hospital']
+    if (mapClass !== 'small' || targetCount >= 4) base.push('neutral_repair_depot')
+
+    const defs = base.slice(0, targetCount)
+    while (defs.length < targetCount) {
+      if (mapClass === 'large') {
+        defs.push(Math.random() < 0.8 ? 'oil_derrick' : 'tech_center')
+      } else if (mapClass === 'medium') {
+        defs.push(Math.random() < 0.75 ? 'oil_derrick' : 'neutral_repair_depot')
+      } else {
+        defs.push('oil_derrick')
+      }
+    }
+    return defs
   }
 
   // ── Neutral building effects (hospital heal, repair depot) ──
