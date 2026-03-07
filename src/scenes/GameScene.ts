@@ -122,6 +122,17 @@ export class GameScene extends Phaser.Scene {
   }
 
   create() {
+    try { this._createInternal() } catch (e) {
+      console.error('[IC] FATAL: GameScene.create() crashed:', e)
+      // Show error on screen so user can see it
+      this.add.text(100, 100, `CRASH: ${e}`, {
+        fontFamily: 'monospace', fontSize: '14px', color: '#ff4444',
+        wordWrap: { width: this.scale.width - 200 }
+      }).setScrollFactor(0).setDepth(9999)
+    }
+  }
+
+  private _createInternal() {
     const cfg = this.skirmishCfg
 
     // ── 1. Procedural map ─────────────────────────────────────
@@ -416,6 +427,17 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
+    try { this._updateInternal(delta) } catch (e) {
+      console.error('[IC] update() error:', e)
+      this.gameOver = true  // Stop further updates
+      this.add.text(100, 150, `UPDATE CRASH: ${e}`, {
+        fontFamily: 'monospace', fontSize: '14px', color: '#ff4444',
+        wordWrap: { width: this.scale.width - 200 }
+      }).setScrollFactor(0).setDepth(9999)
+    }
+  }
+
+  private _updateInternal(delta: number) {
     if (this.gameOver || this.gameState.phase !== 'playing') return
 
     this.gameState.tick++

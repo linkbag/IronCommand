@@ -10,7 +10,7 @@ import {
   ORE_REGEN_RATE,
 } from '../types'
 import type { TileData, GameMap as GameMapData, Position, TileCoord } from '../types'
-import type { MapTemplate } from '../scenes/SetupScene'
+import type { MapTemplate } from '../types'
 import { tileToScreen, screenToTile, getIsoWorldBounds, setMapOffset, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from './IsoUtils'
 
 // ── Terrain color palette ─────────────────────────────────────

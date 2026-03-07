@@ -228,3 +228,7 @@ export const GEMS_HARVEST_VALUE = GEMS_PER_LOAD
 export const ORE_HARVEST_RATE = 100     // ore units extracted per load
 export const ORE_REGEN_RATE = 20        // ore units regenerated per tick (20% of mining speed)
 export const NEUTRAL_PLAYER_ID = -1     // neutral/capturable buildings
+
+// ── Game mode types ──────────────────────────────────────────
+export type GameMode = 'ffa' | 'alliance'
+export type MapTemplate = 'continental' | 'islands' | 'desert' | 'arctic' | 'urban' | 'random'

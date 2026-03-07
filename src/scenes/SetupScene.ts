@@ -9,8 +9,8 @@ import { TILE_SIZE } from '../types'
 import { FACTIONS, FACTION_IDS } from '../data/factions'
 import { generatePreviewData, PREVIEW_COLORS } from '../engine/GameMap'
 
-export type GameMode = 'ffa' | 'alliance'
-export type MapTemplate = 'continental' | 'islands' | 'desert' | 'arctic' | 'urban' | 'random'
+import type { GameMode, MapTemplate } from '../types'
+export type { GameMode, MapTemplate }
 
 export interface SkirmishConfig {
   playerFaction: FactionId
