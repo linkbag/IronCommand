@@ -10,7 +10,8 @@ import {
   ORE_REGEN_RATE,
 } from '../types'
 import type { TileData, GameMap as GameMapData, Position, TileCoord } from '../types'
-import { tileToScreen, screenToTile, getIsoWorldBounds, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from './IsoUtils'
+import type { MapTemplate } from '../scenes/SetupScene'
+import { tileToScreen, screenToTile, getIsoWorldBounds, setMapOffset, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from './IsoUtils'
 
 // ── Terrain color palette ─────────────────────────────────────
 
@@ -110,40 +111,144 @@ class ValueNoise {
   }
 }
 
+/** Generate map data without creating a full GameMap (for preview rendering) */
+export function generatePreviewData(
+  width: number,
+  height: number,
+  seed: number,
+  template: MapTemplate = 'continental',
+): { tiles: TileData[][]; startPositions: Position[] } {
+  const data = generateMapData(width, height, seed, template)
+  return { tiles: data.tiles, startPositions: data.startPositions }
+}
+
+/** Preview terrain colors (simplified) */
+export const PREVIEW_COLORS: Record<TerrainType, number> = {
+  [TerrainType.GRASS]:  0x4a7c3f,
+  [TerrainType.WATER]:  0x1a6fa8,
+  [TerrainType.ORE]:    0xd4a017,
+  [TerrainType.ROCK]:   0x7a7a7a,
+  [TerrainType.SAND]:   0xd2b48c,
+  [TerrainType.ROAD]:   0x555555,
+  [TerrainType.BRIDGE]: 0x8b6914,
+  [TerrainType.FOREST]: 0x1e4d1a,
+  [TerrainType.GEMS]:   0x2a8aff,
+}
+
+/** Resolve 'random' to a concrete template using the seed */
+function resolveTemplate(template: MapTemplate, rng: () => number): Exclude<MapTemplate, 'random'> {
+  if (template !== 'random') return template
+  const opts: Exclude<MapTemplate, 'random'>[] = ['continental', 'islands', 'desert', 'arctic', 'urban']
+  return opts[Math.floor(rng() * opts.length)]
+}
+
 function generateMapData(
   width = MAP_DEFAULT_WIDTH,
   height = MAP_DEFAULT_HEIGHT,
   seed = 12345,
+  template: MapTemplate = 'continental',
 ): GameMapData {
   const rng = makePRNG(seed)
+  const resolved = resolveTemplate(template, rng)
   const noise = new ValueNoise(seed)
   const waterNoise = new ValueNoise(seed + 1)
   const forestNoise = new ValueNoise(seed + 2)
 
-  const scale = 0.03  // controls terrain feature size
+  // Template-specific thresholds
+  const cfg = {
+    waterThreshold: 0.72,
+    rockThreshold: 0.7,
+    sandThreshold: 0.25,
+    forestThreshold: 0.68,
+    scale: 0.03,
+    oreMultiplier: 1.0,
+    riverEnabled: true,
+    edgeWater: false,  // Continental: water border around edges
+  }
+
+  switch (resolved) {
+    case 'continental':
+      cfg.edgeWater = true
+      break
+    case 'islands':
+      cfg.waterThreshold = 0.55  // Much more water
+      cfg.forestThreshold = 0.72
+      cfg.scale = 0.025
+      cfg.oreMultiplier = 0.8
+      cfg.riverEnabled = false
+      break
+    case 'desert':
+      cfg.waterThreshold = 0.88  // Very little water
+      cfg.rockThreshold = 0.6    // More rock clusters
+      cfg.sandThreshold = 0.55   // Much more sand
+      cfg.forestThreshold = 0.92 // Almost no forest
+      cfg.oreMultiplier = 0.7
+      cfg.riverEnabled = false
+      break
+    case 'arctic':
+      cfg.waterThreshold = 0.68
+      cfg.forestThreshold = 0.75
+      cfg.sandThreshold = 0.20   // Less sand (snow-covered)
+      cfg.oreMultiplier = 0.9
+      break
+    case 'urban':
+      cfg.waterThreshold = 0.82  // Less water
+      cfg.rockThreshold = 0.55   // More rock clusters (ruins)
+      cfg.forestThreshold = 0.85 // Much less forest
+      cfg.oreMultiplier = 1.2
+      cfg.riverEnabled = false
+      break
+  }
 
   // Build base tile grid
   const tiles: TileData[][] = Array.from({ length: height }, (_, row) =>
     Array.from({ length: width }, (_, col) => {
-      const n = noise.fractal(col * scale, row * scale)
-      const w = waterNoise.fractal(col * scale * 1.5, row * scale * 1.5)
-      const f = forestNoise.fractal(col * scale * 2, row * scale * 2)
+      const n = noise.fractal(col * cfg.scale, row * cfg.scale)
+      const w = waterNoise.fractal(col * cfg.scale * 1.5, row * cfg.scale * 1.5)
+      const f = forestNoise.fractal(col * cfg.scale * 2, row * cfg.scale * 2)
 
       let terrain: TerrainType
       let passable = true
       let buildable = true
 
-      if (w > 0.72) {
+      // Continental: force water at map edges
+      if (cfg.edgeWater) {
+        const edgeDist = Math.min(col, row, width - 1 - col, height - 1 - row)
+        const edgeFade = 5
+        if (edgeDist < edgeFade) {
+          const edgeFactor = 1.0 - edgeDist / edgeFade
+          if (edgeFactor > 0.5 || w > cfg.waterThreshold - edgeFactor * 0.3) {
+            if (edgeDist <= 1) {
+              return { terrain: TerrainType.WATER, passable: false, buildable: false, oreAmount: 0, fogState: FogState.HIDDEN, occupiedBy: null }
+            }
+          }
+        }
+      }
+
+      // Islands: use distance-from-center modulation for island shapes
+      if (resolved === 'islands') {
+        const ncx = (col / width - 0.5) * 2
+        const ncy = (row / height - 0.5) * 2
+        const distCenter = Math.sqrt(ncx * ncx + ncy * ncy)
+        // Create island clusters: use noise to break up the landmass
+        const islandNoise = noise.fractal(col * 0.04, row * 0.04, 3)
+        const waterChance = w + distCenter * 0.2 - islandNoise * 0.25
+        if (waterChance > cfg.waterThreshold) {
+          return { terrain: TerrainType.WATER, passable: false, buildable: false, oreAmount: 0, fogState: FogState.HIDDEN, occupiedBy: null }
+        }
+      }
+
+      if (w > cfg.waterThreshold) {
         terrain = TerrainType.WATER
         passable = false
         buildable = false
-      } else if (n > 0.7) {
+      } else if (n > cfg.rockThreshold) {
         terrain = TerrainType.ROCK
         passable = false
         buildable = false
-      } else if (n < 0.25) {
+      } else if (n < cfg.sandThreshold) {
         terrain = TerrainType.SAND
-      } else if (f > 0.68) {
+      } else if (f > cfg.forestThreshold) {
         terrain = TerrainType.FOREST
         buildable = false
       } else {
@@ -161,8 +266,19 @@ function generateMapData(
     })
   )
 
+  // Desert: convert grass to sand for thematic consistency
+  if (resolved === 'desert') {
+    for (let row = 0; row < height; row++) {
+      for (let col = 0; col < width; col++) {
+        if (tiles[row][col].terrain === TerrainType.GRASS) {
+          tiles[row][col].terrain = TerrainType.SAND
+        }
+      }
+    }
+  }
+
   // Place ore patches (clusters of 5-10 tiles)
-  const oreCount = Math.floor(width * height * 0.0008)
+  const oreCount = Math.floor(width * height * 0.0008 * cfg.oreMultiplier)
   for (let i = 0; i < oreCount; i++) {
     const cx = Math.floor(rng() * (width - 20)) + 10
     const cy = Math.floor(rng() * (height - 20)) + 10
@@ -185,34 +301,90 @@ function generateMapData(
     }
   }
 
-  // Carve simple river (horizontal or vertical stripe with water noise)
-  const riverRow = Math.floor(height * 0.3 + rng() * height * 0.4)
-  const riverWave = 6
-  for (let col = 0; col < width; col++) {
-    const offset = Math.floor(Math.sin(col * 0.08) * riverWave)
-    for (let r = riverRow + offset - 1; r <= riverRow + offset + 1; r++) {
-      if (r >= 0 && r < height) {
-        tiles[r][col].terrain = TerrainType.WATER
-        tiles[r][col].passable = false
-        tiles[r][col].buildable = false
-        tiles[r][col].oreAmount = 0
+  // Carve river (template-dependent)
+  if (cfg.riverEnabled) {
+    const riverRow = Math.floor(height * 0.3 + rng() * height * 0.4)
+    const riverWave = 6
+    for (let col = 0; col < width; col++) {
+      const offset = Math.floor(Math.sin(col * 0.08) * riverWave)
+      for (let r = riverRow + offset - 1; r <= riverRow + offset + 1; r++) {
+        if (r >= 0 && r < height) {
+          tiles[r][col].terrain = TerrainType.WATER
+          tiles[r][col].passable = false
+          tiles[r][col].buildable = false
+          tiles[r][col].oreAmount = 0
+        }
+      }
+    }
+
+    // Place bridges across the river
+    const bridgeCols = [
+      Math.floor(width * 0.25),
+      Math.floor(width * 0.5),
+      Math.floor(width * 0.75),
+    ]
+    for (const bc of bridgeCols) {
+      const offset = Math.floor(Math.sin(bc * 0.08) * riverWave)
+      for (let r = riverRow + offset - 1; r <= riverRow + offset + 1; r++) {
+        if (r >= 0 && r < height) {
+          tiles[r][bc].terrain = TerrainType.BRIDGE
+          tiles[r][bc].passable = true
+          tiles[r][bc].buildable = false
+        }
       }
     }
   }
 
-  // Place a couple of bridges across the river
-  const bridgeCols = [
-    Math.floor(width * 0.25),
-    Math.floor(width * 0.5),
-    Math.floor(width * 0.75),
-  ]
-  for (const bc of bridgeCols) {
-    const offset = Math.floor(Math.sin(bc * 0.08) * riverWave)
-    for (let r = riverRow + offset - 1; r <= riverRow + offset + 1; r++) {
-      if (r >= 0 && r < height) {
-        tiles[r][bc].terrain = TerrainType.BRIDGE
-        tiles[r][bc].passable = true
-        tiles[r][bc].buildable = false
+  // Islands: add bridges between nearby landmasses at strategic points
+  if (resolved === 'islands') {
+    const bridgeCount = 3 + Math.floor(rng() * 3)
+    for (let b = 0; b < bridgeCount; b++) {
+      const bCol = Math.floor(rng() * (width - 20)) + 10
+      const bRow = Math.floor(rng() * (height - 20)) + 10
+      // Try to build a short bridge across water
+      if (tiles[bRow]?.[bCol]?.terrain === TerrainType.WATER) {
+        for (let d = -2; d <= 2; d++) {
+          const r = bRow + d, c = bCol
+          if (r >= 0 && r < height && tiles[r][c].terrain === TerrainType.WATER) {
+            tiles[r][c].terrain = TerrainType.BRIDGE
+            tiles[r][c].passable = true
+            tiles[r][c].buildable = false
+          }
+        }
+      }
+    }
+  }
+
+  // Desert: add oasis water pools
+  if (resolved === 'desert') {
+    const oasisCount = 2 + Math.floor(rng() * 3)
+    for (let i = 0; i < oasisCount; i++) {
+      const ox = Math.floor(rng() * (width - 20)) + 10
+      const oy = Math.floor(rng() * (height - 20)) + 10
+      const oasisR = 2 + Math.floor(rng() * 2)
+      for (let dr = -oasisR; dr <= oasisR; dr++) {
+        for (let dc = -oasisR; dc <= oasisR; dc++) {
+          if (dc * dc + dr * dr > oasisR * oasisR) continue
+          const tx = ox + dc, ty = oy + dr
+          if (tx >= 0 && tx < width && ty >= 0 && ty < height) {
+            tiles[ty][tx].terrain = TerrainType.WATER
+            tiles[ty][tx].passable = false
+            tiles[ty][tx].buildable = false
+            tiles[ty][tx].oreAmount = 0
+          }
+        }
+      }
+      // Ring of grass around oasis
+      for (let dr = -(oasisR + 1); dr <= oasisR + 1; dr++) {
+        for (let dc = -(oasisR + 1); dc <= oasisR + 1; dc++) {
+          const dist2 = dc * dc + dr * dr
+          if (dist2 > oasisR * oasisR && dist2 <= (oasisR + 1) * (oasisR + 1)) {
+            const tx = ox + dc, ty = oy + dr
+            if (tx >= 0 && tx < width && ty >= 0 && ty < height && tiles[ty][tx].terrain === TerrainType.SAND) {
+              tiles[ty][tx].terrain = TerrainType.GRASS
+            }
+          }
+        }
       }
     }
   }
@@ -278,21 +450,46 @@ function generateMapData(
   }
 }
 
+/**
+ * RA2-style spawn distribution:
+ * 2 players → opposite corners
+ * 3 players → triangle
+ * 4 players → four corners
+ * 5-8 players → evenly spaced around perimeter (clock positions)
+ */
 function computeStartPositions(w: number, h: number, count: number): Position[] {
+  const margin = 8
+  const cx = w / 2
+  const cy = h / 2
+  const rx = cx - margin  // radius along x
+  const ry = cy - margin  // radius along y
+
+  // For 4 or fewer, use corners/specific positions for more natural feel
+  if (count <= 4) {
+    const corners: Position[] = [
+      { x: margin * TILE_SIZE, y: margin * TILE_SIZE },                       // top-left
+      { x: (w - margin) * TILE_SIZE, y: (h - margin) * TILE_SIZE },          // bottom-right
+      { x: (w - margin) * TILE_SIZE, y: margin * TILE_SIZE },                // top-right
+      { x: margin * TILE_SIZE, y: (h - margin) * TILE_SIZE },                // bottom-left
+    ]
+    if (count === 2) return [corners[0], corners[1]]
+    if (count === 3) return [corners[0], corners[1], corners[2]]
+    return corners.slice(0, count)
+  }
+
+  // 5-8: evenly around perimeter using angular distribution
   const positions: Position[] = []
-  const margin = 6
-  const candidateEdge: Position[] = []
-  // Top and bottom edges
-  for (let i = 0; i < count / 2; i++) {
-    const col = margin + Math.floor((w - margin * 2) * i / (count / 2 - 1 || 1))
-    candidateEdge.push({ x: col * TILE_SIZE, y: margin * TILE_SIZE })
-    candidateEdge.push({ x: col * TILE_SIZE, y: (h - margin) * TILE_SIZE })
+  // Start at top-left corner (angle ~225° or -3π/4) and go clockwise
+  const startAngle = -Math.PI * 3 / 4
+  for (let i = 0; i < count; i++) {
+    const angle = startAngle + (i / count) * Math.PI * 2
+    const col = Math.round(cx + Math.cos(angle) * rx)
+    const row = Math.round(cy + Math.sin(angle) * ry)
+    const clampedCol = Phaser.Math.Clamp(col, margin, w - margin)
+    const clampedRow = Phaser.Math.Clamp(row, margin, h - margin)
+    positions.push({ x: clampedCol * TILE_SIZE, y: clampedRow * TILE_SIZE })
   }
-  // Pick evenly spread
-  for (let i = 0; i < Math.min(count, candidateEdge.length); i++) {
-    positions.push(candidateEdge[i])
-  }
-  return positions.slice(0, count)
+  return positions
 }
 
 // ── GameMap class ─────────────────────────────────────────────
@@ -313,9 +510,9 @@ export class GameMap {
   private depletedOreTiles: Set<number> = new Set()
   private debugGridEnabled = false
 
-  constructor(scene: Phaser.Scene, width?: number, height?: number, seed?: number) {
+  constructor(scene: Phaser.Scene, width?: number, height?: number, seed?: number, template?: MapTemplate) {
     this.scene = scene
-    this.data = generateMapData(width, height, seed)
+    this.data = generateMapData(width, height, seed, template)
     this.terrainGraphics = scene.add.graphics()
     this.animLayer = scene.add.graphics()
     this.fogLayer = scene.add.graphics()
@@ -346,6 +543,7 @@ export class GameMap {
       this.renderedTiles = true
       this.setupAnimations()
     }
+    setMapOffset(this.isoOffsetX)
     this.renderTerrainVisible()
   }
 

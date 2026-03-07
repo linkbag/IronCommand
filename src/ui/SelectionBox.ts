@@ -4,7 +4,7 @@
 // ============================================================
 
 import Phaser from 'phaser'
-import { cartToIso } from '../engine/IsoUtils'
+import { cartToScreen } from '../engine/IsoUtils'
 
 export interface SelectionCandidate {
   id: string
@@ -90,9 +90,9 @@ export class SelectionBox {
 
     const selected: string[] = []
     for (const e of entities) {
-      const iso = cartToIso(e.x, e.y)
-      const sx = iso.x - camOffX
-      const sy = iso.y - camOffY
+      const screen = cartToScreen(e.x, e.y)
+      const sx = screen.x - camOffX
+      const sy = screen.y - camOffY
       if (sx >= x1 && sx <= x2 && sy >= y1 && sy <= y2) {
         selected.push(e.id)
       }

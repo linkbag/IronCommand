@@ -13,6 +13,10 @@ export {
   screenToTile,
   cartToIso,
   isoToCart,
+  cartToScreen,
+  screenToCart,
+  setMapOffset,
+  getMapOffsetX,
   drawIsoDiamond,
   getIsoWorldBounds,
 } from './IsoUtils'

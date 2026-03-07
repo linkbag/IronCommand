@@ -7,7 +7,7 @@
 import Phaser from 'phaser'
 import type { BuildingDef, BuildQueueItem, Position } from '../types'
 import { TILE_SIZE } from '../types'
-import { cartToIso } from '../engine/IsoUtils'
+import { cartToScreen } from '../engine/IsoUtils'
 
 export type BuildingState = 'constructing' | 'active' | 'low_power' | 'dying'
 
@@ -223,7 +223,7 @@ export class Building extends Phaser.GameObjects.Container {
     const smoke = this.scene.add.graphics()
     const rx = this.x + Phaser.Math.Between(-w / 3, w / 3)
     const ry = this.y + Phaser.Math.Between(-h / 3, h / 3)
-    const iso = cartToIso(rx, ry)
+    const iso = cartToScreen(rx, ry)
     const size = Phaser.Math.Between(3, 7)
     smoke.fillStyle(0x444444, 0.6)
     smoke.fillCircle(iso.x, iso.y, size)
@@ -249,7 +249,7 @@ export class Building extends Phaser.GameObjects.Container {
     // Large explosion
     const w = this.def.footprint.w * TILE_SIZE
     const h = this.def.footprint.h * TILE_SIZE
-    const iso = cartToIso(this.x, this.y)
+    const iso = cartToScreen(this.x, this.y)
     const flash = this.scene.add.graphics()
     flash.fillStyle(0xff6600, 1)
     flash.fillEllipse(iso.x, iso.y + 8, w * 0.9, h * 0.5)
@@ -269,7 +269,7 @@ export class Building extends Phaser.GameObjects.Container {
       const smoke = this.scene.add.graphics()
       const rx = this.x + Phaser.Math.Between(-w / 2, w / 2)
       const ry = this.y + Phaser.Math.Between(-h / 2, h / 2)
-      const isoP = cartToIso(rx, ry)
+      const isoP = cartToScreen(rx, ry)
       smoke.fillStyle(0x888888, 0.8)
       smoke.fillCircle(isoP.x, isoP.y, Phaser.Math.Between(4, 12))
       smoke.setDepth(49)
@@ -411,7 +411,7 @@ export class Building extends Phaser.GameObjects.Container {
   }
 
   private updateRenderTransform(): void {
-    const isoPos = cartToIso(this.x, this.y)
+    const isoPos = cartToScreen(this.x, this.y)
     this.visualRoot.setPosition(isoPos.x - this.x, isoPos.y - this.y)
     this.setDepth(isoPos.y + 5)
   }

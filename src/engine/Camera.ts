@@ -1,5 +1,5 @@
 import Phaser from 'phaser'
-import { isoToCart } from './IsoUtils'
+import { screenToCart } from './IsoUtils'
 
 // ── RTS Camera ────────────────────────────────────────────────
 // Edge scrolling, middle-mouse pan, scroll zoom, WASD/arrows, snap
@@ -232,7 +232,7 @@ export class RTSCamera {
    * this returns Cartesian game coordinates.
    */
   screenToWorld(isoWorldX: number, isoWorldY: number): { x: number; y: number } {
-    return isoToCart(isoWorldX, isoWorldY)
+    return screenToCart(isoWorldX, isoWorldY)
   }
 
   private clampScroll(): void {

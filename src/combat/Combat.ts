@@ -10,7 +10,7 @@ import type { EntityManager } from '../entities/EntityManager'
 import type { AttackStats } from '../types'
 import { DamageType } from '../types'
 import { TILE_SIZE } from '../types'
-import { cartToIso } from '../engine/IsoUtils'
+import { cartToScreen } from '../engine/IsoUtils'
 
 // Type multipliers: who's strong against what
 // RA2-authentic type multipliers — balanced for realistic counter-play:
@@ -435,7 +435,7 @@ export class Combat extends Phaser.Events.EventEmitter {
     const radius = radii[size]
     const duration = { small: 300, medium: 500, large: 700 }[size]
 
-    const iso = cartToIso(x, y)
+    const iso = cartToScreen(x, y)
 
     // Fireball
     const fireball = this.scene.add.graphics()
@@ -497,7 +497,7 @@ export class Combat extends Phaser.Events.EventEmitter {
         bombIdsToRemove.push(targetId)
         continue
       }
-      const markerPos = cartToIso(bomb.target.x, bomb.target.y)
+      const markerPos = cartToScreen(bomb.target.x, bomb.target.y)
       bomb.marker.setPosition(markerPos.x, markerPos.y)
     }
 
@@ -523,8 +523,8 @@ export class Combat extends Phaser.Events.EventEmitter {
       } else {
         const px = Phaser.Math.Linear(p.fromX, p.toX, p.progress)
         const py = Phaser.Math.Linear(p.fromY, p.toY, p.progress)
-        const isoPos = cartToIso(px, py)
-        const isoFrom = cartToIso(p.fromX, p.fromY)
+        const isoPos = cartToScreen(px, py)
+        const isoFrom = cartToScreen(p.fromX, p.fromY)
         p.graphic.clear()
         p.graphic.setDepth(30 + isoPos.y * 0.01)
         this.drawProjectileGraphic(p.graphic, isoPos.x, isoPos.y, p.attack.damageType, isoFrom.x, isoFrom.y)
@@ -556,7 +556,7 @@ export class Combat extends Phaser.Events.EventEmitter {
     marker.lineStyle(1.5, 0xff6600, 1)
     marker.strokeCircle(0, 0, 5)
     marker.lineBetween(0, -5, 0, -9)
-    const targetPos = cartToIso(target.x, target.y)
+    const targetPos = cartToScreen(target.x, target.y)
     marker.setPosition(targetPos.x, targetPos.y)
 
     const pulseTween = this.scene.tweens.add({
@@ -640,7 +640,7 @@ export class Combat extends Phaser.Events.EventEmitter {
   private createRadiationZone(x: number, y: number, sourcePlayerId: number): void {
     const radiusPixels = 2 * TILE_SIZE
     const now = this.scene.time.now
-    const iso = cartToIso(x, y)
+    const iso = cartToScreen(x, y)
     const graphic = this.scene.add.graphics()
     graphic.setDepth(34)
     graphic.fillStyle(0x99ff44, 0.22)
@@ -702,7 +702,7 @@ export class Combat extends Phaser.Events.EventEmitter {
     onHit: () => void,
   ): void {
     const g = this.scene.add.graphics()
-    const fromIso = cartToIso(fromX, fromY)
+    const fromIso = cartToScreen(fromX, fromY)
     g.setDepth(30 + fromIso.y * 0.01)
     this.drawProjectileGraphic(g, fromIso.x, fromIso.y, attack.damageType)
 
@@ -797,7 +797,7 @@ export class Combat extends Phaser.Events.EventEmitter {
       [DamageType.FIRE]: 0xff6600,
       [DamageType.ELECTRIC]: 0x66aaff,
     }
-    const iso = cartToIso(x, y)
+    const iso = cartToScreen(x, y)
     const flash = this.scene.add.graphics()
     flash.fillStyle(flashColors[dmgType] ?? 0xffff44, 0.9)
     flash.fillCircle(iso.x, iso.y, 4)
@@ -862,8 +862,8 @@ export class Combat extends Phaser.Events.EventEmitter {
   }
 
   private createChainArc(fromX: number, fromY: number, toX: number, toY: number): void {
-    const fromIso = cartToIso(fromX, fromY)
-    const toIso = cartToIso(toX, toY)
+    const fromIso = cartToScreen(fromX, fromY)
+    const toIso = cartToScreen(toX, toY)
     const g = this.scene.add.graphics()
     g.setDepth(36)
     g.lineStyle(2, 0xaaddff, 0.9)

@@ -5,13 +5,19 @@
 
 import Phaser from 'phaser'
 import type { FactionId } from '../types'
+import { TILE_SIZE } from '../types'
 import { FACTIONS, FACTION_IDS } from '../data/factions'
+import { generatePreviewData, PREVIEW_COLORS } from '../engine/GameMap'
 
 export type GameMode = 'ffa' | 'alliance'
+export type MapTemplate = 'continental' | 'islands' | 'desert' | 'arctic' | 'urban' | 'random'
 
 export interface SkirmishConfig {
   playerFaction: FactionId
   mapSize: 'small' | 'medium' | 'large'
+  mapTemplate: MapTemplate
+  mapSeed: number
+  playerSpawn: number           // -1 = random, 0-7 = specific spawn index
   aiCount: number
   aiDifficulty: 'easy' | 'medium' | 'hard'
   startingCredits: number
@@ -52,6 +58,9 @@ export class SetupScene extends Phaser.Scene {
   private config: SkirmishConfig = {
     playerFaction: 'usa',
     mapSize: 'medium',
+    mapTemplate: 'continental',
+    mapSeed: Math.floor(Math.random() * 99999) + 1,
+    playerSpawn: -1,
     aiCount: 1,
     aiDifficulty: 'medium',
     startingCredits: 10000,
@@ -65,9 +74,13 @@ export class SetupScene extends Phaser.Scene {
   private factionSWText!: Phaser.GameObjects.Text
 
   private mapSizeBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
+  private templateBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private diffBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private creditBtns: Map<number, Phaser.GameObjects.Graphics> = new Map()
   private aiCountText!: Phaser.GameObjects.Text
+  private mapPreview!: Phaser.GameObjects.Graphics
+  private spawnMarkers: Phaser.GameObjects.Text[] = []
+  private spawnZones: Phaser.GameObjects.Zone[] = []
 
   constructor() {
     super({ key: 'SetupScene' })
@@ -80,8 +93,10 @@ export class SetupScene extends Phaser.Scene {
     this.createHeader(width)
     this.createFactionPanel(width, height)
     this.createSettingsPanel(width, height)
+    this.createMapPreview(width, height)
     this.createBottomBar(width, height)
     this.updateFactionInfo()
+    this.regeneratePreview()
   }
 
   private createBackground(width: number, height: number) {
@@ -309,8 +324,31 @@ export class SetupScene extends Phaser.Scene {
       'MAP SIZE',
       MAP_SIZES.map(m => ({ label: `${m.label}\n${m.tiles}`, value: m.value })),
       this.config.mapSize,
-      (v) => { this.config.mapSize = v as SkirmishConfig['mapSize'] },
+      (v) => { this.config.mapSize = v as SkirmishConfig['mapSize']; this.regeneratePreview() },
       this.mapSizeBtns,
+    )
+
+    cy += 16
+
+    // Map Template
+    const TEMPLATES: Array<{ label: string; value: MapTemplate }> = [
+      { label: '🌍 CONTINENTAL', value: 'continental' },
+      { label: '🏝️ ISLANDS', value: 'islands' },
+      { label: '🏜️ DESERT', value: 'desert' },
+      { label: '❄️ ARCTIC', value: 'arctic' },
+      { label: '🏙️ URBAN', value: 'urban' },
+      { label: '🎲 RANDOM', value: 'random' },
+    ]
+    cy = this.createRadioGroup(
+      panelX + 10, cy, panelW - 20,
+      'MAP TEMPLATE',
+      TEMPLATES.map(t => ({ label: t.label, value: t.value })),
+      this.config.mapTemplate,
+      (v) => {
+        this.config.mapTemplate = v as MapTemplate
+        this.regeneratePreview()
+      },
+      this.templateBtns,
     )
 
     cy += 16
@@ -609,6 +647,129 @@ export class SetupScene extends Phaser.Scene {
       }
       // Can't easily redraw without stored x/y; the zone hover handlers handle it
     })
+  }
+
+  private createMapPreview(width: number, height: number) {
+    const previewSize = 180
+    const px = width - previewSize - 30
+    const py = 80
+
+    // Panel background
+    const bg = this.add.graphics()
+    bg.fillStyle(STYLE.panel, 1)
+    bg.fillRect(px - 10, py - 30, previewSize + 20, previewSize + 80)
+    bg.lineStyle(1, STYLE.panelBorder, 1)
+    bg.strokeRect(px - 10, py - 30, previewSize + 20, previewSize + 80)
+
+    this.add.text(px + previewSize / 2 - 10, py - 20, 'MAP PREVIEW', {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      color: '#aaaaaa',
+    })
+
+    // Map preview canvas
+    this.mapPreview = this.add.graphics()
+    this.mapPreview.setPosition(px, py)
+
+    // New Map button
+    const btnW = 100, btnH = 24
+    const btnX = px + previewSize / 2
+    const btnY = py + previewSize + 16
+    const btnBg = this.add.graphics()
+    btnBg.fillStyle(STYLE.btnNormal, 1)
+    btnBg.fillRect(btnX - btnW / 2, btnY - btnH / 2, btnW, btnH)
+    btnBg.lineStyle(1, STYLE.panelBorder, 1)
+    btnBg.strokeRect(btnX - btnW / 2, btnY - btnH / 2, btnW, btnH)
+
+    this.add.text(btnX, btnY, '🔄 NEW MAP', {
+      fontFamily: 'monospace',
+      fontSize: '10px',
+      color: '#e94560',
+    }).setOrigin(0.5)
+
+    const zone = this.add.zone(btnX, btnY, btnW, btnH).setInteractive({ cursor: 'pointer' })
+    zone.on('pointerdown', () => {
+      this.config.mapSeed = Math.floor(Math.random() * 99999) + 1
+      this.regeneratePreview()
+    })
+  }
+
+  private regeneratePreview() {
+    if (!this.mapPreview) return
+    const g = this.mapPreview
+    g.clear()
+
+    const mapDims: Record<string, number> = { small: 64, medium: 128, large: 256 }
+    const mapSize = mapDims[this.config.mapSize] ?? 64
+    const data = generatePreviewData(mapSize, mapSize, this.config.mapSeed, this.config.mapTemplate)
+
+    const previewSize = 180
+    const scale = previewSize / mapSize
+
+    // Draw terrain
+    for (let row = 0; row < mapSize; row++) {
+      for (let col = 0; col < mapSize; col++) {
+        const tile = data.tiles[row][col]
+        const color = PREVIEW_COLORS[tile.terrain] ?? 0x4a7c3f
+        g.fillStyle(color, 1)
+        g.fillRect(col * scale, row * scale, Math.ceil(scale), Math.ceil(scale))
+      }
+    }
+
+    // Clean up old spawn markers
+    for (const m of this.spawnMarkers) m.destroy()
+    for (const z of this.spawnZones) z.destroy()
+    this.spawnMarkers = []
+    this.spawnZones = []
+
+    // Draw spawn points
+    const pw = this.mapPreview.x
+    const ph = this.mapPreview.y
+    const positions = data.startPositions
+    const maxSpawns = Math.min(positions.length, this.config.aiCount + 1) // player + AI count
+
+    for (let i = 0; i < maxSpawns; i++) {
+      const sp = positions[i]
+      const sx = pw + (sp.x / (mapSize * TILE_SIZE)) * previewSize
+      const sy = ph + (sp.y / (mapSize * TILE_SIZE)) * previewSize
+      const isSelected = this.config.playerSpawn === i
+      const isRandom = this.config.playerSpawn === -1
+
+      const marker = this.add.text(sx, sy, `${i + 1}`, {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: isSelected ? '#e94560' : (isRandom ? '#ffffff' : '#778899'),
+        stroke: '#000000',
+        strokeThickness: 3,
+      }).setOrigin(0.5)
+
+      const clickZone = this.add.zone(sx, sy, 20, 20).setInteractive({ cursor: 'pointer' })
+      clickZone.on('pointerdown', () => {
+        // Toggle: click same number again = random
+        if (this.config.playerSpawn === i) {
+          this.config.playerSpawn = -1
+        } else {
+          this.config.playerSpawn = i
+        }
+        this.regeneratePreview()
+      })
+
+      this.spawnMarkers.push(marker)
+      this.spawnZones.push(clickZone)
+    }
+
+    // Spawn legend
+    const legendY = ph + previewSize + 38
+    // Clean up old legend text
+    if ((this as any)._spawnLegend) (this as any)._spawnLegend.destroy()
+    const legendText = this.config.playerSpawn === -1
+      ? 'Spawn: RANDOM (click # to pick)'
+      : `Spawn: Position ${this.config.playerSpawn + 1} (click to change)`
+    ;(this as any)._spawnLegend = this.add.text(pw + previewSize / 2, legendY, legendText, {
+      fontFamily: 'monospace',
+      fontSize: '8px',
+      color: '#778899',
+    }).setOrigin(0.5)
   }
 
   private launchMission() {

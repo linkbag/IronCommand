@@ -3,7 +3,7 @@ import { FogState, TILE_SIZE } from '../types'
 import type { GameMap as GameMapData } from '../types'
 import type { GameMap } from './GameMap'
 import type { RTSCamera } from './Camera'
-import { cartToIso, isoToCart, getIsoWorldBounds, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from './IsoUtils'
+import { cartToScreen, screenToCart, getIsoWorldBounds, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from './IsoUtils'
 
 // ── Terrain colors (minimap scale) ───────────────────────────
 // Using flat single colors for performance at minimap resolution
@@ -123,9 +123,9 @@ export class Minimap {
           tile.fogState === FogState.HIDDEN ? 0x000000
           : tile.fogState === FogState.EXPLORED ? dimColor(terrainColor)
           : terrainColor
-        const iso = cartToIso(col * TILE_SIZE, row * TILE_SIZE)
-        const px = (iso.x + this.isoOffsetX) * this.scaleX
-        const py = iso.y * this.scaleY
+        const screen = cartToScreen(col * TILE_SIZE, row * TILE_SIZE)
+        const px = screen.x * this.scaleX
+        const py = screen.y * this.scaleY
         g.fillStyle(color)
         drawIsoDiamond(g, px - miniTileW / 2, py, miniTileW, miniTileH)
         g.fillPath()
@@ -150,9 +150,9 @@ export class Minimap {
       const fog = map.tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
       const canShow = dot.alwaysVisible || dot.isFriendly || fog === FogState.VISIBLE
       if (!canShow) continue
-      const iso = cartToIso(dot.worldX, dot.worldY)
-      const px = this.screenX + (iso.x + this.isoOffsetX) * this.scaleX
-      const py = this.screenY + iso.y * this.scaleY
+      const screen = cartToScreen(dot.worldX, dot.worldY)
+      const px = this.screenX + screen.x * this.scaleX
+      const py = this.screenY + screen.y * this.scaleY
       g.fillStyle(dot.color)
       g.fillCircle(px, py, 1.5)
     }
@@ -197,10 +197,8 @@ export class Minimap {
       ) {
         const fracX = (px - this.screenX) / this.size
         const fracY = (py - this.screenY) / this.size
-        const isoX = fracX * this.isoWidth - this.isoOffsetX
-        const isoY = fracY * this.isoHeight
-        const cart = isoToCart(isoX, isoY)
-        const center = cartToIso(cart.x, cart.y)
+        const cart = screenToCart(fracX * this.isoWidth, fracY * this.isoHeight)
+        const center = cartToScreen(cart.x, cart.y)
         this.rtsCamera.snapTo(center.x, center.y)
       }
     })

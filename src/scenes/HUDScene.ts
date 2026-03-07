@@ -9,7 +9,7 @@ import { FogState, TILE_SIZE } from '../types'
 import { FACTIONS } from '../data/factions'
 import { UNIT_DEFS, getAvailableUnitIds } from '../entities/UnitDefs'
 import { BUILDING_DEFS, getAvailableBuildingIds, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
-import { cartToIso, isoToCart, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond, getIsoWorldBounds } from '../engine/IsoUtils'
+import { cartToScreen, screenToCart, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond, getIsoWorldBounds } from '../engine/IsoUtils'
 
 // ── Layout constants ───────────────────────────────────────────────────
 const SIDEBAR_W       = 220
@@ -305,12 +305,12 @@ export class HUDScene extends Phaser.Scene {
       const ry = ptr.y - y
       const map = this.gameState.map
       const bounds = getIsoWorldBounds(map.width, map.height)
-      const isoX = Phaser.Math.Clamp((rx / w) * bounds.width - bounds.offsetX, -bounds.offsetX, bounds.width - bounds.offsetX)
-      const isoY = Phaser.Math.Clamp((ry / h) * bounds.height, 0, bounds.height)
-      const cart = isoToCart(isoX, isoY)
+      const cart = screenToCart(
+        Phaser.Math.Clamp((rx / w) * bounds.width, 0, bounds.width),
+        Phaser.Math.Clamp((ry / h) * bounds.height, 0, bounds.height),
+      )
       const wx = Phaser.Math.Clamp(cart.x, 0, map.width * TILE_SIZE - 1)
       const wy = Phaser.Math.Clamp(cart.y, 0, map.height * TILE_SIZE - 1)
-      const isoCenter = cartToIso(wx, wy)
 
       if ((ptr.button ?? 0) === 2 || ptr.rightButtonDown()) {
         const selectedIds = (this.registry.get('selectedIds') as string[]) ?? []
@@ -327,8 +327,9 @@ export class HUDScene extends Phaser.Scene {
         return
       }
 
-      this.registry.set('camTargetX', isoCenter.x - this.sidebarX / 2)
-      this.registry.set('camTargetY', isoCenter.y - this.scale.height / 2)
+      const screenCenter = cartToScreen(wx, wy)
+      this.registry.set('camTargetX', screenCenter.x - this.sidebarX / 2)
+      this.registry.set('camTargetY', screenCenter.y - this.scale.height / 2)
     })
   }
 
@@ -1548,8 +1549,9 @@ export class HUDScene extends Phaser.Scene {
       if (!em) return
       const cy = em.getAllEntities().find(e => e.defId === 'construction_yard' && e.playerId === 0 && e.isAlive)
       if (cy) {
-        this.registry.set('camTargetX', cy.x - this.sidebarX / 2)
-        this.registry.set('camTargetY', cy.y - this.scale.height / 2)
+        const cyIso = cartToScreen(cy.x, cy.y)
+        this.registry.set('camTargetX', cyIso.x - this.sidebarX / 2)
+        this.registry.set('camTargetY', cyIso.y - this.scale.height / 2)
       }
     })
 
@@ -1557,8 +1559,9 @@ export class HUDScene extends Phaser.Scene {
     kb.on('keydown-SPACE', () => {
       const pos = this.registry.get('lastAlertPos') as { x: number; y: number } | undefined
       if (pos) {
-        this.registry.set('camTargetX', pos.x - this.sidebarX / 2)
-        this.registry.set('camTargetY', pos.y - this.scale.height / 2)
+        const alertIso = cartToScreen(pos.x, pos.y)
+        this.registry.set('camTargetX', alertIso.x - this.sidebarX / 2)
+        this.registry.set('camTargetY', alertIso.y - this.scale.height / 2)
       }
     })
 
@@ -1612,8 +1615,9 @@ export class HUDScene extends Phaser.Scene {
               if (em) {
                 const first = em.getUnit(group[0])
                 if (first) {
-                  this.registry.set('camTargetX', first.x - this.sidebarX / 2)
-                  this.registry.set('camTargetY', first.y - this.scale.height / 2)
+                  const groupIso = cartToScreen(first.x, first.y)
+                  this.registry.set('camTargetX', groupIso.x - this.sidebarX / 2)
+                  this.registry.set('camTargetY', groupIso.y - this.scale.height / 2)
                 }
               }
             }
@@ -1702,9 +1706,9 @@ export class HUDScene extends Phaser.Scene {
             tile.fogState === FogState.HIDDEN ? 0x000000
             : tile.fogState === FogState.EXPLORED ? dimColor(terrainColor)
             : terrainColor
-          const iso = cartToIso(col * TILE_SIZE, row * TILE_SIZE)
-          const mx = ox + (iso.x + bounds.offsetX) * scaleX
-          const my = oy + iso.y * scaleY
+          const screen = cartToScreen(col * TILE_SIZE, row * TILE_SIZE)
+          const mx = ox + screen.x * scaleX
+          const my = oy + screen.y * scaleY
           tg.fillStyle(color, 1)
           drawIsoDiamond(tg, mx - miniTileW / 2, my, miniTileW * step, miniTileH * step)
           tg.fillPath()
@@ -1730,9 +1734,9 @@ export class HUDScene extends Phaser.Scene {
 
         // Friendly = green, enemy = red for clear minimap contrast.
         const color = isOwn ? 0x4ade80 : 0xe94560
-        const iso = cartToIso(e.x, e.y)
-        const mx = ox + (iso.x + bounds.offsetX) * scaleX
-        const my = oy + iso.y * scaleY
+        const screen = cartToScreen(e.x, e.y)
+        const mx = ox + screen.x * scaleX
+        const my = oy + screen.y * scaleY
         const sz = e.type === 'building' ? 3 : 2
         g.fillStyle(color, 1)
         g.fillRect(mx - sz / 2, my - sz / 2, sz, sz)
@@ -2045,7 +2049,7 @@ export class HUDScene extends Phaser.Scene {
     const tileCol = Math.floor(world.x / TILE_SIZE)
     const tileRow = Math.floor(world.y / TILE_SIZE)
     const tileToScreen = (col: number, row: number) => {
-      const iso = cartToIso(col * TILE_SIZE, row * TILE_SIZE)
+      const iso = cartToScreen(col * TILE_SIZE, row * TILE_SIZE)
       return { x: iso.x - camX, y: iso.y - camY }
     }
 
@@ -2142,6 +2146,6 @@ export class HUDScene extends Phaser.Scene {
   private pointerScreenToCart(screenX: number, screenY: number): { x: number; y: number } {
     const camX = (this.registry.get('camX') as number) ?? 0
     const camY = (this.registry.get('camY') as number) ?? 0
-    return isoToCart(screenX + camX, screenY + camY)
+    return screenToCart(screenX + camX, screenY + camY)
   }
 }

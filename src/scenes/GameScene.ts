@@ -16,7 +16,7 @@ import { BUILDING_DEFS, getPowerBuildingDefId, NEUTRAL_BUILDING_IDS, SUPERWEAPON
 import { UNIT_DEFS, getHarvesterDefId, getBasicInfantryDefId } from '../entities/UnitDefs'
 import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, FactionSide } from '../types'
 import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL_PLAYER_ID } from '../types'
-import { cartToIso, isoToCart, getIsoWorldBounds } from '../engine/IsoUtils'
+import { cartToScreen, screenToCart, getIsoWorldBounds } from '../engine/IsoUtils'
 import { FACTIONS } from '../data/factions'
 import type { SkirmishConfig } from './SetupScene'
 
@@ -114,8 +114,8 @@ export class GameScene extends Phaser.Scene {
     // ── 1. Procedural map ─────────────────────────────────────
     const mapDims: Record<string, number> = { small: 64, medium: 128, large: 256 }
     const mapSize = mapDims[cfg.mapSize] ?? 64
-    const seed = Math.floor(Math.random() * 99999) + 1
-    this.gameMap = new GameMap(this, mapSize, mapSize, seed)
+    const seed = cfg.mapSeed ?? Math.floor(Math.random() * 99999) + 1
+    this.gameMap = new GameMap(this, mapSize, mapSize, seed, cfg.mapTemplate)
     this.gameMap.renderTerrain()
     // NOTE: Don't pre-render fog as full black here. All tiles start HIDDEN.
     // updateFogOfWar() at the end of create() will reveal + render fog properly.
@@ -317,12 +317,14 @@ export class GameScene extends Phaser.Scene {
     this.selectionRect.setScrollFactor(0).setDepth(200)
 
     // ── 14. Camera at player spawn (convert to iso coords) ────
-    const startPos = this.gameMap.data.startPositions[0]
+    const spawnIdx = (cfg.playerSpawn >= 0 && cfg.playerSpawn < this.gameMap.data.startPositions.length)
+      ? cfg.playerSpawn : 0
+    const startPos = this.gameMap.data.startPositions[spawnIdx]
     if (startPos) {
-      // Convert Cartesian start position to isometric screen position
-      const isoStart = cartToIso(startPos.x, startPos.y)
-      this.camX = isoStart.x + this.gameMap.isoOffsetX - this.scale.width / 2
-      this.camY = isoStart.y - this.scale.height / 2
+      // Convert Cartesian start position to isometric screen position (with map offset)
+      const screenStart = cartToScreen(startPos.x, startPos.y)
+      this.camX = screenStart.x - this.scale.width / 2
+      this.camY = screenStart.y - this.scale.height / 2
     }
     this.cameras.main.setScroll(this.camX, this.camY)
 
@@ -370,6 +372,17 @@ export class GameScene extends Phaser.Scene {
 
     console.log('[IC] Camera at:', this.camX, this.camY)
     console.log('[IC] Map world size:', this.gameMap.worldWidth, 'x', this.gameMap.worldHeight)
+    console.log('[IC] Iso world size:', this.gameMap.isoWorldWidth, 'x', this.gameMap.isoWorldHeight)
+    console.log('[IC] Iso offsetX:', this.gameMap.isoOffsetX)
+
+    // Debug: draw a bright marker at camera center to verify rendering works
+    const dbg = this.add.graphics()
+    dbg.setDepth(999)
+    const cx = this.camX + this.scale.width / 2
+    const cy = this.camY + this.scale.height / 2
+    dbg.fillStyle(0xff00ff, 1)
+    dbg.fillCircle(cx, cy, 20)
+    console.log('[IC] Debug marker at:', cx, cy)
 
     // Prevent browser context menu on the game canvas
     this.game.canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault())
@@ -1099,9 +1112,10 @@ export class GameScene extends Phaser.Scene {
         })
       }
       // Scorched area visual (lingering)
+      const scorchIso = cartToScreen(targetX, targetY)
       const scorch = this.add.graphics()
       scorch.fillStyle(defId === 'nuclear_silo' ? 0x331100 : 0x112244, 0.3)
-      scorch.fillCircle(targetX, targetY, radiusPx * 0.7)
+      scorch.fillCircle(scorchIso.x, scorchIso.y, radiusPx * 0.7)
       scorch.setDepth(2)
       this.tweens.add({ targets: scorch, alpha: 0, duration: 15000, onComplete: () => scorch.destroy() })
 
@@ -1136,9 +1150,10 @@ export class GameScene extends Phaser.Scene {
         })
       }
       // Visual effect — red flash
+      const icIso = cartToScreen(targetX, targetY)
       const flash = this.add.graphics()
       flash.fillStyle(0xff4444, 0.5)
-      flash.fillCircle(targetX, targetY, 3 * TILE_SIZE)
+      flash.fillCircle(icIso.x, icIso.y, 3 * TILE_SIZE)
       flash.setDepth(45)
       this.tweens.add({ targets: flash, alpha: 0, duration: 2000, onComplete: () => flash.destroy() })
       if (hud) hud.events.emit('evaAlert', { message: 'Iron Curtain activated!', type: playerId === 0 ? 'success' : 'danger' })
@@ -1161,9 +1176,10 @@ export class GameScene extends Phaser.Scene {
       // Blue flash at source locations
       const sourcePositions = units.map(u => ({ x: u.x, y: u.y }))
       for (const pos of sourcePositions) {
+        const srcIso = cartToScreen(pos.x, pos.y)
         const srcFlash = this.add.graphics()
         srcFlash.fillStyle(0x44ddff, 0.6)
-        srcFlash.fillCircle(pos.x, pos.y, TILE_SIZE)
+        srcFlash.fillCircle(srcIso.x, srcIso.y, TILE_SIZE)
         srcFlash.setDepth(45)
         this.tweens.add({ targets: srcFlash, alpha: 0, scaleX: 2, scaleY: 2, duration: 800, onComplete: () => srcFlash.destroy() })
       }
@@ -1175,9 +1191,10 @@ export class GameScene extends Phaser.Scene {
       }
 
       // Blue flash at destination
+      const destIso = cartToScreen(targetX, targetY)
       const flash = this.add.graphics()
       flash.fillStyle(0x44ddff, 0.6)
-      flash.fillCircle(targetX, targetY, 3 * TILE_SIZE)
+      flash.fillCircle(destIso.x, destIso.y, 3 * TILE_SIZE)
       flash.setDepth(45)
       this.tweens.add({ targets: flash, alpha: 0, duration: 1500, onComplete: () => flash.destroy() })
       if (hud) hud.events.emit('evaAlert', { message: 'Chronosphere activated!', type: playerId === 0 ? 'info' : 'danger' })
@@ -1302,8 +1319,9 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard!.on('keydown-H', () => {
       const home = this.gameMap.data.startPositions[0]
       if (home) {
-        this.camX = home.x - this.scale.width / 2
-        this.camY = home.y - this.scale.height / 2
+        const isoHome = cartToScreen(home.x, home.y)
+        this.camX = isoHome.x - this.scale.width / 2
+        this.camY = isoHome.y - this.scale.height / 2
       }
     })
 
@@ -1381,7 +1399,7 @@ export class GameScene extends Phaser.Scene {
 
   /** Convert pointer's world position (isometric screen space) to Cartesian game coordinates */
   private ptrToCart(ptr: Phaser.Input.Pointer): { x: number; y: number } {
-    return isoToCart(ptr.worldX, ptr.worldY)
+    return screenToCart(ptr.worldX, ptr.worldY)
   }
 
   // ── Ctrl+click force fire ──────────────────────────────────────
@@ -1512,7 +1530,8 @@ export class GameScene extends Phaser.Scene {
     const lines = ACK_LINES[category] ?? ACK_LINES['infantry']
     const line = msg || lines[Math.floor(Math.random() * lines.length)]
 
-    const text = this.add.text(unit.x, unit.y - 24, line, {
+    const ackPos = cartToScreen(unit.x, unit.y)
+    const text = this.add.text(ackPos.x, ackPos.y - 24, line, {
       fontFamily: 'monospace',
       fontSize: '8px',
       color: '#ffffff',
@@ -1567,9 +1586,9 @@ export class GameScene extends Phaser.Scene {
     // Drag box is drawn in screen space, so test unit positions in iso screen space.
     const units = this.entityMgr.getUnitsForPlayer(0)
     units.forEach(u => {
-      const iso = cartToIso(u.x, u.y)
-      const screenX = iso.x - this.camX
-      const screenY = iso.y - this.camY
+      const screenPos = cartToScreen(u.x, u.y)
+      const screenX = screenPos.x - this.camX
+      const screenY = screenPos.y - this.camY
       if (screenX >= sx1 && screenX <= sx2 && screenY >= sy1 && screenY <= sy2) {
         this.selectedIds.add(u.id)
         u.setSelected(true)

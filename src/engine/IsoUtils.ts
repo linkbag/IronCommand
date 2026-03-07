@@ -62,6 +62,33 @@ export function drawIsoDiamond(
   g.closePath()
 }
 
+// ── Map offset (set once per map, used by cartToScreen/screenToCart) ───
+
+let _mapOffsetX = 0
+
+/** Set the map iso X offset — call once when the map is created */
+export function setMapOffset(offsetX: number): void {
+  _mapOffsetX = offsetX
+}
+
+/** Get the current map iso X offset */
+export function getMapOffsetX(): number {
+  return _mapOffsetX
+}
+
+// ── Cartesian ↔ Screen (iso + map offset) ─────────────────────
+
+/** Convert Cartesian game position to final world render position (iso + map offset) */
+export function cartToScreen(cartX: number, cartY: number): { x: number; y: number } {
+  const iso = cartToIso(cartX, cartY)
+  return { x: iso.x + _mapOffsetX, y: iso.y }
+}
+
+/** Convert world render position (iso + map offset) back to Cartesian game position */
+export function screenToCart(screenX: number, screenY: number): { x: number; y: number } {
+  return isoToCart(screenX - _mapOffsetX, screenY)
+}
+
 // ── Map bounds ─────────────────────────────────────────────────
 
 /** Get isometric world bounds for a map of given tile dimensions */

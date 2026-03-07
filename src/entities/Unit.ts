@@ -7,7 +7,7 @@
 import Phaser from 'phaser'
 import type { UnitDef, Order, TileCoord, Position } from '../types'
 import { TILE_SIZE } from '../types'
-import { cartToIso } from '../engine/IsoUtils'
+import { cartToScreen } from '../engine/IsoUtils'
 
 export type UnitState = 'idle' | 'moving' | 'attacking' | 'harvesting' | 'dying'
 
@@ -351,9 +351,9 @@ export class Unit extends Phaser.GameObjects.Container {
     const flash = this.scene.add.graphics()
     const isInfantry = this.def.category === 'infantry'
     const radius = isInfantry ? 8 : 20
-    const isoPos = cartToIso(this.x, this.y)
+    const screenPos = cartToScreen(this.x, this.y)
     flash.fillStyle(0xff8800, 1)
-    flash.fillCircle(isoPos.x, isoPos.y, radius)
+    flash.fillCircle(screenPos.x, screenPos.y, radius)
     flash.setDepth(50)
 
     this.scene.tweens.add({
@@ -912,9 +912,9 @@ export class Unit extends Phaser.GameObjects.Container {
   }
 
   private syncRenderTransform(): void {
-    const isoPos = cartToIso(this.x, this.y)
-    this.visualRoot.setPosition(isoPos.x - this.x, isoPos.y - this.y)
-    this.setDepth(isoPos.y + 10)
+    const screenPos = cartToScreen(this.x, this.y)
+    this.visualRoot.setPosition(screenPos.x - this.x, screenPos.y - this.y)
+    this.setDepth(screenPos.y + 10)
   }
 
   private drawHealthBar(): void {

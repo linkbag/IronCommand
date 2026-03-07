@@ -259,7 +259,11 @@ export class BootScene extends Phaser.Scene {
     this.updateProgress(progress)
     this.loadingText.setText(`Loading assets... ${Math.round(progress * 100)}%`)
 
-    this.tasks[this.taskIndex]()
+    try {
+      this.tasks[this.taskIndex]()
+    } catch (e) {
+      console.error(`[BootScene] Task ${this.taskIndex} failed:`, e)
+    }
     this.taskIndex++
 
     this.time.delayedCall(1, () => this.runNextTask())
