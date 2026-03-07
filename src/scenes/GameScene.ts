@@ -1591,10 +1591,9 @@ export class GameScene extends Phaser.Scene {
   private handleRightClick(ptr: Phaser.Input.Pointer): void {
     ;(ptr.event as MouseEvent | undefined)?.preventDefault()
     this.cursorMode = 'normal'
-    if (this.selectedIds.size === 0) return
 
     const { x: worldX, y: worldY } = this.ptrToCart(ptr)
-    const appendOrder = this.waypointMode
+    if (this.selectedIds.size === 0) return
 
     const clickRadius = TILE_SIZE * 2
     const enemies = this.entityMgr.getEnemyUnitsInRange(worldX, worldY, clickRadius, 0)
@@ -1604,32 +1603,14 @@ export class GameScene extends Phaser.Scene {
       this.selectedIds.forEach(id => {
         const unit = this.entityMgr.getUnit(id)
         if (!unit || unit.playerId !== 0) return
-        unit.giveOrder({ type: 'attack', targetEntityId: attackTarget.id }, appendOrder)
+        unit.giveOrder({ type: 'attack', targetEntityId: attackTarget.id }, this.waypointMode)
       })
       this.showUnitAck('Attacking')
       return
     }
 
-    const clickTile = this.gameMap.worldToTile(worldX, worldY)
-    const tile = this.gameMap.getTile(clickTile.col, clickTile.row)
-    let harvestIssued = false
-    let moveIssued = false
-
-    this.selectedIds.forEach(id => {
-      const unit = this.entityMgr.getUnit(id)
-      if (!unit || unit.playerId !== 0) return
-
-      if (tile?.terrain === TerrainType.ORE && unit.def.category === 'harvester') {
-        unit.giveOrder({ type: 'harvest', target: { x: worldX, y: worldY } }, appendOrder)
-        harvestIssued = true
-      } else {
-        unit.giveOrder({ type: 'move', target: { x: worldX, y: worldY } }, appendOrder)
-        moveIssued = true
-      }
-    })
-
-    if (harvestIssued && !moveIssued) this.showUnitAck('Harvesting')
-    else this.showUnitAck('Moving out')
+    // Right-click on empty ground clears current selection.
+    this.deselectAll()
   }
 
   // ── Unit acknowledgment text popup ─────────────────────────────
@@ -1801,6 +1782,7 @@ export class GameScene extends Phaser.Scene {
 
     const clickTile = this.gameMap.worldToTile(worldX, worldY)
     const tile = this.gameMap.getTile(clickTile.col, clickTile.row)
+    const appendOrder = this.waypointMode
     let harvestIssued = false
     let moveIssued = false
 
@@ -1809,10 +1791,10 @@ export class GameScene extends Phaser.Scene {
       if (!unit || unit.playerId !== 0) return
 
       if (tile?.terrain === TerrainType.ORE && unit.def.category === 'harvester') {
-        unit.giveOrder({ type: 'harvest', target: { x: worldX, y: worldY } })
+        unit.giveOrder({ type: 'harvest', target: { x: worldX, y: worldY } }, appendOrder)
         harvestIssued = true
       } else {
-        unit.giveOrder({ type: 'move', target: { x: worldX, y: worldY } })
+        unit.giveOrder({ type: 'move', target: { x: worldX, y: worldY } }, appendOrder)
         moveIssued = true
       }
     })
