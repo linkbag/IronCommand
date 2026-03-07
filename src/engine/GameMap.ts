@@ -28,8 +28,8 @@ const TERRAIN_COLORS: Record<TerrainType, number[]> = {
 }
 
 const FOG_ALPHA: Record<FogState, number> = {
-  [FogState.HIDDEN]:   0.0,   // TEMP: disabled fog for debugging black screen
-  [FogState.EXPLORED]: 0.0,
+  [FogState.HIDDEN]:   1.0,
+  [FogState.EXPLORED]: 0.55,
   [FogState.VISIBLE]:  0.0,
 }
 

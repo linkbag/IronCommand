@@ -372,6 +372,11 @@ export class GameScene extends Phaser.Scene {
       this.camX = screenStart.x - this.scale.width / 2
       this.camY = screenStart.y - this.scale.height / 2
     }
+    // Clamp initial camera immediately so first visible frame cannot land outside iso bounds.
+    const initMaxX = this.gameMap.isoWorldWidth - this.scale.width
+    const initMaxY = this.gameMap.isoWorldHeight - this.scale.height
+    this.camX = Phaser.Math.Clamp(this.camX, 0, Math.max(0, initMaxX))
+    this.camY = Phaser.Math.Clamp(this.camY, 0, Math.max(0, initMaxY))
     this.cameras.main.setScroll(this.camX, this.camY)
 
     // ── 15. Launch HUD overlay ────────────────────────────────
@@ -1135,6 +1140,25 @@ export class GameScene extends Phaser.Scene {
       }
     }
     sources.push(...this.fogAnchorSources)
+
+    // Defensive fallback: if opening entities failed to spawn, keep the starting view playable.
+    if (sources.length === 0) {
+      const fallbackSpawn = this.getSpawnPositionForPlayer(localId)
+      if (fallbackSpawn) {
+        sources.push({
+          pos: this.gameMap.worldToTile(fallbackSpawn.x, fallbackSpawn.y),
+          range: 14,
+        })
+      } else {
+        const camCenterIsoX = this.camX + this.scale.width / 2
+        const camCenterIsoY = this.camY + this.scale.height / 2
+        const camCenterCart = screenToCart(camCenterIsoX, camCenterIsoY)
+        sources.push({
+          pos: this.gameMap.worldToTile(camCenterCart.x, camCenterCart.y),
+          range: 12,
+        })
+      }
+    }
 
     // Always call updateFog — even with 0 sources, it resets VISIBLE→EXPLORED
     // and re-renders. Skipping it when sources=0 would leave stale full-black fog.
