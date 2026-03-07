@@ -110,6 +110,12 @@ const DEFENDER_RESPONSE_RADIUS: Record<AIDifficulty, number> = {
 
 const RETREAT_HEALTH_PCT = 0.35
 const RETREAT_WAVE_LOSS_THRESHOLD = 0.5
+const OPENING_SECOND_HARVESTER_DEADLINE_MS = 120000
+const ECONOMY_SAMPLE_WINDOW_MS = 15000
+const EXPANSION_MIN_DISTANCE_TILES = 10
+const ORE_NEAR_BASE_RADIUS_TILES = 10
+const ORE_DEPLETION_DISTANCE_TILES = 16
+const HIGH_CREDIT_THRESHOLD = 5000
 const REBUILD_RECOVERY_MS: Record<AIDifficulty, number> = {
   easy: 70000,
   medium: 50000,
@@ -181,6 +187,17 @@ export class AI {
   private enemyHasAirSuperiority: boolean
   private enemyIsTurtling: boolean
   private enemyIsRushing: boolean
+  private lastCredits: number
+  private economySampleMs: number
+  private incomeAccum: number
+  private spendingAccum: number
+  private incomePerMinute: number
+  private spendingPerMinute: number
+  private openingHarvesterQueued: boolean
+  private lastBuildingCount: number
+  private losingBuildingsUntilMs: number
+  private harvesterHpSnapshot: Map<string, number>
+  private expansionAnchor: { x: number; y: number } | null
 
   private static readonly SW_COOLDOWNS: Record<string, number> = {
     nuclear_silo: 300000,
@@ -234,6 +251,17 @@ export class AI {
     this.enemyHasAirSuperiority = false
     this.enemyIsTurtling = false
     this.enemyIsRushing = false
+    this.lastCredits = this.economy.getCredits(this.playerId)
+    this.economySampleMs = 0
+    this.incomeAccum = 0
+    this.spendingAccum = 0
+    this.incomePerMinute = 0
+    this.spendingPerMinute = 0
+    this.openingHarvesterQueued = false
+    this.lastBuildingCount = 0
+    this.losingBuildingsUntilMs = 0
+    this.harvesterHpSnapshot = new Map()
+    this.expansionAnchor = null
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -254,6 +282,7 @@ export class AI {
     this.focusFireTimer += delta
     this.mapControlTimer += delta
     this.matchTimer += delta
+    this.updateEconomyTelemetry(delta)
 
     this.updatePendingWave(delta)
 
@@ -269,11 +298,13 @@ export class AI {
   private tick(gameState: GameState): void {
     const buildings = this.em.getBuildingsForPlayer(this.playerId)
     if (buildings.length === 0) return
+    this.trackBaseLossState(buildings.length)
 
     this.updatePhase()
     this.updateBattlefieldIntel(gameState)
     this.assessEnemyComposition(gameState)
     this.ensureHarvesting(gameState)
+    this.protectHarvesters(gameState)
 
     if (this.handleLastStand(gameState)) return
 
@@ -407,9 +438,16 @@ export class AI {
       b => b.def.id === 'ore_refinery' && b.state === 'active',
     )
 
-    const desiredHarvesters = Math.max(2, refineries.length * 2)
+    const perRefTarget = this.difficulty === 'hard' ? 3 : 2
+    const desiredHarvesters = Math.max(2, refineries.length * perRefTarget)
+    const openingNeedsSecondHarvester =
+      this.matchTimer <= OPENING_SECOND_HARVESTER_DEADLINE_MS &&
+      harvesters.length < 2 &&
+      this.hasActiveBuilding('ore_refinery')
 
-    if (harvesters.length < desiredHarvesters) {
+    if (openingNeedsSecondHarvester && !this.openingHarvesterQueued) {
+      this.openingHarvesterQueued = this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState)
+    } else if (harvesters.length < desiredHarvesters) {
       this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState)
     }
 
@@ -421,6 +459,10 @@ export class AI {
         }
       })
     }
+
+    if (harvesters.length >= 2) {
+      this.openingHarvesterQueued = true
+    }
   }
 
   // ── Economy expansion ────────────────────────────────────────
@@ -428,15 +470,37 @@ export class AI {
   private expandEconomy(gameState: GameState): void {
     const credits = this.economy.getCredits(this.playerId)
     const refCount = this.countBuildings('ore_refinery')
-    const threshold = this.difficulty === 'easy' ? 3500 : 2500
-    const baseMaxRef = this.difficulty === 'hard' ? 4 : this.difficulty === 'medium' ? 3 : 2
+    const baseMaxRef = this.difficulty === 'hard' ? 5 : this.difficulty === 'medium' ? 4 : 3
     const maxRef = this.enemyIsTurtling ? baseMaxRef + 1 : baseMaxRef
+    if (refCount >= maxRef || !this.hasActiveBuilding('construction_yard')) return
 
-    if (credits > threshold && refCount < maxRef) {
-      const expanded = this.tryBuildRefineryExpansion(gameState) || this.tryBuildBuilding('ore_refinery', true)
-      if (expanded) {
-        console.log(`[AI] Player ${this.playerId} expanding economy — refinery #${refCount + 1}`)
-      }
+    const armyReady = this.getCombatUnits().length >= (this.difficulty === 'hard' ? 8 : 6)
+    const baseOreDepleted = this.isBaseOreRunningLow()
+    const timedExpansion = this.shouldExpandByTime()
+    const ecoFloating = this.incomePerMinute > this.spendingPerMinute && credits > 2500
+    const ecoStrained = this.incomePerMinute > 0 && this.incomePerMinute < this.spendingPerMinute
+    const needMoreHarvesters = this.shouldPrioritizeHarvesters()
+
+    if (ecoStrained && needMoreHarvesters) {
+      this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState)
+      return
+    }
+
+    const shouldExpand =
+      (baseOreDepleted || timedExpansion || (ecoFloating && credits > 3200) || credits > HIGH_CREDIT_THRESHOLD) &&
+      (armyReady || credits > HIGH_CREDIT_THRESHOLD)
+
+    if (!shouldExpand) return
+
+    const oreTarget = this.findExpansionOreTarget(gameState)
+    if (oreTarget) {
+      this.expansionAnchor = oreTarget
+    }
+
+    const expanded = this.tryBuildRefineryExpansion(gameState) || this.tryBuildBuilding('ore_refinery', true)
+    if (expanded) {
+      console.log(`[AI] Player ${this.playerId} expanding economy — refinery #${refCount + 1}`)
+      this.expansionAnchor = null
     }
   }
 
@@ -477,6 +541,8 @@ export class AI {
   private followTechTree(gameState: GameState): void {
     const powerId = getPowerBuildingDefId(this.side)
     const basicInfantry = getBasicInfantryDefId(this.side)
+    const underEarlyPressure = this.isUnderEarlyPressure(gameState)
+    const hardOpening = this.difficulty === 'hard' && this.matchTimer < 210000
 
     // 1. Power first
     if (!this.hasBuildingPlacedOrConstructing(powerId)) {
@@ -484,41 +550,85 @@ export class AI {
       return
     }
 
-    // 2. Barracks
-    if (!this.hasBuildingPlacedOrConstructing('barracks')) {
-      this.tryBuildBuilding('barracks')
-      return
-    }
-
-    // 3. Ore Refinery
+    // 2. Refinery before production if somehow missing
     if (!this.hasBuildingPlacedOrConstructing('ore_refinery')) {
       this.tryBuildBuilding('ore_refinery')
       return
     }
 
-    // 4. Some infantry before War Factory
-    const infantryCount = this.getCombatInfantryCount()
+    // 3. Barracks
+    if (!this.hasBuildingPlacedOrConstructing('barracks')) {
+      this.tryBuildBuilding('barracks')
+      return
+    }
+
+    // 3b. Rush defense: build a cheap defense if enemy is rushing
     if (this.enemyIsRushing && this.countBuildings(this.side === 'alliance' ? 'pillbox' : 'sentry_gun') < 1) {
       if (this.tryBuildBuilding(this.side === 'alliance' ? 'pillbox' : 'sentry_gun', true)) return
     }
-    if (infantryCount < INFANTRY_BEFORE_WAR_FACTORY[this.difficulty]) {
-      this.queueUnitIfPossible(basicInfantry, gameState)
-      return
-    }
 
-    // 5. War Factory
-    if (!this.hasBuildingPlacedOrConstructing('war_factory')) {
-      this.tryBuildBuilding('war_factory')
-      return
-    }
-
-    // 6. Extra power if needed before mid-tech
+    // 4. Preemptive power reserve (80% usage threshold)
     if (this.needsMorePower()) {
       this.buildExtraPower()
       return
     }
 
-    // 7. Mid-game tech building
+    // 5. Early pressure response: infantry and defense first
+    if (underEarlyPressure) {
+      const rushInfantryTarget = this.difficulty === 'hard' ? 10 : 7
+      if (this.getCombatInfantryCount() < rushInfantryTarget) {
+        this.queueUnitIfPossible(basicInfantry, gameState)
+        return
+      }
+      if (!this.hasBuildingPlacedOrConstructing('war_factory') && this.getCombatInfantryCount() < rushInfantryTarget + 2) {
+        return
+      }
+    }
+
+    // 6. Ensure 2nd harvester in opening (within first two minutes)
+    const harvesters = this.countUnitsByCategory('harvester')
+    if (this.matchTimer <= OPENING_SECOND_HARVESTER_DEADLINE_MS && harvesters < 2) {
+      this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState)
+      return
+    }
+
+    // 7. Some infantry before War Factory
+    const infantryCount = this.getCombatInfantryCount()
+    const infantryBeforeWF = hardOpening
+      ? Math.max(2, INFANTRY_BEFORE_WAR_FACTORY[this.difficulty] - 2)
+      : INFANTRY_BEFORE_WAR_FACTORY[this.difficulty]
+    if (infantryCount < infantryBeforeWF) {
+      this.queueUnitIfPossible(basicInfantry, gameState)
+      return
+    }
+
+    // 8. War Factory
+    if (!this.hasBuildingPlacedOrConstructing('war_factory')) {
+      this.tryBuildBuilding('war_factory')
+      return
+    }
+
+    // 9. Opportunistic second production lines when economy is strong
+    if (this.shouldAddProductionStructures()) {
+      const barracksTarget = this.difficulty === 'hard' ? 2 : 1
+      const warFactoryTarget = this.difficulty === 'hard' ? 2 : 1
+      if (this.countBuildings('barracks') < barracksTarget) {
+        this.tryBuildBuilding('barracks', true)
+        return
+      }
+      if (this.countBuildings('war_factory') < warFactoryTarget) {
+        this.tryBuildBuilding('war_factory', true)
+        return
+      }
+    }
+
+    // 10. Extra power if needed before mid-tech
+    if (this.needsMorePower()) {
+      this.buildExtraPower()
+      return
+    }
+
+    // 11. Mid-game tech building
     const midTechId = this.side === 'alliance' ? 'air_force_command' : 'radar_tower'
     if (!this.hasBuildingPlacedOrConstructing(midTechId)) {
       const tanksNeeded = this.difficulty === 'easy' ? 3 : 1
@@ -528,17 +638,24 @@ export class AI {
       return
     }
 
-    // 8. More power for late-game
+    // 12. More power for late-game
     if (this.needsMorePower()) {
       this.buildExtraPower()
       return
     }
 
-    // 9. Battle Lab
+    // 13. Battle Lab
     if (!this.hasBuildingPlacedOrConstructing('battle_lab')) {
       if (this.difficulty !== 'easy' || this.getCombatUnits().length >= 12) {
         this.tryBuildBuilding('battle_lab')
       }
+      return
+    }
+
+    // 14. Don't float excess cash once core army exists.
+    if (this.economy.getCredits(this.playerId) > HIGH_CREDIT_THRESHOLD && this.getCombatUnits().length >= 12) {
+      if (this.tryBuildBuilding('ore_refinery', true)) return
+      this.tryBuildBuilding(this.side === 'alliance' ? 'air_force_command' : 'radar_tower', true)
     }
 
     // 10. Hard mode: build superweapons aggressively once battle lab is up
@@ -561,12 +678,12 @@ export class AI {
   // ── Power management ─────────────────────────────────────────
 
   private needsMorePower(): boolean {
-    const buildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state === 'active')
-    let totalPower = 0
-    for (const b of buildings) {
-      totalPower += b.def.providespower
-    }
-    return totalPower < 50
+    const powerState = this.economy.getPowerState(this.playerId)
+    const generated = Math.max(0, powerState.generated)
+    const consumed = Math.max(0, powerState.consumed)
+    if (generated <= 0) return true
+    const usage = consumed / Math.max(1, generated)
+    return usage >= 0.8 || powerState.isLow
   }
 
   private buildExtraPower(): boolean {
@@ -648,11 +765,14 @@ export class AI {
 
   private buildArmy(gameState: GameState): void {
     const combatUnits = this.getCombatUnits()
-    if (combatUnits.length >= MAX_ARMY[this.difficulty]) return
+    const emergencySpend = this.shouldEmergencySpendOnArmy(gameState)
+    if (!emergencySpend && combatUnits.length >= MAX_ARMY[this.difficulty]) return
 
     // AI should continuously build and spend credits — queue multiple units per tick
     // Queue units from all available production buildings simultaneously
-    const maxQueuePerTick = this.difficulty === 'hard' ? 5 : this.difficulty === 'medium' ? 3 : 2
+    const maxQueuePerTick = emergencySpend
+      ? (this.difficulty === 'hard' ? 8 : 6)
+      : this.difficulty === 'hard' ? 5 : this.difficulty === 'medium' ? 3 : 2
     let queued = 0
 
     for (let i = 0; i < maxQueuePerTick; i++) {
@@ -666,7 +786,7 @@ export class AI {
       if (this.queueUnitIfPossible(unitToBuild, gameState)) {
         queued++
         // Don't let credits sit idle — keep spending
-        if (combatUnits.length + queued >= MAX_ARMY[this.difficulty]) break
+        if (!emergencySpend && combatUnits.length + queued >= MAX_ARMY[this.difficulty]) break
       } else {
         break
       }
@@ -905,6 +1025,11 @@ export class AI {
   }
 
   private findHarassTarget(gameState: GameState): { x: number; y: number } | null {
+    if (this.difficulty === 'hard') {
+      const hunted = this.findEnemyHarvesterTarget(gameState)
+      if (hunted) return hunted
+    }
+
     for (const p of gameState.players) {
       if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
 
@@ -1551,6 +1676,11 @@ export class AI {
     const def = BUILDING_DEFS[defId]
     if (!def) return null
 
+    if (defId === 'ore_refinery') {
+      const orePlacement = this.findRefineryPlacementNearOre(def)
+      if (orePlacement) return orePlacement
+    }
+
     if (def.category === 'defense') {
       const defensePlacement = this.findDefensePlacement(def)
       if (defensePlacement) return defensePlacement
@@ -1576,6 +1706,52 @@ export class AI {
           if (this.mapHeightTiles > 0 && row + def.footprint.h > this.mapHeightTiles) continue
 
           if (this.isTileFree(col, row, def.footprint.w, def.footprint.h)) {
+            return { col, row }
+          }
+        }
+      }
+    }
+
+    return null
+  }
+
+  private findRefineryPlacementNearOre(def: Building['def']): { col: number; row: number } | null {
+    const anchors: Array<{ x: number; y: number }> = []
+    if (this.expansionAnchor) anchors.push(this.expansionAnchor)
+
+    const ownRefs = this.em.getBuildingsForPlayer(this.playerId).filter(
+      b => b.def.id === 'ore_refinery' && b.state !== 'dying',
+    )
+    for (const ref of ownRefs) {
+      anchors.push({ x: ref.x, y: ref.y })
+    }
+
+    const cy = this.em.getBuildingsForPlayer(this.playerId).find(
+      b => b.def.id === 'construction_yard' && b.state !== 'dying',
+    )
+    if (cy) anchors.push({ x: cy.x, y: cy.y })
+    if (anchors.length === 0) return null
+
+    for (const anchor of anchors) {
+      const ore = this.findNearestOreFrom(anchor.x, anchor.y)
+      if (!ore) continue
+      const oreCol = Math.floor(ore.x / TILE_SIZE)
+      const oreRow = Math.floor(ore.y / TILE_SIZE)
+
+      for (let radius = 1; radius <= 8; radius++) {
+        for (let dr = -radius; dr <= radius; dr++) {
+          for (let dc = -radius; dc <= radius; dc++) {
+            if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
+            const col = oreCol + dc
+            const row = oreRow + dr
+            if (!this.isPlacementWithinMap(col, row, def.footprint.w, def.footprint.h)) continue
+            if (!this.isTileFree(col, row, def.footprint.w, def.footprint.h)) continue
+
+            const placementCenter = {
+              x: (col + def.footprint.w / 2) * TILE_SIZE,
+              y: (row + def.footprint.h / 2) * TILE_SIZE,
+            }
+            if (dist(placementCenter.x, placementCenter.y, ore.x, ore.y) > 7 * TILE_SIZE) continue
             return { col, row }
           }
         }
@@ -1732,6 +1908,205 @@ export class AI {
   }
 
   // ── Helpers ──────────────────────────────────────────────────
+
+  private updateEconomyTelemetry(delta: number): void {
+    const currentCredits = this.economy.getCredits(this.playerId)
+    const diff = currentCredits - this.lastCredits
+    if (diff > 0) this.incomeAccum += diff
+    else if (diff < 0) this.spendingAccum += -diff
+    this.lastCredits = currentCredits
+
+    this.economySampleMs += delta
+    if (this.economySampleMs >= ECONOMY_SAMPLE_WINDOW_MS) {
+      const scale = 60000 / Math.max(1, this.economySampleMs)
+      this.incomePerMinute = Math.round(this.incomeAccum * scale)
+      this.spendingPerMinute = Math.round(this.spendingAccum * scale)
+      this.economySampleMs = 0
+      this.incomeAccum = 0
+      this.spendingAccum = 0
+    }
+  }
+
+  private trackBaseLossState(currentBuildingCount: number): void {
+    if (this.lastBuildingCount > 0 && currentBuildingCount < this.lastBuildingCount) {
+      this.losingBuildingsUntilMs = this.matchTimer + 30000
+    }
+    this.lastBuildingCount = currentBuildingCount
+  }
+
+  private shouldEmergencySpendOnArmy(gameState: GameState): boolean {
+    return this.matchTimer < this.losingBuildingsUntilMs && this.isUnderAttack(gameState)
+  }
+
+  private isUnderAttack(gameState: GameState): boolean {
+    const ownBuildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state !== 'dying')
+    if (ownBuildings.length === 0) return false
+
+    const radiusPx = (BASE_DEFENSE_RADIUS[this.difficulty] + 3) * TILE_SIZE
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      for (const eu of this.em.getUnitsForPlayer(p.id)) {
+        if (eu.state === 'dying' || !eu.def.attack) continue
+        for (const b of ownBuildings) {
+          if (dist(eu.x, eu.y, b.x, b.y) <= radiusPx) return true
+        }
+      }
+    }
+    return false
+  }
+
+  private isUnderEarlyPressure(gameState: GameState): boolean {
+    return this.matchTimer < 240000 && this.isUnderAttack(gameState)
+  }
+
+  private shouldExpandByTime(): boolean {
+    const threshold = this.difficulty === 'hard' ? 180000 : this.difficulty === 'medium' ? 300000 : 420000
+    return this.matchTimer >= threshold
+  }
+
+  private shouldPrioritizeHarvesters(): boolean {
+    const refs = this.em.getBuildingsForPlayer(this.playerId).filter(
+      b => b.def.id === 'ore_refinery' && b.state === 'active',
+    ).length
+    const harvesters = this.countUnitsByCategory('harvester')
+    if (refs <= 0) return false
+    const minDesired = refs * 2
+    return harvesters < minDesired
+  }
+
+  private shouldAddProductionStructures(): boolean {
+    if (this.difficulty !== 'hard') return false
+    if (this.incomePerMinute <= 0) return false
+    return this.economy.getCredits(this.playerId) > 3000 && this.incomePerMinute >= this.spendingPerMinute
+  }
+
+  private isBaseOreRunningLow(): boolean {
+    const cy = this.em.getBuildingsForPlayer(this.playerId).find(
+      b => b.def.id === 'construction_yard' && b.state !== 'dying',
+    )
+    if (!cy) return false
+
+    const nearestOre = this.findNearestOreFrom(cy.x, cy.y)
+    if (!nearestOre) return true
+    return dist(cy.x, cy.y, nearestOre.x, nearestOre.y) > ORE_DEPLETION_DISTANCE_TILES * TILE_SIZE
+  }
+
+  private findExpansionOreTarget(gameState: GameState): { x: number; y: number } | null {
+    const anchors: Array<{ x: number; y: number }> = []
+    const ownBuildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state !== 'dying')
+    const cy = ownBuildings.find(b => b.def.id === 'construction_yard') ?? ownBuildings[0]
+    if (cy) anchors.push({ x: cy.x, y: cy.y })
+    const ownRefs = ownBuildings.filter(b => b.def.id === 'ore_refinery')
+    for (const ref of ownRefs) {
+      anchors.push({ x: ref.x, y: ref.y })
+    }
+
+    const mapW = gameState.map.width * TILE_SIZE
+    const mapH = gameState.map.height * TILE_SIZE
+    anchors.push(
+      { x: TILE_SIZE * 2, y: TILE_SIZE * 2 },
+      { x: mapW - TILE_SIZE * 2, y: TILE_SIZE * 2 },
+      { x: TILE_SIZE * 2, y: mapH - TILE_SIZE * 2 },
+      { x: mapW - TILE_SIZE * 2, y: mapH - TILE_SIZE * 2 },
+      { x: mapW * 0.5, y: mapH * 0.5 },
+    )
+
+    let best: { x: number; y: number; score: number } | null = null
+    const home = cy ? { x: cy.x, y: cy.y } : anchors[0]
+
+    for (const anchor of anchors) {
+      const ore = this.findNearestOreFrom(anchor.x, anchor.y)
+      if (!ore) continue
+
+      const distFromHome = dist(home.x, home.y, ore.x, ore.y)
+      if (distFromHome < EXPANSION_MIN_DISTANCE_TILES * TILE_SIZE) continue
+
+      let nearExisting = false
+      for (const ref of ownRefs) {
+        if (dist(ref.x, ref.y, ore.x, ore.y) < ORE_NEAR_BASE_RADIUS_TILES * TILE_SIZE) {
+          nearExisting = true
+          break
+        }
+      }
+      if (nearExisting) continue
+
+      const score = distFromHome
+      if (!best || score > best.score) {
+        best = { x: ore.x, y: ore.y, score }
+      }
+    }
+
+    return best ? { x: best.x, y: best.y } : null
+  }
+
+  private findNearestOreFrom(x: number, y: number): { x: number; y: number } | null {
+    let orePos: { x: number; y: number } | null = null
+    this.em.emit('find_ore_field', x, y, (pos: { x: number; y: number } | null) => {
+      orePos = pos
+    })
+    return orePos
+  }
+
+  private findEnemyHarvesterTarget(gameState: GameState): { x: number; y: number } | null {
+    let best: Unit | null = null
+    let bestDist = Number.POSITIVE_INFINITY
+    const ownAnchor = this.getFallbackPosition()
+
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      const enemyHarvesters = this.em.getUnitsForPlayer(p.id).filter(
+        u => u.def.category === 'harvester' && u.state !== 'dying',
+      )
+      for (const h of enemyHarvesters) {
+        const d = ownAnchor ? dist(ownAnchor.x, ownAnchor.y, h.x, h.y) : 0
+        if (d < bestDist) {
+          bestDist = d
+          best = h
+        }
+      }
+    }
+
+    return best ? { x: best.x, y: best.y } : null
+  }
+
+  private protectHarvesters(gameState: GameState): void {
+    const harvesters = this.em.getUnitsForPlayer(this.playerId).filter(
+      u => u.def.category === 'harvester' && u.state !== 'dying',
+    )
+    const defenders = this.getCombatUnits().filter(u => u.state === 'idle')
+    if (harvesters.length === 0 || defenders.length === 0) return
+
+    const responseRadius = DEFENDER_RESPONSE_RADIUS[this.difficulty] * TILE_SIZE
+
+    for (const h of harvesters) {
+      const prevHp = this.harvesterHpSnapshot.get(h.id) ?? h.hp
+      this.harvesterHpSnapshot.set(h.id, h.hp)
+      if (h.hp >= prevHp) continue
+
+      let dangerPos: { x: number; y: number } | null = null
+      let nearest = Number.POSITIVE_INFINITY
+      for (const p of gameState.players) {
+        if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+        for (const enemy of this.em.getUnitsForPlayer(p.id)) {
+          if (enemy.state === 'dying' || !enemy.def.attack) continue
+          const d = dist(enemy.x, enemy.y, h.x, h.y)
+          if (d < nearest && d <= 8 * TILE_SIZE) {
+            nearest = d
+            dangerPos = { x: enemy.x, y: enemy.y }
+          }
+        }
+      }
+      if (!dangerPos) {
+        dangerPos = { x: h.x, y: h.y }
+      }
+
+      for (const defender of defenders) {
+        if (dist(defender.x, defender.y, h.x, h.y) <= responseRadius) {
+          defender.giveOrder({ type: 'attackMove', target: dangerPos })
+        }
+      }
+    }
+  }
 
   private nextAttackWindow(): number {
     const w = ATTACK_INTERVAL_MS[this.difficulty]
