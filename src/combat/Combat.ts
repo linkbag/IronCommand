@@ -222,6 +222,37 @@ export class Combat extends Phaser.Events.EventEmitter {
         }
         return
       }
+
+      // Yuri: mind control — permanently seize one enemy unit
+      if (attacker.def.id === 'yuri' && target instanceof Unit && target.playerId !== attacker.playerId) {
+        // Release previous controlled unit if any
+        this.em.emit('yuri_mind_control', {
+          yuriId: attacker.id,
+          yuriPlayerId: attacker.playerId,
+          targetId: target.id,
+        })
+        console.log('[Yuri] Mind control', { yuriId: attacker.id, targetId: target.id })
+        return
+      }
+
+      // Tanya: instant-kill infantry with dual pistols
+      if (attacker.def.id === 'tanya' && target instanceof Unit && target.def.category === 'infantry') {
+        target.takeDamage(target.hp + 100, attacker.playerId)
+        attacker.recordKill()
+        console.log('[Tanya] Infantry kill', { attackerId: attacker.id, targetId: target.id })
+        return
+      }
+
+      // Sniper: one-shot kills infantry, cannot attack vehicles
+      if (attacker.def.id === 'sniper') {
+        if (target instanceof Unit && target.def.category === 'infantry') {
+          target.takeDamage(target.hp + 100, attacker.playerId)
+          attacker.recordKill()
+          console.log('[Sniper] Infantry kill', { attackerId: attacker.id, targetId: target.id })
+          return
+        }
+        return // snipers can't effectively damage vehicles/buildings
+      }
     }
 
     // RA2 Veterancy: damage multiplier for units

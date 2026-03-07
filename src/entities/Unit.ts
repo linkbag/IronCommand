@@ -65,6 +65,13 @@ export class Unit extends Phaser.GameObjects.Container {
   veterancy = 0
   private guardPosition: Position | null = null
 
+  // RA2 Special mechanics
+  invulnerable = false                      // Iron Curtain effect
+  private invulnerableTimer = 0             // ms remaining
+  mindControlledBy: string | null = null    // Yuri unit ID controlling this unit
+  originalPlayerId: number = -1             // original owner before mind control
+  stealthed = false                         // Mirage Tank stealth (stationary)
+
   // Harvest state
   private harvestTimer: number
   private cargoAmount: number
@@ -168,6 +175,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
   takeDamage(amount: number, _sourcePlayerId: number): void {
     if (this.state === 'dying') return
+    if (this.invulnerable) return  // Iron Curtain — skip all damage
     this.hp = Math.max(0, this.hp - amount)
     this.drawHealthBar()
     if (this.hp <= 0) {
@@ -209,6 +217,34 @@ export class Unit extends Phaser.GameObjects.Container {
     return this.veterancy >= 2 ? 1.2 : this.veterancy >= 1 ? 1.1 : 1.0
   }
 
+  /** Iron Curtain: make unit invulnerable for durationMs */
+  setInvulnerable(durationMs: number): void {
+    this.invulnerable = true
+    this.invulnerableTimer = durationMs
+  }
+
+  /** Yuri mind control: switch unit to new owner, track original */
+  setMindControlled(yuriId: string, newPlayerId: number): void {
+    if (this.mindControlledBy) return  // already controlled
+    this.mindControlledBy = yuriId
+    this.originalPlayerId = this.playerId
+    ;(this as { playerId: number }).playerId = newPlayerId
+    this.orders = []
+    this.target = null
+    this.state = 'idle'
+  }
+
+  /** Release mind control — return to original owner */
+  releaseMindControl(): void {
+    if (!this.mindControlledBy) return
+    ;(this as { playerId: number }).playerId = this.originalPlayerId
+    this.mindControlledBy = null
+    this.originalPlayerId = -1
+    this.orders = []
+    this.target = null
+    this.state = 'idle'
+  }
+
   get isAlive(): boolean {
     return this.state !== 'dying' && this.hp > 0
   }
@@ -219,6 +255,26 @@ export class Unit extends Phaser.GameObjects.Container {
     if (this.state === 'dying') return
 
     this.attackCooldown = Math.max(0, this.attackCooldown - delta / 1000)
+
+    // Iron Curtain invulnerability timer
+    if (this.invulnerable && this.invulnerableTimer > 0) {
+      this.invulnerableTimer -= delta
+      if (this.invulnerableTimer <= 0) {
+        this.invulnerable = false
+        this.invulnerableTimer = 0
+        this.setAlpha(1)
+      }
+    }
+
+    // Mirage Tank stealth: become invisible when stationary
+    if (this.def.id === 'mirage_tank') {
+      const wasStealthed = this.stealthed
+      this.stealthed = this.state === 'idle' && this.orders.length === 0
+      if (this.stealthed !== wasStealthed) {
+        // Visibility will be handled by GameScene.updateEntityVisibility
+        this.emit('stealth_changed', this, this.stealthed)
+      }
+    }
 
     switch (this.state) {
       case 'idle':
@@ -246,6 +302,9 @@ export class Unit extends Phaser.GameObjects.Container {
     if (this.state === 'dying') return
     this.state = 'dying'
     this.target = null
+
+    // If this unit was mind-controlling another, release it
+    this.emit('yuri_died', this)
 
     // Emit event for EntityManager / combat system
     this.emit('unit_died', this)

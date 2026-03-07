@@ -182,6 +182,7 @@ export class HUDScene extends Phaser.Scene {
   private superweaponReady: Set<string> = new Set()
   private superweaponTargetMode = false
   private superweaponActiveId: string | null = null
+  private swCountdownTexts: Map<string, Phaser.GameObjects.Text> = new Map()
 
   // ── Selection groups ──────────────────────────────────────────────
   private selGroups: Map<number, string[]> = new Map()
@@ -1711,6 +1712,49 @@ export class HUDScene extends Phaser.Scene {
         btn.setAlpha(pulse)
       }
     }
+
+    // ── Superweapon countdown overlay (top-left of screen) ──
+    const SW_LABELS: Record<string, string> = {
+      nuclear_silo: 'NUKE', weather_device: 'WEATHER',
+      iron_curtain: 'CURTAIN', chronosphere: 'CHRONO',
+    }
+    // Collect active superweapons (charging + ready)
+    const activeIds = [...this.superweaponTimers.keys(), ...this.superweaponReady]
+    let idx = 0
+    for (const defId of SUPERWEAPON_IDS) {
+      const remaining = this.superweaponTimers.get(defId)
+      const ready = this.superweaponReady.has(defId)
+      if (remaining === undefined && !ready) {
+        // Hide if no longer active
+        const txt = this.swCountdownTexts.get(defId)
+        if (txt) txt.setVisible(false)
+        continue
+      }
+      let txt = this.swCountdownTexts.get(defId)
+      if (!txt) {
+        txt = this.add.text(6, 6, '', {
+          fontFamily: 'monospace', fontSize: '11px',
+          color: '#ffffff', stroke: '#000000', strokeThickness: 3,
+        }).setDepth(100)
+        this.swCountdownTexts.set(defId, txt)
+      }
+      txt.setVisible(true)
+      txt.setY(6 + idx * 18)
+      const label = SW_LABELS[defId] ?? defId.toUpperCase()
+      if (ready) {
+        const pulse = Math.sin(Date.now() / 200) > 0
+        txt.setText(`${label}: READY!`)
+        txt.setColor(pulse ? '#4ade80' : '#ffffff')
+      } else if (remaining !== undefined) {
+        const secs = Math.ceil(remaining / 1000)
+        const min = Math.floor(secs / 60)
+        const sec = secs % 60
+        txt.setText(`${label}: ${min}:${sec.toString().padStart(2, '0')}`)
+        txt.setColor('#ffdd44')
+      }
+      idx++
+    }
+    void activeIds // suppress unused
   }
 
   private tickSelectedInfo() {

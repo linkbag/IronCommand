@@ -1086,9 +1086,11 @@ export class AI {
 
   private findSuperweaponTarget(gameState: GameState, swId: string): { x: number; y: number } | null {
     if (swId === 'iron_curtain') {
-      // Target own army concentration
-      const units = this.getCombatUnits()
-      if (units.length >= 5) {
+      // Target own army concentration — use on attack wave units if pending
+      const units = this.pendingWave
+        ? this.pendingWave.unitIds.map(id => this.em.getUnit(id)).filter((u): u is Unit => !!u && u.state !== 'dying')
+        : this.getCombatUnits()
+      if (units.length >= 3) {
         const cx = units.reduce((s, u) => s + u.x, 0) / units.length
         const cy = units.reduce((s, u) => s + u.y, 0) / units.length
         return { x: cx, y: cy }
@@ -1096,18 +1098,57 @@ export class AI {
       return null
     }
 
-    // For offensive weapons: target enemy base/army concentration
+    if (swId === 'chronosphere') {
+      // Teleport tanks directly into enemy base
+      const tanks = this.getCombatUnits().filter(u =>
+        u.def.category === 'vehicle' && u.state !== 'dying'
+      ).slice(0, 5)
+      if (tanks.length < 2) return null
+
+      // Find enemy CY to teleport near
+      for (const p of gameState.players) {
+        if (p.id === this.playerId || p.isDefeated) continue
+        const enemyBuildings = this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying')
+        const cy = enemyBuildings.find(b => b.def.id === 'construction_yard')
+        if (cy) return { x: cy.x, y: cy.y }
+        if (enemyBuildings.length > 0) return { x: enemyBuildings[0].x, y: enemyBuildings[0].y }
+      }
+      return null
+    }
+
+    // Nuclear/Weather: target area with highest concentration of enemy entities
     for (const p of gameState.players) {
       if (p.id === this.playerId || p.isDefeated) continue
       const enemyBuildings = this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying')
-      if (enemyBuildings.length === 0) continue
+      const enemyUnits = this.em.getUnitsForPlayer(p.id).filter(u => u.state !== 'dying')
+      if (enemyBuildings.length === 0 && enemyUnits.length === 0) continue
 
-      // Prefer CY or power buildings for nukes
-      const cy = enemyBuildings.find(b => b.def.id === 'construction_yard')
-      if (cy) return { x: cy.x, y: cy.y }
+      // Score each enemy building location by nearby entity density
+      let bestScore = 0
+      let bestTarget: { x: number; y: number } | null = null
+      const radiusPx = 6 * TILE_SIZE
 
-      // Fallback: densest building cluster
-      return { x: enemyBuildings[0].x, y: enemyBuildings[0].y }
+      for (const b of enemyBuildings) {
+        let score = 0
+        for (const ob of enemyBuildings) {
+          if (dist(b.x, b.y, ob.x, ob.y) <= radiusPx) score += 2
+        }
+        for (const u of enemyUnits) {
+          if (dist(b.x, b.y, u.x, u.y) <= radiusPx) score += 1
+        }
+        // Bonus for high-value targets
+        if (b.def.id === 'construction_yard') score += 5
+        if (b.def.category === 'production') score += 3
+        if (b.def.category === 'power') score += 2
+
+        if (score > bestScore) {
+          bestScore = score
+          bestTarget = { x: b.x, y: b.y }
+        }
+      }
+
+      if (bestTarget) return bestTarget
+      if (enemyBuildings.length > 0) return { x: enemyBuildings[0].x, y: enemyBuildings[0].y }
     }
     return null
   }

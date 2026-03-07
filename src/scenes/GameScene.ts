@@ -213,6 +213,61 @@ export class GameScene extends Phaser.Scene {
       console.log(`[Engineer] Building ${data.buildingId} captured by player ${data.newPlayerId}`)
     })
 
+    // Yuri mind control
+    this.entityMgr.on('yuri_mind_control', (data: { yuriId: string; yuriPlayerId: number; targetId: string }) => {
+      const yuri = this.entityMgr.getUnit(data.yuriId)
+      const target = this.entityMgr.getUnit(data.targetId)
+      if (!yuri || !target || target.state === 'dying') return
+
+      // Release any previously controlled unit by this Yuri
+      for (const u of this.entityMgr.getAllUnits()) {
+        if (u.mindControlledBy === data.yuriId) {
+          u.releaseMindControl()
+          console.log(`[Yuri] Released previous target ${u.id}`)
+        }
+      }
+
+      // Mind control the target
+      target.setMindControlled(data.yuriId, data.yuriPlayerId)
+
+      // Visual: purple glow overlay on controlled unit
+      const mcGlow = this.add.graphics()
+      mcGlow.fillStyle(0xcc44ff, 0.35)
+      mcGlow.fillCircle(0, 0, 14)
+      mcGlow.setDepth(target.depth + 1)
+      target.add(mcGlow)
+      ;(target as any)._mcGlow = mcGlow
+
+      // When Yuri dies, release controlled unit
+      const onYuriDied = () => {
+        if (target.mindControlledBy === data.yuriId) {
+          target.releaseMindControl()
+          const glow = (target as any)._mcGlow as Phaser.GameObjects.Graphics | undefined
+          if (glow) { glow.destroy(); (target as any)._mcGlow = null }
+          console.log(`[Yuri] Died — released ${target.id}`)
+        }
+      }
+      yuri.once('yuri_died', onYuriDied)
+
+      const hud = this.scene.get('HUDScene')
+      if (data.yuriPlayerId === 0) {
+        if (hud) hud.events.emit('evaAlert', { message: 'Unit mind-controlled!', type: 'success' })
+      } else {
+        if (hud) hud.events.emit('evaAlert', { message: 'Unit mind-controlled by enemy!', type: 'danger' })
+      }
+      console.log(`[Yuri] Mind control: ${data.targetId} now belongs to player ${data.yuriPlayerId}`)
+    })
+
+    // Kirov EVA announcement when built
+    this.entityMgr.on('unit_created', (data: { entityId: string; playerId: number }) => {
+      const unit = this.entityMgr.getUnit(data.entityId)
+      if (unit && unit.def.id === 'kirov') {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'Kirov reporting!', type: 'danger' })
+        console.log('[EVA] Kirov reporting!')
+      }
+    })
+
     // Spy infiltration — reveal enemy base for 30 seconds
     this.entityMgr.on('spy_infiltrate', (spy: import('../entities/Unit').Unit, target: import('../entities/Unit').Unit | import('../entities/Building').Building) => {
       if (target.playerId === spy.playerId) return // can't spy on own buildings
@@ -885,6 +940,7 @@ export class GameScene extends Phaser.Scene {
 
   private executeSuperweapon(defId: string, targetX: number, targetY: number, playerId: number): void {
     const radiusPx = 6 * TILE_SIZE  // 6-tile blast radius
+    const hud = this.scene.get('HUDScene')
 
     if (defId === 'nuclear_silo' || defId === 'weather_device') {
       // Massive area damage
@@ -894,70 +950,103 @@ export class GameScene extends Phaser.Scene {
         defId === 'nuclear_silo' ? DamageType.EXPLOSIVE : DamageType.ELECTRIC,
         playerId,
       )
-      // Big explosion visual
+      // Big explosion visual — central + ring of 12 staggered blasts
       this.combat.createExplosion(targetX, targetY, 'large')
-      // Extra visual: multiple smaller explosions around the area
-      for (let i = 0; i < 8; i++) {
-        const angle = (Math.PI * 2 * i) / 8
-        const dist = radiusPx * 0.5
-        this.time.delayedCall(i * 100, () => {
+      for (let i = 0; i < 12; i++) {
+        const angle = (Math.PI * 2 * i) / 12
+        const d = radiusPx * (0.3 + Math.random() * 0.4)
+        this.time.delayedCall(i * 80, () => {
           this.combat.createExplosion(
-            targetX + Math.cos(angle) * dist,
-            targetY + Math.sin(angle) * dist,
-            'medium',
+            targetX + Math.cos(angle) * d,
+            targetY + Math.sin(angle) * d,
+            i % 3 === 0 ? 'large' : 'medium',
           )
         })
       }
+      // Scorched area visual (lingering)
+      const scorch = this.add.graphics()
+      scorch.fillStyle(defId === 'nuclear_silo' ? 0x331100 : 0x112244, 0.3)
+      scorch.fillCircle(targetX, targetY, radiusPx * 0.7)
+      scorch.setDepth(2)
+      this.tweens.add({ targets: scorch, alpha: 0, duration: 15000, onComplete: () => scorch.destroy() })
+
+      // EVA alert to ALL players
+      const weaponName = defId === 'nuclear_silo' ? 'Nuclear missile launched!' : 'Lightning storm created!'
+      if (hud) hud.events.emit('evaAlert', { message: weaponName, type: 'danger' })
       console.log(`[Superweapon] ${defId} fired at (${Math.round(targetX)}, ${Math.round(targetY)}) by player ${playerId}`)
+
     } else if (defId === 'iron_curtain') {
-      // Make friendly units near target invulnerable for 15 seconds
+      // Make friendly units near target invulnerable for 20 seconds
       const units = this.entityMgr.getUnitsInRange(targetX, targetY, 3 * TILE_SIZE)
         .filter(u => u.playerId === playerId && u.state !== 'dying')
       for (const u of units) {
-        const origTakeDamage = u.takeDamage.bind(u)
-        u.takeDamage = () => {} // invulnerable
-        u.setAlpha(0.8) // visual indicator
-        this.time.delayedCall(15000, () => {
-          u.takeDamage = origTakeDamage
+        u.setInvulnerable(20000)
+        // Red glow overlay + pulsing alpha while invulnerable
+        const icGlow = this.add.graphics()
+        icGlow.fillStyle(0xff2222, 0.4)
+        icGlow.fillCircle(0, 0, 16)
+        icGlow.setDepth(u.depth + 1)
+        u.add(icGlow)
+        const pulse = this.tweens.add({
+          targets: u,
+          alpha: { from: 1, to: 0.6 },
+          duration: 400,
+          yoyo: true,
+          repeat: -1,
+        })
+        this.time.delayedCall(20000, () => {
+          pulse.stop()
           u.setAlpha(1)
+          icGlow.destroy()
         })
       }
-      // Visual effect
+      // Visual effect — red flash
       const flash = this.add.graphics()
-      flash.fillStyle(0xff4444, 0.4)
+      flash.fillStyle(0xff4444, 0.5)
       flash.fillCircle(targetX, targetY, 3 * TILE_SIZE)
       flash.setDepth(45)
       this.tweens.add({ targets: flash, alpha: 0, duration: 2000, onComplete: () => flash.destroy() })
-      console.log(`[Superweapon] Iron Curtain: ${units.length} units made invulnerable`)
+      if (hud) hud.events.emit('evaAlert', { message: 'Iron Curtain activated!', type: playerId === 0 ? 'success' : 'danger' })
+      console.log(`[Superweapon] Iron Curtain: ${units.length} units made invulnerable for 20s`)
+
     } else if (defId === 'chronosphere') {
       // Teleport friendly units from selected to target
       const selectedArr = Array.from(this.selectedIds)
-      const units = selectedArr
+      let units = selectedArr
         .map(id => this.entityMgr.getUnit(id))
         .filter((u): u is import('../entities/Unit').Unit =>
           u !== undefined && u.playerId === playerId && u.state !== 'dying')
       if (units.length === 0) {
-        // Fallback: teleport units near the player's base
-        const nearBase = this.entityMgr.getUnitsForPlayer(playerId)
+        // Fallback: teleport units within 4-tile radius of player's base
+        units = this.entityMgr.getUnitsForPlayer(playerId)
           .filter(u => u.state !== 'dying' && u.def.category !== 'harvester')
           .slice(0, 5)
-        for (const u of nearBase) {
-          u.setPosition(targetX + (Math.random() - 0.5) * 64, targetY + (Math.random() - 0.5) * 64)
-          u.giveOrder({ type: 'stop' })
-        }
-      } else {
-        for (const u of units) {
-          u.setPosition(targetX + (Math.random() - 0.5) * 64, targetY + (Math.random() - 0.5) * 64)
-          u.giveOrder({ type: 'stop' })
-        }
       }
-      // Visual flash at destination
+
+      // Blue flash at source locations
+      const sourcePositions = units.map(u => ({ x: u.x, y: u.y }))
+      for (const pos of sourcePositions) {
+        const srcFlash = this.add.graphics()
+        srcFlash.fillStyle(0x44ddff, 0.6)
+        srcFlash.fillCircle(pos.x, pos.y, TILE_SIZE)
+        srcFlash.setDepth(45)
+        this.tweens.add({ targets: srcFlash, alpha: 0, scaleX: 2, scaleY: 2, duration: 800, onComplete: () => srcFlash.destroy() })
+      }
+
+      // Teleport
+      for (const u of units) {
+        u.setPosition(targetX + (Math.random() - 0.5) * 64, targetY + (Math.random() - 0.5) * 64)
+        u.giveOrder({ type: 'stop' })
+      }
+
+      // Blue flash at destination
       const flash = this.add.graphics()
-      flash.fillStyle(0x44ddff, 0.5)
+      flash.fillStyle(0x44ddff, 0.6)
       flash.fillCircle(targetX, targetY, 3 * TILE_SIZE)
       flash.setDepth(45)
       this.tweens.add({ targets: flash, alpha: 0, duration: 1500, onComplete: () => flash.destroy() })
-      console.log(`[Superweapon] Chronosphere teleported units to (${Math.round(targetX)}, ${Math.round(targetY)})`)
+      if (hud) hud.events.emit('evaAlert', { message: 'Chronosphere activated!', type: playerId === 0 ? 'info' : 'danger' })
+      console.log(`[Superweapon] Chronosphere teleported ${units.length} units to (${Math.round(targetX)}, ${Math.round(targetY)})`)
     }
   }
 
@@ -969,13 +1058,26 @@ export class GameScene extends Phaser.Scene {
 
     // Units
     for (const u of this.entityMgr.getAllUnits()) {
-      if (u.playerId === localId) { u.setVisible(true); u.setAlpha(1); continue }
+      if (u.playerId === localId) {
+        u.setVisible(true)
+        // Don't reset alpha if invulnerable (pulsing) or mind-controlled
+        if (!u.invulnerable && !u.mindControlledBy) u.setAlpha(1)
+        continue
+      }
       const tc = Math.floor(u.x / TILE_SIZE)
       const tr = Math.floor(u.y / TILE_SIZE)
       if (tc < 0 || tc >= width || tr < 0 || tr >= height) { u.setVisible(false); continue }
       const fog = tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
-      if (fog === FogState.VISIBLE) { u.setVisible(true); u.setAlpha(1) }
-      else { u.setVisible(false) }
+      if (fog === FogState.VISIBLE) {
+        // Mirage Tank stealth: nearly invisible when stationary (enemy perspective)
+        if (u.stealthed && u.def.id === 'mirage_tank') {
+          u.setVisible(true)
+          u.setAlpha(0.15) // barely visible shimmer
+        } else {
+          u.setVisible(true)
+          if (!u.invulnerable) u.setAlpha(1)
+        }
+      } else { u.setVisible(false) }
     }
 
     // Buildings
