@@ -549,27 +549,10 @@ function generateMapData(
     }
   }
 
-  // Height field for visual cliffs/plateaus (visual only).
+  // Flat terrain — all tiles at uniform height.
   for (let row = 0; row < height; row++) {
     for (let col = 0; col < width; col++) {
-      const tile = tiles[row][col]
-      if (tile.terrain === TerrainType.WATER) {
-        tile.height = 0
-        continue
-      }
-      if (tile.terrain === TerrainType.ROCK) {
-        tile.height = 2
-        continue
-      }
-      if (tile.terrain === TerrainType.BRIDGE || tile.terrain === TerrainType.ROAD) {
-        tile.height = 1
-        continue
-      }
-      const hNoise = noise.fractal(col * cfg.scale * 0.75 + 70, row * cfg.scale * 0.75 + 120, 3)
-      if (hNoise > 0.74) tile.height = 2
-      else if (hNoise < 0.24 || countNeighbors(col, row, t => t.terrain === TerrainType.WATER, false) > 0) tile.height = 0
-      else tile.height = 1
-      if (resolved === 'urban' && (tile.terrain as number) !== (TerrainType.ROCK as number)) tile.height = 1
+      tiles[row][col].height = 1
     }
   }
 
@@ -1195,10 +1178,6 @@ export class GameMap {
       }
     }
 
-    // Visual lighting by height only (pathfinding remains unchanged).
-    const heightLight = 1 + (tile.height - 1) * 0.08
-    base = scaleColor(base, heightLight)
-
     // Sun from top-left: subtly brighten NW tiles, darken SE tiles.
     const sun = Phaser.Math.Clamp(((col - row) * -0.02), -0.12, 0.12)
     base = scaleColor(base, 1 + sun)
@@ -1812,7 +1791,6 @@ export class GameMap {
 
         this.drawTerrainDiamond(g, px, py, this.tileColor(tile, col, row))
         this.drawTerrainTransition(g, px, py, col, row, tile)
-        this.drawCliffEdges(g, px, py, col, row, tile)
 
         switch (tile.terrain) {
           case TerrainType.GRASS:
