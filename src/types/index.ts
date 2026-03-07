@@ -52,6 +52,7 @@ export enum TerrainType {
 
 export interface TileData {
   terrain: TerrainType
+  height: 0 | 1 | 2      // visual elevation only (0=low, 1=normal, 2=high)
   passable: boolean
   buildable: boolean
   oreAmount: number       // 0-2000 total ore value (0 = depleted)
