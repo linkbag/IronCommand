@@ -93,10 +93,13 @@ export class GameScene extends Phaser.Scene {
     this.skirmishCfg = data?.config ?? {
       playerFaction: 'usa',
       mapSize: 'small',
+      mapTemplate: 'continental',
+      mapSeed: Math.floor(Math.random() * 99999) + 1,
+      playerSpawn: -1,
       aiCount: 1,
       aiDifficulty: 'medium',
       startingCredits: STARTING_CREDITS,
-      gameMode: 'ffa',
+      allyPlayerIds: [],
     }
     // Reset per-session state
     this.aiCommanders = []
@@ -192,11 +195,21 @@ export class GameScene extends Phaser.Scene {
     }
     allPlayers = [humanPlayer, ...aiPlayers]
 
-    // ── 5b. Alliance mode ─────────────────────────────────────
-    this.entityMgr.setAllianceMode(
-      cfg.gameMode === 'alliance',
-      allPlayers.map(p => ({ id: p.id, faction: p.faction }))
-    )
+    // ── 5b. Explicit alliances ────────────────────────────────
+    const validAiIds = new Set(aiPlayers.map(p => p.id))
+    const maxAllies = Math.max(0, aiPlayers.length - 1)
+    const allyAiIds = [...new Set(cfg.allyPlayerIds ?? [])]
+      .filter(id => validAiIds.has(id))
+      .sort((a, b) => a - b)
+      .slice(0, maxAllies)
+    const alliedPairs: Array<[number, number]> = []
+    for (const allyId of allyAiIds) alliedPairs.push([0, allyId])
+    for (let i = 0; i < allyAiIds.length; i++) {
+      for (let j = i + 1; j < allyAiIds.length; j++) {
+        alliedPairs.push([allyAiIds[i], allyAiIds[j]])
+      }
+    }
+    this.entityMgr.setAllianceMode(alliedPairs)
     } catch (e) { console.error('[IC] CRASH in section 5 (players):', e); throw e }
 
     // ── 6. Economy ────────────────────────────────────────────
@@ -340,7 +353,7 @@ export class GameScene extends Phaser.Scene {
 
     // Spy infiltration — reveal enemy base for 30 seconds
     this.entityMgr.on('spy_infiltrate', (spy: import('../entities/Unit').Unit, target: import('../entities/Unit').Unit | import('../entities/Building').Building) => {
-      if (target.playerId === spy.playerId) return // can't spy on own buildings
+      if (!this.entityMgr.isEnemy(spy.playerId, target.playerId)) return
       // Add temporary sight source at the enemy building
       const pos = this.gameMap.worldToTile(target.x, target.y)
       const sightSource = { pos, range: 12 }
@@ -1939,7 +1952,7 @@ export class GameScene extends Phaser.Scene {
       return
     }
 
-    // In alliance mode, only enemy-side players need to be defeated
+    // Player coalition (player + chosen allies) wins when all enemies are defeated.
     const opponents = players.filter(p => this.entityMgr.isEnemy(localId, p.id))
     if (opponents.length > 0 && opponents.every(p => p.isDefeated)) {
       this.triggerVictory()
@@ -2142,7 +2155,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private spawnParatrooperDrop(playerId: number): void {
-    const enemyTargets = this.entityMgr.getAllBuildings().filter(b => b.playerId !== playerId && b.state !== 'dying')
+    const enemyTargets = this.entityMgr.getAllBuildings()
+      .filter(b => this.entityMgr.isEnemy(playerId, b.playerId) && b.state !== 'dying')
     let cx: number
     let cy: number
     if (enemyTargets.length > 0) {

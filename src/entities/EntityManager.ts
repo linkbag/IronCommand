@@ -9,10 +9,9 @@ import { Unit } from './Unit'
 import { Building } from './Building'
 import { UNIT_DEFS } from './UnitDefs'
 import { BUILDING_DEFS } from './BuildingDefs'
-import type { UnitDef, BuildingDef, Position } from '../types'
+import type { UnitDef, BuildingDef, Position, FactionId } from '../types'
 import { TILE_SIZE } from '../types'
 import { FACTIONS } from '../data/factions'
-import type { FactionId } from '../types'
 
 const PLAYER_TINT = 0x4488ff
 const ENEMY_TINT = 0xff4444
@@ -221,30 +220,35 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     )
   }
 
-  // Alliance mode: players on the same side (alliance/collective) are allies
-  private allianceMode = false
-  private playerFactions: Map<number, FactionId> = new Map()
+  private alliedPairs: Set<string> = new Set()
 
-  setAllianceMode(enabled: boolean, players: Array<{ id: number; faction: string }>): void {
-    this.allianceMode = enabled
-    this.playerFactions.clear()
-    for (const p of players) {
-      this.playerFactions.set(p.id, p.faction as FactionId)
-    }
-    console.log(`[EntityManager] Alliance mode: ${enabled}`, Object.fromEntries(this.playerFactions))
+  private makeAllyKey(playerA: number, playerB: number): string {
+    const a = Math.min(playerA, playerB)
+    const b = Math.max(playerA, playerB)
+    return `${a}|${b}`
   }
 
-  /** Check if two players are enemies (accounts for alliance mode) */
+  setAllianceMode(alliedPairs: Array<[number, number]>): void {
+    this.alliedPairs.clear()
+    for (const [a, b] of alliedPairs) {
+      if (a === b) continue
+      this.alliedPairs.add(this.makeAllyKey(a, b))
+    }
+    console.log('[EntityManager] Explicit alliances set', alliedPairs)
+  }
+
+  isAlly(playerA: number, playerB: number): boolean {
+    if (playerA === playerB) return true
+    if (playerA < 0 || playerB < 0) return false
+    return this.alliedPairs.has(this.makeAllyKey(playerA, playerB))
+  }
+
+  /** Check if two players are enemies (accounts for explicit alliances) */
   isEnemy(playerA: number, playerB: number): boolean {
     if (playerA === playerB) return false
     if (playerB < 0) return true // neutral buildings
-    if (!this.allianceMode) return true // FFA: everyone is enemy
-    const facA = this.playerFactions.get(playerA)
-    const facB = this.playerFactions.get(playerB)
-    if (!facA || !facB) return true
-    const sideA = FACTIONS[facA]?.side
-    const sideB = FACTIONS[facB]?.side
-    return sideA !== sideB // same side = allies, different side = enemies
+    if (playerA < 0) return true
+    return !this.isAlly(playerA, playerB)
   }
 
   /** Returns closest enemy unit from (x,y) within range, as seen by playerId */

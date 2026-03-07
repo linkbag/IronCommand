@@ -274,7 +274,7 @@ export class AI {
   private assessEnemyComposition(gameState: GameState): void {
     let infantry = 0, vehicles = 0, aircraft = 0, defenses = 0
     for (const p of gameState.players) {
-      if (p.id === this.playerId || p.isDefeated) continue
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
       for (const u of this.em.getUnitsForPlayer(p.id)) {
         if (u.state === 'dying') continue
         if (u.def.category === 'infantry') infantry++
@@ -469,7 +469,7 @@ export class AI {
 
     outer:
     for (const p of gameState.players) {
-      if (p.id === this.playerId || p.isDefeated) continue
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
       for (const eu of this.em.getUnitsForPlayer(p.id)) {
         if (eu.state === 'dying' || !eu.def.attack) continue
         for (const b of buildings) {
@@ -710,7 +710,7 @@ export class AI {
 
   private findHarassTarget(gameState: GameState): { x: number; y: number } | null {
     for (const p of gameState.players) {
-      if (p.id === this.playerId || p.isDefeated) continue
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
 
       // Prefer enemy harvesters
       const harvesters = this.em.getUnitsForPlayer(p.id).filter(
@@ -909,7 +909,7 @@ export class AI {
   private findAttackTarget(gameState: GameState): { x: number; y: number } | null {
     const allEnemyBuildings: Building[] = []
     for (const p of gameState.players) {
-      if (p.id === this.playerId || p.isDefeated) continue
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
       allEnemyBuildings.push(
         ...this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying'),
       )
@@ -1138,10 +1138,10 @@ export class AI {
 
   private findEnemyBaseAnchor(): { x: number; y: number } | null {
     for (const p of this.em.getAllBuildings()) {
-      if (p.playerId === this.playerId || p.state === 'dying') continue
+      if (!this.isEnemyPlayer(p.playerId) || p.state === 'dying') continue
       if (p.def.id === 'construction_yard') return { x: p.x, y: p.y }
     }
-    const fallback = this.em.getAllBuildings().find(b => b.playerId !== this.playerId && b.state !== 'dying')
+    const fallback = this.em.getAllBuildings().find(b => this.isEnemyPlayer(b.playerId) && b.state !== 'dying')
     return fallback ? { x: fallback.x, y: fallback.y } : null
   }
 
@@ -1366,7 +1366,7 @@ export class AI {
 
       // Find enemy CY to teleport near
       for (const p of gameState.players) {
-        if (p.id === this.playerId || p.isDefeated) continue
+        if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
         const enemyBuildings = this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying')
         const cy = enemyBuildings.find(b => b.def.id === 'construction_yard')
         if (cy) return { x: cy.x, y: cy.y }
@@ -1377,7 +1377,7 @@ export class AI {
 
     // Nuclear/Weather: target area with highest concentration of enemy entities
     for (const p of gameState.players) {
-      if (p.id === this.playerId || p.isDefeated) continue
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
       const enemyBuildings = this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying')
       const enemyUnits = this.em.getUnitsForPlayer(p.id).filter(u => u.state !== 'dying')
       if (enemyBuildings.length === 0 && enemyUnits.length === 0) continue
@@ -1452,5 +1452,9 @@ export class AI {
     if (cy) return { x: cy.x, y: cy.y }
     const any = this.em.getBuildingsForPlayer(this.playerId).find(b => b.state !== 'dying')
     return any ? { x: any.x, y: any.y } : null
+  }
+
+  private isEnemyPlayer(playerId: number): boolean {
+    return this.em.isEnemy(this.playerId, playerId)
   }
 }

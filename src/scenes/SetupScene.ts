@@ -9,8 +9,8 @@ import { TILE_SIZE } from '../types'
 import { FACTIONS, FACTION_IDS } from '../data/factions'
 import { generatePreviewData, PREVIEW_COLORS } from '../engine/GameMap'
 
-import type { GameMode, MapTemplate } from '../types'
-export type { GameMode, MapTemplate }
+import type { MapTemplate } from '../types'
+export type { MapTemplate }
 
 export interface SkirmishConfig {
   playerFaction: FactionId
@@ -21,7 +21,7 @@ export interface SkirmishConfig {
   aiCount: number
   aiDifficulty: 'easy' | 'medium' | 'hard'
   startingCredits: number
-  gameMode: GameMode  // 'ffa' = free for all, 'alliance' = team-based (same side = allies)
+  allyPlayerIds: number[] // AI player IDs allied with human player (player 0)
 }
 
 const STYLE = {
@@ -64,7 +64,7 @@ export class SetupScene extends Phaser.Scene {
     aiCount: 1,
     aiDifficulty: 'medium',
     startingCredits: 10000,
-    gameMode: 'ffa',
+    allyPlayerIds: [],
   }
 
   // Graphic refs for redraws
@@ -81,6 +81,7 @@ export class SetupScene extends Phaser.Scene {
   private mapPreview!: Phaser.GameObjects.Graphics
   private spawnMarkers: Phaser.GameObjects.Text[] = []
   private spawnZones: Phaser.GameObjects.Zone[] = []
+  private allianceRows: Map<number, { rowBg: Phaser.GameObjects.Graphics; label: Phaser.GameObjects.Text; toggleBg: Phaser.GameObjects.Graphics; toggleText: Phaser.GameObjects.Text; zone: Phaser.GameObjects.Zone }> = new Map()
 
   constructor() {
     super({ key: 'SetupScene' })
@@ -416,10 +417,16 @@ export class SetupScene extends Phaser.Scene {
     minusZone.on('pointerdown', () => {
       this.config.aiCount = Math.max(1, this.config.aiCount - 1)
       this.aiCountText.setText(`${this.config.aiCount}`)
+      this.sanitizeAllyPlayerIds()
+      this.refreshAllianceRows()
+      this.regeneratePreview()
     })
     plusZone.on('pointerdown', () => {
       this.config.aiCount = Math.min(3, this.config.aiCount + 1)
       this.aiCountText.setText(`${this.config.aiCount}`)
+      this.sanitizeAllyPlayerIds()
+      this.refreshAllianceRows()
+      this.regeneratePreview()
     })
     minusZone.on('pointerover', () => minusText.setColor('#ffffff'))
     minusZone.on('pointerout',  () => minusText.setColor('#e94560'))
@@ -428,53 +435,100 @@ export class SetupScene extends Phaser.Scene {
 
     cy += 44
 
-    // ── Game Mode Toggle ──────────────────────────────────────
-    this.add.text(panelX + 10, cy, 'GAME MODE', {
+    // ── Alliance Picker ───────────────────────────────────────
+    this.add.text(panelX + 10, cy, 'ALLIANCE PICKER', {
       fontFamily: 'monospace',
       fontSize: '11px',
       color: '#aaaaaa',
     })
     cy += 20
 
-    const modeOptions = [
-      { label: '⚔ FREE FOR ALL', value: 'ffa' },
-      { label: '🤝 ALLIANCE (by side)', value: 'alliance' },
-    ]
-    const modeBtnW = (stepperW - 4) / 2
-    const modeTexts: Phaser.GameObjects.Text[] = []
-    const modeBgs: Phaser.GameObjects.Graphics[] = []
-
-    modeOptions.forEach((opt, idx) => {
-      const mx = panelX + 10 + idx * (modeBtnW + 4)
-      const bg = this.add.graphics()
-      modeBgs.push(bg)
-      const txt = this.add.text(mx + modeBtnW / 2, cy + 16, opt.label, {
+    const rowH = 32
+    for (let aiId = 1; aiId <= 3; aiId++) {
+      const rowY = cy + (aiId - 1) * (rowH + 4)
+      const rowBg = this.add.graphics()
+      const label = this.add.text(panelX + 18, rowY + rowH / 2, `AI ${aiId}`, {
         fontFamily: 'monospace',
-        fontSize: '10px',
+        fontSize: '11px',
+        color: '#bbbbbb',
+      }).setOrigin(0, 0.5)
+
+      const toggleW = 100
+      const toggleX = panelX + 10 + stepperW - toggleW - 8
+      const toggleBg = this.add.graphics()
+      const toggleText = this.add.text(toggleX + toggleW / 2, rowY + rowH / 2, '', {
+        fontFamily: 'monospace',
+        fontSize: '11px',
         color: '#ffffff',
       }).setOrigin(0.5)
-      modeTexts.push(txt)
 
-      const zone = this.add.zone(mx + modeBtnW / 2, cy + 16, modeBtnW, 32).setInteractive({ cursor: 'pointer' })
+      const zone = this.add.zone(toggleX + toggleW / 2, rowY + rowH / 2, toggleW, rowH)
+        .setInteractive({ cursor: 'pointer' })
+
       zone.on('pointerdown', () => {
-        this.config.gameMode = opt.value as GameMode
-        drawModeButtons()
+        if (aiId > this.config.aiCount) return
+        const idx = this.config.allyPlayerIds.indexOf(aiId)
+        if (idx >= 0) this.config.allyPlayerIds.splice(idx, 1)
+        else {
+          const maxAllies = Math.max(0, this.config.aiCount - 1)
+          if (this.config.allyPlayerIds.length >= maxAllies) return
+          this.config.allyPlayerIds.push(aiId)
+        }
+        this.refreshAllianceRows()
       })
-    })
 
-    const drawModeButtons = () => {
-      modeOptions.forEach((opt, idx) => {
-        const mx = panelX + 10 + idx * (modeBtnW + 4)
-        const isSelected = this.config.gameMode === opt.value
-        modeBgs[idx].clear()
-        modeBgs[idx].fillStyle(isSelected ? STYLE.selectedBg : STYLE.btnNormal, 1)
-        modeBgs[idx].fillRect(mx, cy, modeBtnW, 32)
-        modeBgs[idx].lineStyle(1, isSelected ? STYLE.selected : STYLE.panelBorder, 1)
-        modeBgs[idx].strokeRect(mx, cy, modeBtnW, 32)
-        modeTexts[idx].setColor(isSelected ? '#e94560' : '#778899')
-      })
+      this.allianceRows.set(aiId, { rowBg, label, toggleBg, toggleText, zone })
     }
-    drawModeButtons()
+    this.refreshAllianceRows()
+  }
+
+  private sanitizeAllyPlayerIds() {
+    const maxAllies = Math.max(0, this.config.aiCount - 1)
+    this.config.allyPlayerIds = this.config.allyPlayerIds
+      .filter(id => Number.isInteger(id) && id >= 1 && id <= this.config.aiCount)
+      .sort((a, b) => a - b)
+      .slice(0, maxAllies)
+  }
+
+  private refreshAllianceRows() {
+    this.sanitizeAllyPlayerIds()
+    for (let aiId = 1; aiId <= 3; aiId++) {
+      const row = this.allianceRows.get(aiId)
+      if (!row) continue
+
+      const visible = aiId <= this.config.aiCount
+      const isAlly = this.config.allyPlayerIds.includes(aiId)
+      row.rowBg.clear()
+      row.toggleBg.clear()
+
+      if (visible) {
+        const rowY = row.label.y - 16
+        const rowX = row.label.x - 8
+        const rowW = 208
+        const rowH = 32
+        row.rowBg.fillStyle(STYLE.btnNormal, 1)
+        row.rowBg.fillRect(rowX, rowY, rowW, rowH)
+        row.rowBg.lineStyle(1, STYLE.panelBorder, 1)
+        row.rowBg.strokeRect(rowX, rowY, rowW, rowH)
+
+        const toggleW = 100
+        const toggleX = rowX + rowW - toggleW - 8
+        row.toggleBg.fillStyle(isAlly ? STYLE.selectedBg : STYLE.btnNormal, 1)
+        row.toggleBg.fillRect(toggleX, rowY, toggleW, rowH)
+        row.toggleBg.lineStyle(1, isAlly ? STYLE.selected : STYLE.panelBorder, 1)
+        row.toggleBg.strokeRect(toggleX, rowY, toggleW, rowH)
+      }
+
+      row.toggleText.setText(isAlly ? 'ALLY' : 'ENEMY')
+      row.toggleText.setColor(isAlly ? '#e94560' : '#778899')
+
+      row.rowBg.setVisible(visible)
+      row.label.setVisible(visible)
+      row.toggleBg.setVisible(visible)
+      row.toggleText.setVisible(visible)
+      row.zone.setVisible(visible)
+      row.zone.input!.enabled = visible
+    }
   }
 
   private createRadioGroup(
@@ -771,7 +825,8 @@ export class SetupScene extends Phaser.Scene {
   }
 
   private launchMission() {
-    const config: SkirmishConfig = { ...this.config }
+    this.sanitizeAllyPlayerIds()
+    const config: SkirmishConfig = { ...this.config, allyPlayerIds: [...this.config.allyPlayerIds] }
     this.cameras.main.fadeOut(400, 0, 0, 0)
     this.cameras.main.once('camerafadeoutcomplete', () => {
       this.scene.start('GameScene', { config })
