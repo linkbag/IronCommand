@@ -131,6 +131,7 @@ export class Combat extends Phaser.Events.EventEmitter {
    */
   resolveAttack(attacker: Unit | Building, target: Unit | Building): void {
     if (!attacker.def.attack) return
+    if (!this.canAttackTarget(attacker.def.attack, target)) return
 
     const attack = attacker.def.attack
     const targetCategory = this.getTargetCategory(target)
@@ -239,6 +240,9 @@ export class Combat extends Phaser.Events.EventEmitter {
           target.id,
         )
       }
+      if (attacker instanceof Unit) {
+        this.applyUnitSpecialOnHit(attacker, target)
+      }
     } else {
       // Muzzle flash at attacker position
       this.createMuzzleFlash(attacker.x, attacker.y, attack.damageType)
@@ -281,6 +285,9 @@ export class Combat extends Phaser.Events.EventEmitter {
                 attacker.playerId,
                 target.id,
               )
+            }
+            if (attacker instanceof Unit) {
+              this.applyUnitSpecialOnHit(attacker, target)
             }
           }
           this.createExplosion(target.x, target.y, this.getExplosionSize(target))
@@ -543,6 +550,80 @@ export class Combat extends Phaser.Events.EventEmitter {
       scaleY: 2,
       duration: 100,
       onComplete: () => flash.destroy(),
+    })
+  }
+
+  private canAttackTarget(attack: AttackStats, target: Unit | Building): boolean {
+    // Buildings and non-air units are "ground" targets.
+    const isAirUnit = target instanceof Unit && target.def.category === 'aircraft'
+    return isAirUnit ? attack.canAttackAir : attack.canAttackGround
+  }
+
+  private applyUnitSpecialOnHit(attacker: Unit, primaryTarget: Unit | Building): void {
+    if (attacker.def.id !== 'prism_tank' || !attacker.def.attack) return
+    this.dealPrismChainDamage(attacker, primaryTarget, 2)
+  }
+
+  private dealPrismChainDamage(attacker: Unit, primaryTarget: Unit | Building, maxChains: number): void {
+    const baseAttack = attacker.def.attack!
+    const chainRadius = 2 * TILE_SIZE
+    const visited = new Set<string>([primaryTarget.id])
+    let anchorX = primaryTarget.x
+    let anchorY = primaryTarget.y
+
+    for (let chainIdx = 1; chainIdx <= maxChains; chainIdx++) {
+      const candidates: Array<Unit | Building> = [
+        ...this.em.getUnitsInRange(anchorX, anchorY, chainRadius),
+        ...this.em.getBuildingsInRange(anchorX, anchorY, chainRadius),
+      ]
+      const nextTarget = candidates.find(e =>
+        !visited.has(e.id) &&
+        e.playerId !== attacker.playerId &&
+        e.hp > 0 &&
+        (('state' in e && e.state !== 'dying') || !('state' in e)) &&
+        this.canAttackTarget(baseAttack, e)
+      )
+      if (!nextTarget) break
+
+      const fakeChainAttack: AttackStats = {
+        ...baseAttack,
+        damage: Math.ceil(baseAttack.damage * (1 - 0.35 * chainIdx)),
+        splash: 0,
+      }
+      if (fakeChainAttack.damage <= 0) break
+
+      const dmg = this.calculateDamage(fakeChainAttack, this.getTargetCategory(nextTarget), nextTarget.def.stats.armor)
+      nextTarget.takeDamage(dmg, attacker.playerId)
+      this.createChainArc(anchorX, anchorY, nextTarget.x, nextTarget.y)
+
+      visited.add(nextTarget.id)
+      anchorX = nextTarget.x
+      anchorY = nextTarget.y
+    }
+  }
+
+  private createChainArc(fromX: number, fromY: number, toX: number, toY: number): void {
+    const g = this.scene.add.graphics()
+    g.setDepth(36)
+    g.lineStyle(2, 0xaaddff, 0.9)
+
+    const segments = 6
+    let px = fromX
+    let py = fromY
+    for (let i = 1; i <= segments; i++) {
+      const t = i / segments
+      const nx = Phaser.Math.Linear(fromX, toX, t) + (Math.random() - 0.5) * 8
+      const ny = Phaser.Math.Linear(fromY, toY, t) + (Math.random() - 0.5) * 8
+      g.lineBetween(px, py, nx, ny)
+      px = nx
+      py = ny
+    }
+
+    this.scene.tweens.add({
+      targets: g,
+      alpha: 0,
+      duration: 90,
+      onComplete: () => g.destroy(),
     })
   }
 

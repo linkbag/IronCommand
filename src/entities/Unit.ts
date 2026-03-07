@@ -431,12 +431,12 @@ export class Unit extends Phaser.GameObjects.Container {
     const rangePixels = this.def.attack.range * TILE_SIZE
 
     this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: IEntityRef[]) => {
-      if (enemies.length === 0) return
+      const validTargets = enemies.filter(e => this.canAttackEntityRef(e))
+      if (validTargets.length === 0) return
       // Pick nearest enemy
       let nearest: IEntityRef | null = null
       let nearestDist = Infinity
-      for (const e of enemies) {
-        if (!this.canAttackTarget(e)) continue
+      for (const e of validTargets) {
         const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
         if (d < nearestDist) { nearestDist = d; nearest = e }
       }
@@ -549,7 +549,7 @@ export class Unit extends Phaser.GameObjects.Container {
     // EntityManager listens to this event and returns nearby enemies
     this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: IEntityRef[]) => {
       for (const e of enemies) {
-        if (!this.canAttackTarget(e)) continue
+        if (!this.canAttackEntityRef(e)) continue
         const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
         if (d < nearestDist) {
           nearestDist = d
@@ -561,16 +561,11 @@ export class Unit extends Phaser.GameObjects.Container {
     return nearest
   }
 
-  private isAirTarget(entity: IEntityRef): boolean {
-    const maybeCategory = (entity as { def?: { category?: string } }).def?.category
-    return maybeCategory === 'aircraft'
-  }
-
-  private canAttackTarget(entity: IEntityRef): boolean {
+  private canAttackEntityRef(target: IEntityRef): boolean {
     if (!this.def.attack) return false
-    return this.isAirTarget(entity)
-      ? this.def.attack.canAttackAir
-      : this.def.attack.canAttackGround
+    const targetCategory = (target as { def?: { category?: string } }).def?.category
+    const isAir = targetCategory === 'aircraft'
+    return isAir ? this.def.attack.canAttackAir : this.def.attack.canAttackGround
   }
 
   // ── Private: harvest ─────────────────────────────────────────
