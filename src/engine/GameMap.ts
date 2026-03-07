@@ -10,7 +10,7 @@ import {
   ORE_REGEN_RATE,
 } from '../types'
 import type { TileData, GameMap as GameMapData, Position, TileCoord } from '../types'
-import { tileToScreen, screenToTile, getIsoWorldBounds } from './IsoUtils'
+import { tileToScreen, screenToTile, getIsoWorldBounds, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from './IsoUtils'
 
 // ── Terrain color palette ─────────────────────────────────────
 
@@ -311,6 +311,7 @@ export class GameMap {
   private oreSpreadTimerMs = 0
   private oreGrowthTimerMs = 0
   private depletedOreTiles: Set<number> = new Set()
+  private debugGridEnabled = false
 
   constructor(scene: Phaser.Scene, width?: number, height?: number, seed?: number) {
     this.scene = scene
@@ -327,10 +328,6 @@ export class GameMap {
 
   /** Full terrain render — call once after creation */
   renderTerrain(): void {
-    if (this.renderedTiles) return
-    this.renderedTiles = true
-    const g = this.terrainGraphics
-    g.clear()
     const { tiles, width, height } = this.data
     this.waterTiles = []
     this.oreTiles = []
@@ -338,43 +335,18 @@ export class GameMap {
     for (let row = 0; row < height; row++) {
       for (let col = 0; col < width; col++) {
         const tile = tiles[row][col]
-        const color = this.tileColor(tile, col, row)
-        const px = col * TILE_SIZE
-        const py = row * TILE_SIZE
-
-        g.fillStyle(color)
-        g.fillRect(px, py, TILE_SIZE, TILE_SIZE)
-
-        switch (tile.terrain) {
-          case TerrainType.GRASS:
-            this.drawGrassDetail(g, px, py, col, row)
-            break
-          case TerrainType.WATER:
-            this.waterTiles.push({ col, row })
-            this.drawWaterEdge(g, px, py, col, row)
-            break
-          case TerrainType.ORE:
-          case TerrainType.GEMS:
-            this.oreTiles.push({ col, row })
-            this.drawOreDetail(g, px, py, col, row, tile.oreAmount)
-            break
-          case TerrainType.FOREST:
-            this.drawForestDetail(g, px, py, col, row)
-            break
-          case TerrainType.BRIDGE:
-            this.drawBridgeDetail(g, px, py)
-            break
-          case TerrainType.SAND:
-            this.drawSandDetail(g, px, py, col, row)
-            break
-          case TerrainType.ROCK:
-            this.drawRockDetail(g, px, py, col, row)
-            break
+        if (tile.terrain === TerrainType.WATER) this.waterTiles.push({ col, row })
+        if (tile.terrain === TerrainType.ORE || tile.terrain === TerrainType.GEMS) {
+          this.oreTiles.push({ col, row })
         }
       }
     }
 
-    this.setupAnimations()
+    if (!this.renderedTiles) {
+      this.renderedTiles = true
+      this.setupAnimations()
+    }
+    this.renderTerrainVisible()
   }
 
   /** Render fog of war layer — always does a full clear+redraw for correctness */
@@ -388,13 +360,16 @@ export class GameMap {
     const g = this.fogLayer
     g.clear()
     const { tiles, width, height } = this.data
+    const offsetX = this.isoOffsetX
     for (let row = 0; row < height; row++) {
       for (let col = 0; col < width; col++) {
         const tile = tiles[row][col]
         const alpha = FOG_ALPHA[tile.fogState]
         if (alpha > 0) {
+          const screen = tileToScreen(col, row)
           g.fillStyle(0x000000, alpha)
-          g.fillRect(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+          drawIsoDiamond(g, screen.x + offsetX, screen.y, ISO_TILE_W, ISO_TILE_H)
+          g.fillPath()
         }
       }
     }
@@ -425,15 +400,15 @@ export class GameMap {
     // Pebbles: 2-3 small darker spots
     const pebbleCount = 2 + Math.floor(this.tileHash(col, row, 1) * 2)
     for (let i = 0; i < pebbleCount; i++) {
-      const dx = this.tileHash(col, row, 10 + i) * 26 + 3
-      const dy = this.tileHash(col, row, 20 + i) * 26 + 3
+      const dx = this.tileHash(col, row, 10 + i) * 40 + 12
+      const dy = this.tileHash(col, row, 20 + i) * 14 + 9
       g.fillStyle(0x2d5a25, 0.5)
       g.fillRect(px + dx, py + dy, 2, 2)
     }
     // Occasional grass tuft
     if (this.tileHash(col, row, 30) > 0.5) {
-      const tx = this.tileHash(col, row, 31) * 22 + 5
-      const ty = this.tileHash(col, row, 32) * 18 + 10
+      const tx = this.tileHash(col, row, 31) * 36 + 14
+      const ty = this.tileHash(col, row, 32) * 10 + 12
       g.lineStyle(1, 0x2d5a25, 0.6)
       g.lineBetween(px + tx, py + ty, px + tx - 1, py + ty - 4)
       g.lineBetween(px + tx + 3, py + ty, px + tx + 4, py + ty - 3)
@@ -442,23 +417,24 @@ export class GameMap {
 
   private drawWaterEdge(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
     const { tiles, width, height } = this.data
-    const edgeColor = 0x4499cc
-    // Lighter border where water meets land
+    const edgeLight = 0x6dc2e8
+    const edgeDark = 0x114b77
+    // Lighter top-side edges where water meets land
     if (row > 0 && tiles[row - 1][col].terrain !== TerrainType.WATER) {
-      g.fillStyle(edgeColor, 0.45)
-      g.fillRect(px, py, TILE_SIZE, 3)
-    }
-    if (row < height - 1 && tiles[row + 1][col].terrain !== TerrainType.WATER) {
-      g.fillStyle(edgeColor, 0.45)
-      g.fillRect(px, py + TILE_SIZE - 3, TILE_SIZE, 3)
+      g.lineStyle(1, edgeLight, 0.45)
+      g.lineBetween(px + ISO_TILE_W / 2, py, px, py + ISO_TILE_H / 2)
     }
     if (col > 0 && tiles[row][col - 1].terrain !== TerrainType.WATER) {
-      g.fillStyle(edgeColor, 0.45)
-      g.fillRect(px, py, 3, TILE_SIZE)
+      g.lineStyle(1, edgeLight, 0.45)
+      g.lineBetween(px + ISO_TILE_W / 2, py, px + ISO_TILE_W, py + ISO_TILE_H / 2)
+    }
+    if (row < height - 1 && tiles[row + 1][col].terrain !== TerrainType.WATER) {
+      g.lineStyle(1, edgeDark, 0.35)
+      g.lineBetween(px, py + ISO_TILE_H / 2, px + ISO_TILE_W / 2, py + ISO_TILE_H)
     }
     if (col < width - 1 && tiles[row][col + 1].terrain !== TerrainType.WATER) {
-      g.fillStyle(edgeColor, 0.45)
-      g.fillRect(px + TILE_SIZE - 3, py, 3, TILE_SIZE)
+      g.lineStyle(1, edgeDark, 0.35)
+      g.lineBetween(px + ISO_TILE_W, py + ISO_TILE_H / 2, px + ISO_TILE_W / 2, py + ISO_TILE_H)
     }
   }
 
@@ -477,26 +453,26 @@ export class GameMap {
     // Metallic veins — fade with depletion
     const veinColor = lerpColor(0x5a7a40, 0xb8860b, ratio) // green-ish → gold
     g.lineStyle(1, veinColor, 0.1 + ratio * 0.6)
-    const vx = this.tileHash(col, row, 110) * 14 + 4
-    const vy = this.tileHash(col, row, 111) * 14 + 4
-    g.lineBetween(px + vx, py + vy, px + vx + 10, py + vy + 6)
+    const vx = this.tileHash(col, row, 110) * 24 + 14
+    const vy = this.tileHash(col, row, 111) * 8 + 10
+    g.lineBetween(px + vx, py + vy, px + vx + 12, py + vy + 5)
     // Small nugget shapes — fewer and dimmer when depleted
     const nuggetColor = lerpColor(0x6a8a4a, 0xe8c020, ratio) // green-ish → gold
     g.fillStyle(nuggetColor, 0.1 + ratio * 0.7)
-    const nx = this.tileHash(col, row, 112) * 22 + 5
-    const ny = this.tileHash(col, row, 113) * 22 + 5
+    const nx = this.tileHash(col, row, 112) * 26 + 14
+    const ny = this.tileHash(col, row, 113) * 8 + 12
     g.fillRect(px + nx, py + ny, 3, 2)
-    if (ratio > 0.3) g.fillRect(px + nx + 8, py + ny + 4, 2, 3) // Second nugget only when ore is decent
+    if (ratio > 0.3) g.fillRect(px + nx + 8, py + ny + 3, 2, 3) // Second nugget only when ore is decent
   }
 
   private drawForestDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
     const treeCount = 2 + Math.floor(this.tileHash(col, row, 40) * 2)
     for (let i = 0; i < treeCount; i++) {
-      const tx = this.tileHash(col, row, 50 + i) * 18 + 7
-      const ty = this.tileHash(col, row, 60 + i) * 14 + 9
+      const tx = this.tileHash(col, row, 50 + i) * 24 + 18
+      const ty = this.tileHash(col, row, 60 + i) * 8 + 10
       // Shadow underneath
       g.fillStyle(0x0a1a08, 0.35)
-      g.fillEllipse(px + tx, py + ty + 4, 8, 4)
+      g.fillEllipse(px + tx, py + ty + 5, 8, 4)
       // Tree canopy
       g.fillStyle(0x1a4a16, 1)
       g.fillCircle(px + tx, py + ty, 5)
@@ -509,20 +485,20 @@ export class GameMap {
   private drawBridgeDetail(g: Phaser.GameObjects.Graphics, px: number, py: number): void {
     // Plank lines
     g.lineStyle(1, 0x5a4010, 0.5)
-    for (let y = 4; y < TILE_SIZE; y += 6) {
-      g.lineBetween(px + 3, py + y, px + TILE_SIZE - 3, py + y)
+    for (let y = 7; y < ISO_TILE_H; y += 5) {
+      g.lineBetween(px + 14, py + y, px + ISO_TILE_W - 14, py + y)
     }
-    // Railings on sides
+    // Railings on slopes
     g.lineStyle(2, 0x4a3010, 0.7)
-    g.lineBetween(px + 1, py, px + 1, py + TILE_SIZE)
-    g.lineBetween(px + TILE_SIZE - 1, py, px + TILE_SIZE - 1, py + TILE_SIZE)
+    g.lineBetween(px + 20, py + 7, px + 8, py + 18)
+    g.lineBetween(px + 44, py + 7, px + 56, py + 18)
   }
 
   private drawSandDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
     const dotCount = 4 + Math.floor(this.tileHash(col, row, 70) * 4)
     for (let i = 0; i < dotCount; i++) {
-      const dx = this.tileHash(col, row, 80 + i) * 28 + 2
-      const dy = this.tileHash(col, row, 90 + i) * 28 + 2
+      const dx = this.tileHash(col, row, 80 + i) * 40 + 12
+      const dy = this.tileHash(col, row, 90 + i) * 12 + 8
       g.fillStyle(0xb8986a, 0.35)
       g.fillRect(px + dx, py + dy, 1, 1)
     }
@@ -531,13 +507,13 @@ export class GameMap {
   private drawRockDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
     // Cracks
     g.lineStyle(1, 0x555555, 0.4)
-    const cx = this.tileHash(col, row, 100) * 18 + 6
-    const cy = this.tileHash(col, row, 101) * 18 + 6
-    g.lineBetween(px + cx, py + cy, px + cx + 8, py + cy + 5)
+    const cx = this.tileHash(col, row, 100) * 28 + 12
+    const cy = this.tileHash(col, row, 101) * 10 + 9
+    g.lineBetween(px + cx, py + cy, px + cx + 10, py + cy + 4)
     // Lighter highlight spot
     g.fillStyle(0x999999, 0.25)
-    const hx = this.tileHash(col, row, 102) * 22 + 5
-    const hy = this.tileHash(col, row, 103) * 22 + 5
+    const hx = this.tileHash(col, row, 102) * 30 + 12
+    const hy = this.tileHash(col, row, 103) * 10 + 10
     g.fillRect(px + hx, py + hy, 3, 3)
   }
 
@@ -557,21 +533,25 @@ export class GameMap {
   private renderAnimatedTiles(): void {
     const g = this.animLayer
     g.clear()
+    const offsetX = this.isoOffsetX
 
     // Water shimmer
     const shimmerAlpha = [0.12, 0.0, 0.08][this.animFrame]
     for (const { col, row } of this.waterTiles) {
-      const px = col * TILE_SIZE
-      const py = row * TILE_SIZE
+      const screen = tileToScreen(col, row)
+      const px = screen.x + offsetX
+      const py = screen.y
+      if (!this.isOnScreen(px, py)) continue
       // Shimmer overlay
       if (shimmerAlpha > 0) {
         g.fillStyle(0xffffff, shimmerAlpha)
-        g.fillRect(px, py, TILE_SIZE, TILE_SIZE)
+        drawIsoDiamond(g, px, py, ISO_TILE_W, ISO_TILE_H)
+        g.fillPath()
       }
       // Sun reflection dots
       if (this.animFrame !== 1) {
-        const dx = ((this.animFrame * 11 + col * 7) % 22) + 5
-        const dy = ((this.animFrame * 13 + row * 5) % 22) + 5
+        const dx = ((this.animFrame * 11 + col * 7) % 32) + 16
+        const dy = ((this.animFrame * 13 + row * 5) % 10) + 8
         g.fillStyle(0xffffff, 0.3)
         g.fillRect(px + dx, py + dy, 2, 2)
       }
@@ -583,15 +563,17 @@ export class GameMap {
       if (!tile || (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS) || tile.oreAmount <= 0) continue
       const maxAmt = tile.terrain === TerrainType.GEMS ? GEMS_TILE_MAX : ORE_TILE_MAX
       const ratio = Phaser.Math.Clamp(tile.oreAmount / maxAmt, 0, 1)
-      const px = col * TILE_SIZE
-      const py = row * TILE_SIZE
-      const sx = ((this.animFrame * 9 + col * 13) % 24) + 4
-      const sy = ((this.animFrame * 7 + row * 11) % 24) + 4
+      const screen = tileToScreen(col, row)
+      const px = screen.x + offsetX
+      const py = screen.y
+      if (!this.isOnScreen(px, py)) continue
+      const sx = ((this.animFrame * 9 + col * 13) % 28) + 16
+      const sy = ((this.animFrame * 7 + row * 11) % 10) + 8
       g.fillStyle(0xffffff, 0.2 + ratio * 0.55)
       g.fillCircle(px + sx, py + sy, 1.5)
       // Second sparkle
-      const sx2 = ((this.animFrame * 17 + col * 3) % 20) + 6
-      const sy2 = ((this.animFrame * 19 + row * 7) % 20) + 6
+      const sx2 = ((this.animFrame * 17 + col * 3) % 26) + 18
+      const sy2 = ((this.animFrame * 19 + row * 7) % 12) + 10
       g.fillStyle(0xffff88, 0.1 + ratio * 0.45)
       g.fillCircle(px + sx2, py + sy2, 1)
     }
@@ -725,6 +707,7 @@ export class GameMap {
   }
 
   update(delta: number): void {
+    this.renderTerrainVisible()
     this.oreSpreadTimerMs += delta
     this.oreGrowthTimerMs += delta
 
@@ -780,39 +763,8 @@ export class GameMap {
   get worldHeight(): number { return this.data.height * TILE_SIZE }
 
   private redrawTile(col: number, row: number): void {
-    const tile = this.getTile(col, row)
-    if (!tile) return
-    const px = col * TILE_SIZE
-    const py = row * TILE_SIZE
-    const g = this.terrainGraphics
-
-    g.fillStyle(this.tileColor(tile, col, row))
-    g.fillRect(px, py, TILE_SIZE, TILE_SIZE)
-
-    switch (tile.terrain) {
-      case TerrainType.GRASS:
-        this.drawGrassDetail(g, px, py, col, row)
-        break
-      case TerrainType.WATER:
-        this.drawWaterEdge(g, px, py, col, row)
-        break
-      case TerrainType.ORE:
-      case TerrainType.GEMS:
-        this.drawOreDetail(g, px, py, col, row, tile.oreAmount)
-        break
-      case TerrainType.FOREST:
-        this.drawForestDetail(g, px, py, col, row)
-        break
-      case TerrainType.BRIDGE:
-        this.drawBridgeDetail(g, px, py)
-        break
-      case TerrainType.SAND:
-        this.drawSandDetail(g, px, py, col, row)
-        break
-      case TerrainType.ROCK:
-        this.drawRockDetail(g, px, py, col, row)
-        break
-    }
+    if (!this.getTile(col, row)) return
+    this.renderTerrainVisible()
   }
 
   private regenerateDepletedOre(): void {
@@ -899,5 +851,96 @@ export class GameMap {
   private removeOreTile(col: number, row: number): void {
     const idx = this.oreTiles.findIndex(t => t.col === col && t.row === row)
     if (idx >= 0) this.oreTiles.splice(idx, 1)
+  }
+
+  setDebugGrid(enabled: boolean): void {
+    this.debugGridEnabled = enabled
+    this.renderTerrainVisible()
+  }
+
+  private renderTerrainVisible(): void {
+    if (!this.renderedTiles) return
+    const g = this.terrainGraphics
+    const cam = this.scene.cameras.main
+    const { tiles, width, height } = this.data
+    const cameraX = cam.scrollX
+    const cameraY = cam.scrollY
+    const viewWidth = cam.width
+    const viewHeight = cam.height
+    const offsetX = this.isoOffsetX
+
+    g.clear()
+    for (let row = 0; row < height; row++) {
+      for (let col = 0; col < width; col++) {
+        const tile = tiles[row][col]
+        const screen = tileToScreen(col, row)
+        const px = screen.x + offsetX
+        const py = screen.y
+        const sx = px - cameraX
+        const sy = py - cameraY
+
+        if (
+          sx <= -ISO_TILE_W || sx >= viewWidth + ISO_TILE_W
+          || sy <= -ISO_TILE_H || sy >= viewHeight + ISO_TILE_H
+        ) {
+          continue
+        }
+
+        this.drawTerrainDiamond(g, px, py, this.tileColor(tile, col, row))
+
+        switch (tile.terrain) {
+          case TerrainType.GRASS:
+            this.drawGrassDetail(g, px, py, col, row)
+            break
+          case TerrainType.WATER:
+            this.drawWaterEdge(g, px, py, col, row)
+            break
+          case TerrainType.ORE:
+          case TerrainType.GEMS:
+            this.drawOreDetail(g, px, py, col, row, tile.oreAmount)
+            break
+          case TerrainType.FOREST:
+            this.drawForestDetail(g, px, py, col, row)
+            break
+          case TerrainType.BRIDGE:
+            this.drawBridgeDetail(g, px, py)
+            break
+          case TerrainType.SAND:
+            this.drawSandDetail(g, px, py, col, row)
+            break
+          case TerrainType.ROCK:
+            this.drawRockDetail(g, px, py, col, row)
+            break
+        }
+
+        if (this.debugGridEnabled) {
+          g.lineStyle(1, 0x111111, 0.25)
+          drawIsoDiamond(g, px, py, ISO_TILE_W, ISO_TILE_H)
+          g.strokePath()
+        }
+      }
+    }
+  }
+
+  private drawTerrainDiamond(g: Phaser.GameObjects.Graphics, px: number, py: number, baseColor: number): void {
+    g.fillStyle(baseColor, 1)
+    drawIsoDiamond(g, px, py, ISO_TILE_W, ISO_TILE_H)
+    g.fillPath()
+
+    const lighter = scaleColor(baseColor, 1.1)
+    const darker = scaleColor(baseColor, 0.82)
+    g.lineStyle(1, lighter, 0.4)
+    g.lineBetween(px + ISO_TILE_W / 2, py, px, py + ISO_TILE_H / 2)
+    g.lineBetween(px + ISO_TILE_W / 2, py, px + ISO_TILE_W, py + ISO_TILE_H / 2)
+    g.lineStyle(1, darker, 0.35)
+    g.lineBetween(px + ISO_TILE_W, py + ISO_TILE_H / 2, px + ISO_TILE_W / 2, py + ISO_TILE_H)
+    g.lineBetween(px, py + ISO_TILE_H / 2, px + ISO_TILE_W / 2, py + ISO_TILE_H)
+  }
+
+  private isOnScreen(px: number, py: number): boolean {
+    const cam = this.scene.cameras.main
+    const sx = px - cam.scrollX
+    const sy = py - cam.scrollY
+    return sx > -ISO_TILE_W && sx < cam.width + ISO_TILE_W && sy > -ISO_TILE_H && sy < cam.height + ISO_TILE_H
   }
 }

@@ -4,6 +4,7 @@
 // ============================================================
 
 import Phaser from 'phaser'
+import { ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from '../engine/IsoUtils'
 
 type InfantryKind =
   | 'gi' | 'conscript' | 'engineer' | 'spy' | 'attack_dog' | 'tanya'
@@ -30,6 +31,17 @@ type BuildingKind =
   | 'radar_tower' | 'wall' | 'turret' | 'aa_gun' | 'prism_tower'
   | 'tesla_coil' | 'gap_generator' | 'psychic_sensor' | 'superweapon'
   | 'chronosphere' | 'iron_curtain' | 'grand_cannon' | 'cloning_vats'
+
+type IsoTerrainKind =
+  | 'grass'
+  | 'water'
+  | 'ore'
+  | 'gems'
+  | 'rock'
+  | 'sand'
+  | 'forest'
+  | 'road'
+  | 'bridge'
 
 export class BootScene extends Phaser.Scene {
   private progressBar!: Phaser.GameObjects.Graphics
@@ -92,6 +104,19 @@ export class BootScene extends Phaser.Scene {
       { key: 'terrain_road', color: 0x555555 },
     ]
     for (const t of terrainDefs) tasks.push(() => this.genTile(t.key, t.color))
+
+    const terrainIsoDefs: Array<{ key: string; color: number; kind: IsoTerrainKind }> = [
+      { key: 'terrain_grass_iso', color: 0x4a7c3f, kind: 'grass' },
+      { key: 'terrain_water_iso', color: 0x1e6fa8, kind: 'water' },
+      { key: 'terrain_ore_iso', color: 0xd4a017, kind: 'ore' },
+      { key: 'terrain_gems_iso', color: 0x2f9bff, kind: 'gems' },
+      { key: 'terrain_rock_iso', color: 0x777777, kind: 'rock' },
+      { key: 'terrain_sand_iso', color: 0xc2a96e, kind: 'sand' },
+      { key: 'terrain_forest_iso', color: 0x1e5c1e, kind: 'forest' },
+      { key: 'terrain_road_iso', color: 0x555555, kind: 'road' },
+      { key: 'terrain_bridge_iso', color: 0x8b5e34, kind: 'bridge' },
+    ]
+    for (const t of terrainIsoDefs) tasks.push(() => this.genIsoTerrainTile(t.key, t.color, t.kind))
 
     const infantryDefs: Array<{ key: string; color: number; accent: number; kind: InfantryKind }> = [
       { key: 'unit_gi', color: 0x5a80b0, accent: 0xcfd9e8, kind: 'gi' },
@@ -264,6 +289,100 @@ export class BootScene extends Phaser.Scene {
     g.lineStyle(1, 0x000000, 0.2)
     g.strokeRect(0, 0, w, h)
     g.generateTexture(key, w, h)
+    g.destroy()
+  }
+
+  private genIsoTerrainTile(key: string, baseColor: number, kind: IsoTerrainKind) {
+    const g = this.make.graphics({ x: 0, y: 0 }, false)
+    const lighter = this.lighten(baseColor, 10)
+    const darker = this.darken(baseColor, 12)
+
+    g.fillStyle(baseColor, 1)
+    drawIsoDiamond(g, 0, 0, ISO_TILE_W, ISO_TILE_H)
+    g.fillPath()
+
+    g.lineStyle(1, lighter, 0.4)
+    g.lineBetween(ISO_TILE_W / 2, 0, 0, ISO_TILE_H / 2)
+    g.lineBetween(ISO_TILE_W / 2, 0, ISO_TILE_W, ISO_TILE_H / 2)
+    g.lineStyle(1, darker, 0.3)
+    g.lineBetween(0, ISO_TILE_H / 2, ISO_TILE_W / 2, ISO_TILE_H)
+    g.lineBetween(ISO_TILE_W, ISO_TILE_H / 2, ISO_TILE_W / 2, ISO_TILE_H)
+
+    switch (kind) {
+      case 'grass':
+        g.fillStyle(this.darken(baseColor, 14), 0.35)
+        g.fillRect(16, 10, 2, 2)
+        g.fillRect(42, 18, 2, 2)
+        g.lineStyle(1, this.darken(baseColor, 18), 0.5)
+        g.lineBetween(30, 18, 29, 14)
+        g.lineBetween(35, 17, 36, 13)
+        break
+      case 'water':
+        g.lineStyle(1, this.lighten(baseColor, 16), 0.35)
+        g.lineBetween(15, 14, 27, 11)
+        g.lineBetween(30, 18, 43, 14)
+        g.lineStyle(1, this.lighten(baseColor, 10), 0.25)
+        g.lineBetween(23, 21, 37, 18)
+        break
+      case 'ore':
+        g.lineStyle(1, 0xb98b14, 0.6)
+        g.lineBetween(18, 18, 31, 12)
+        g.fillStyle(0xd9b742, 0.75)
+        g.fillRect(37, 15, 3, 2)
+        g.fillRect(28, 20, 2, 2)
+        break
+      case 'gems':
+        g.lineStyle(1, 0x8fe6ff, 0.65)
+        g.lineBetween(20, 18, 32, 12)
+        g.fillStyle(0xb9ffff, 0.8)
+        g.fillRect(38, 14, 3, 2)
+        g.fillRect(27, 20, 2, 2)
+        break
+      case 'rock':
+        g.lineStyle(1, this.darken(baseColor, 18), 0.45)
+        g.lineBetween(17, 17, 28, 13)
+        g.lineBetween(34, 14, 43, 18)
+        g.fillStyle(this.lighten(baseColor, 14), 0.35)
+        g.fillRect(30, 18, 3, 2)
+        break
+      case 'sand':
+        g.fillStyle(this.darken(baseColor, 10), 0.35)
+        g.fillRect(18, 15, 1, 1)
+        g.fillRect(24, 20, 1, 1)
+        g.fillRect(38, 13, 1, 1)
+        g.fillRect(44, 18, 1, 1)
+        break
+      case 'forest':
+        // Small isometric tree blocks.
+        g.fillStyle(0x0f2f0f, 0.35)
+        g.fillEllipse(22, 20, 10, 4)
+        g.fillEllipse(40, 17, 10, 4)
+        g.fillStyle(0x1d5a1d, 1)
+        g.fillTriangle(17, 18, 22, 9, 27, 18)
+        g.fillTriangle(35, 16, 40, 8, 45, 16)
+        g.fillStyle(0x2d7a2d, 0.7)
+        g.fillTriangle(19, 15, 22, 11, 25, 15)
+        g.fillTriangle(37, 14, 40, 10, 43, 14)
+        break
+      case 'road':
+        g.fillStyle(this.lighten(baseColor, 6), 0.45)
+        g.fillRect(18, 12, 28, 8)
+        g.lineStyle(1, this.darken(baseColor, 20), 0.35)
+        g.lineBetween(18, 12, 46, 20)
+        break
+      case 'bridge':
+        g.fillStyle(0x7a4f2b, 0.95)
+        g.fillRect(15, 11, 34, 10)
+        g.lineStyle(1, 0x5a361a, 0.55)
+        g.lineBetween(17, 13, 47, 13)
+        g.lineBetween(17, 17, 47, 17)
+        g.lineStyle(1, 0x3f2510, 0.5)
+        g.lineBetween(18, 11, 18, 21)
+        g.lineBetween(46, 11, 46, 21)
+        break
+    }
+
+    g.generateTexture(key, ISO_TILE_W, ISO_TILE_H)
     g.destroy()
   }
 
