@@ -14,6 +14,9 @@ import { TILE_SIZE } from '../types'
 import { FACTIONS } from '../data/factions'
 import type { FactionId } from '../types'
 
+const PLAYER_TINT = 0x4488ff
+const ENEMY_TINT = 0xff4444
+
 export class EntityManager extends Phaser.Events.EventEmitter {
   private scene: Phaser.Scene
   private units: Map<string, Unit>
@@ -107,6 +110,7 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     const id = this.generateId('u')
     const factionColor = this.getFactionColor(playerId)
     const unit = new Unit(this.scene, id, playerId, def, factionColor, safeX, safeY)
+    this.applyEntityTint(unit, factionColor)
 
     // Safety: ensure produced units are in the scene and rendered above terrain/fog.
     const maybeDisplayList = (unit as unknown as { displayList?: unknown }).displayList
@@ -138,6 +142,7 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     const id = this.generateId('b')
     const factionColor = this.getFactionColor(playerId)
     const building = new Building(this.scene, id, playerId, def, factionColor, tileCol, tileRow)
+    this.applyEntityTint(building, factionColor)
 
     this.buildings.set(id, building)
     this.wireBuilding(building)
@@ -351,10 +356,29 @@ export class EntityManager extends Phaser.Events.EventEmitter {
   }
 
   private getFactionColor(playerId: number): number {
-    // Cycle through faction colors for multi-player
+    const players = (this.scene as Phaser.Scene & {
+      gameState?: { players?: Array<{ id: number; color: number }> }
+    }).gameState?.players
+    const fromGameState = players?.find(p => p.id === playerId)?.color
+    if (typeof fromGameState === 'number') return fromGameState
+
+    // Default to clear friendly/enemy contrast if gameState is unavailable.
+    if (playerId === 0) return PLAYER_TINT
+    if (playerId > 0) return ENEMY_TINT
+
+    // Fallback for unexpected ids.
     const factionIds = Object.keys(FACTIONS) as FactionId[]
-    const factionId = factionIds[playerId % factionIds.length]
-    return FACTIONS[factionId].color
+    const factionId = factionIds[Math.abs(playerId) % factionIds.length]
+    return FACTIONS[factionId]?.color ?? PLAYER_TINT
+  }
+
+  private applyEntityTint(entity: Phaser.GameObjects.Container, color: number): void {
+    // Units/buildings are containers; tint the first graphic-like child as the main body.
+    const mainChild = entity.list.find((child) =>
+      child instanceof Phaser.GameObjects.Graphics || child instanceof Phaser.GameObjects.Image || child instanceof Phaser.GameObjects.Sprite
+    )
+    if (!mainChild) return
+    ;(mainChild as Phaser.GameObjects.GameObject & { setTint?: (value: number) => unknown }).setTint?.(color)
   }
 
   // Wire up event handlers for a unit's event bus

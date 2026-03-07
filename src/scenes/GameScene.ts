@@ -26,6 +26,8 @@ const ACK_LINES: Record<string, string[]> = {
   aircraft: ['Airborne!', 'Wilco', 'Roger that'],
   harvester: ['Returning', 'Harvesting', 'On my way'],
 }
+const PLAYER_TINT = 0x4488ff
+const ENEMY_TINT = 0xff4444
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
@@ -72,6 +74,10 @@ export class GameScene extends Phaser.Scene {
   private fogAnchorSources: Array<{ pos: TileCoord; range: number }> = []
   private waypointMode = false
   private paratrooperCooldownMs: Map<number, number> = new Map()
+  private gameOver = false
+  private matchStartMs = 0
+  private playerUnitsKilled = 0
+  private playerBuildingsDestroyed = 0
 
   constructor() {
     super({ key: 'GameScene' })
@@ -95,6 +101,10 @@ export class GameScene extends Phaser.Scene {
     this.fogAnchorSources = []
     this.waypointMode = false
     this.paratrooperCooldownMs = new Map()
+    this.gameOver = false
+    this.matchStartMs = 0
+    this.playerUnitsKilled = 0
+    this.playerBuildingsDestroyed = 0
   }
 
   create() {
@@ -129,7 +139,7 @@ export class GameScene extends Phaser.Scene {
 
     const humanPlayer: Player = {
       id: 0, name: 'Commander', faction: playerFaction,
-      color: FACTIONS[playerFaction].color, credits: cfg.startingCredits,
+      color: PLAYER_TINT, credits: cfg.startingCredits,
       power: 0, powerGenerated: 0, powerConsumed: 0,
       isAI: false, isDefeated: false, entities: [], buildQueue: [],
     }
@@ -139,7 +149,7 @@ export class GameScene extends Phaser.Scene {
       const fac = factionKeys[(factionKeys.indexOf(playerFaction) + i + 1) % factionKeys.length]
       aiPlayers.push({
         id: i + 1, name: `AI ${i + 1}`, faction: fac,
-        color: FACTIONS[fac].color, credits: cfg.startingCredits,
+        color: ENEMY_TINT, credits: cfg.startingCredits,
         power: 0, powerGenerated: 0, powerConsumed: 0,
         isAI: true, isDefeated: false, entities: [], buildQueue: [],
       })
@@ -177,6 +187,7 @@ export class GameScene extends Phaser.Scene {
       selectedEntityIds: [],
       map: this.gameMap.data,
     }
+    this.matchStartMs = this.time.now
 
     // ── 10. Event wiring ──────────────────────────────────────
     this.wireEntityEvents()
@@ -302,7 +313,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
-    if (this.gameState.phase !== 'playing') return
+    if (this.gameOver || this.gameState.phase !== 'playing') return
 
     this.gameState.tick++
 
@@ -407,6 +418,9 @@ export class GameScene extends Phaser.Scene {
     this.entityMgr.on('unit_destroyed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p) p.entities = p.entities.filter(id => id !== entityId)
+      if (playerId !== this.gameState.localPlayerId) {
+        this.playerUnitsKilled++
+      }
       // Notify HUD
       if (playerId === 0) {
         const hud = this.scene.get('HUDScene')
@@ -417,6 +431,9 @@ export class GameScene extends Phaser.Scene {
     this.entityMgr.on('building_destroyed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p) p.entities = p.entities.filter(id => id !== entityId)
+      if (playerId !== this.gameState.localPlayerId) {
+        this.playerBuildingsDestroyed++
+      }
       if (playerId === 0) {
         const hud = this.scene.get('HUDScene')
         if (hud) hud.events.emit('buildingLost', { defId: entityId })
@@ -1420,59 +1437,101 @@ export class GameScene extends Phaser.Scene {
   // ── Win / Loss ────────────────────────────────────────────────
 
   private checkWinCondition(): void {
+    if (this.gameOver) return
     const players = this.gameState.players
+    const localId = this.gameState.localPlayerId
 
-    // Mark AI players as defeated if no buildings remain
-    players.filter(p => p.isAI).forEach(p => {
+    for (const p of players) {
       const aliveBuildings = this.entityMgr.getBuildingsForPlayer(p.id)
         .filter(b => b.state !== 'dying')
-      if (aliveBuildings.length === 0 && p.entities.length > 0) {
-        p.isDefeated = true
-      }
-    })
+      p.isDefeated = aliveBuildings.length === 0
+    }
 
-    if (players.filter(p => p.isAI).every(p => p.isDefeated)) {
-      this.triggerVictory()
+    const localPlayer = players.find(p => p.id === localId)
+    if (localPlayer?.isDefeated) {
+      this.triggerDefeat()
       return
     }
 
-    const humanBuildings = this.entityMgr.getBuildingsForPlayer(0)
-      .filter(b => b.state !== 'dying')
-    const human = players.find(p => p.id === 0)!
-    if (humanBuildings.length === 0 && human.entities.length > 0) {
-      this.triggerDefeat()
+    const opponents = players.filter(p => p.id !== localId)
+    if (opponents.length > 0 && opponents.every(p => p.isDefeated)) {
+      this.triggerVictory()
     }
   }
 
   private triggerVictory(): void {
-    if (this.gameState.phase !== 'playing') return
+    if (this.gameOver || this.gameState.phase !== 'playing') return
+    this.gameOver = true
     this.gameState.phase = 'victory'
-    this.showEndScreen('MISSION COMPLETE', '#44ee44')
+    const hud = this.scene.get('HUDScene')
+    if (hud) hud.events.emit('evaAlert', { message: 'Mission accomplished', type: 'success' })
+    this.showEndScreen(true)
   }
 
   private triggerDefeat(): void {
-    if (this.gameState.phase !== 'playing') return
+    if (this.gameOver || this.gameState.phase !== 'playing') return
+    this.gameOver = true
     this.gameState.phase = 'defeat'
-    this.showEndScreen('MISSION FAILED', '#ee4444')
+    const hud = this.scene.get('HUDScene')
+    if (hud) hud.events.emit('evaAlert', { message: 'Mission failed', type: 'danger' })
+    this.showEndScreen(false)
   }
 
-  private showEndScreen(msg: string, color: string): void {
+  private showEndScreen(victory: boolean): void {
     const { width, height } = this.scale
+    const title = victory ? 'VICTORY' : 'DEFEAT'
+    const titleColor = victory ? '#ffd700' : '#ff4444'
+    const accentColor = victory ? 0x44ee44 : 0xcc2222
+    const elapsedMs = Math.max(0, this.time.now - this.matchStartMs)
+    const totalSeconds = Math.floor(elapsedMs / 1000)
+    const minutes = Math.floor(totalSeconds / 60)
+    const seconds = totalSeconds % 60
+    const timeText = `${minutes}:${seconds.toString().padStart(2, '0')}`
 
     const overlay = this.add.graphics()
     overlay.setScrollFactor(0).setDepth(200)
     overlay.fillStyle(0x000000, 0.7)
     overlay.fillRect(0, 0, width, height)
+    overlay.fillStyle(0x0c1220, 0.95)
+    overlay.fillRect(width / 2 - 270, height / 2 - 170, 540, 340)
+    overlay.lineStyle(4, accentColor, 0.9)
+    overlay.strokeRect(width / 2 - 270, height / 2 - 170, 540, 340)
 
-    this.add.text(width / 2, height / 2 - 40, msg, {
-      fontFamily: 'monospace', fontSize: '48px', color,
+    this.add.text(width / 2, height / 2 - 100, title, {
+      fontFamily: 'monospace', fontSize: '74px', color: titleColor,
       stroke: '#000', strokeThickness: 4,
     }).setOrigin(0.5).setDepth(201).setScrollFactor(0)
 
-    this.time.delayedCall(4000, () => {
+    this.add.text(width / 2, height / 2 - 18, `Time Elapsed: ${timeText}`, {
+      fontFamily: 'monospace', fontSize: '24px', color: '#ffffff',
+    }).setOrigin(0.5).setDepth(201).setScrollFactor(0)
+
+    this.add.text(width / 2, height / 2 + 20, `Units Killed: ${this.playerUnitsKilled}`, {
+      fontFamily: 'monospace', fontSize: '24px', color: '#ffffff',
+    }).setOrigin(0.5).setDepth(201).setScrollFactor(0)
+
+    this.add.text(width / 2, height / 2 + 58, `Buildings Destroyed: ${this.playerBuildingsDestroyed}`, {
+      fontFamily: 'monospace', fontSize: '24px', color: '#ffffff',
+    }).setOrigin(0.5).setDepth(201).setScrollFactor(0)
+
+    const btnBg = this.add.rectangle(width / 2, height / 2 + 120, 280, 52, 0x1f2a44, 1)
+      .setStrokeStyle(2, 0xffffff, 0.7)
+      .setDepth(201)
+      .setScrollFactor(0)
+      .setInteractive({ useHandCursor: true })
+
+    const btnLabel = this.add.text(width / 2, height / 2 + 120, 'Return to Menu', {
+      fontFamily: 'monospace', fontSize: '24px', color: '#ffffff',
+    }).setOrigin(0.5).setDepth(202).setScrollFactor(0)
+
+    btnBg.on('pointerover', () => btnBg.setFillStyle(0x2d3d64, 1))
+    btnBg.on('pointerout', () => btnBg.setFillStyle(0x1f2a44, 1))
+    btnBg.on('pointerdown', () => {
       this.scene.stop('HUDScene')
       this.scene.start('MenuScene')
     })
+
+    void btnLabel
   }
 
   private isDefAvailableToPlayer(playerId: number, defId: string): boolean {

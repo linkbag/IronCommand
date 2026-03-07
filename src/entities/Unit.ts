@@ -130,6 +130,7 @@ export class Unit extends Phaser.GameObjects.Container {
     this.drawBody()
     this.drawHealthBar()
     this.drawSelectionCircle()
+    ;(this.bodyGraphic as Phaser.GameObjects.Graphics & { setTint?: (value: number) => unknown }).setTint?.(this.factionColor)
 
     scene.add.existing(this)
     this.setDepth(12)
@@ -1100,8 +1101,10 @@ export class Unit extends Phaser.GameObjects.Container {
     // Background
     g.fillStyle(0x333333, 0.8)
     g.fillRect(-barW / 2, barY, barW, barH)
-    // Gradient fill: green → yellow → red
-    const barColor = pct > 0.6 ? 0x00ff44 : pct > 0.3 ? 0xffaa00 : 0xff2200
+    const isFriendly = this.playerId === 0
+    const barColor = isFriendly
+      ? (pct > 0.3 ? 0x4ade80 : 0x2f9e5a)
+      : (pct > 0.3 ? 0xe94560 : 0x9f2436)
     g.fillStyle(barColor, 1)
     g.fillRect(-barW / 2, barY, barW * pct, barH)
 
