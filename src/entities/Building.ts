@@ -43,6 +43,8 @@ export class Building extends Phaser.GameObjects.Container {
   private selectionOutline: Phaser.GameObjects.Graphics
   private rallyLine: Phaser.GameObjects.Graphics
   private constructionOverlay: Phaser.GameObjects.Graphics
+  private constructionMaskShape: Phaser.GameObjects.Graphics
+  private constructionMask: Phaser.Display.Masks.GeometryMask
   private statusText: Phaser.GameObjects.Text
   private isSelected: boolean
   private factionColor: number
@@ -87,6 +89,7 @@ export class Building extends Phaser.GameObjects.Container {
     this.selectionOutline = scene.add.graphics()
     this.rallyLine = scene.add.graphics()
     this.constructionOverlay = scene.add.graphics()
+    this.constructionMaskShape = scene.add.graphics().setAlpha(0)
     this.bodyGraphic = scene.add.graphics()
     this.crackOverlay = scene.add.graphics()
     this.healthBar = scene.add.graphics()
@@ -101,6 +104,7 @@ export class Building extends Phaser.GameObjects.Container {
       this.selectionOutline,
       this.rallyLine,
       this.constructionOverlay,
+      this.constructionMaskShape,
       this.bodyGraphic,
       this.crackOverlay,
       this.healthBar,
@@ -111,6 +115,9 @@ export class Building extends Phaser.GameObjects.Container {
     this.drawBody()
     this.drawHealthBar()
     this.drawSelectionOutline()
+    this.constructionMask = this.constructionMaskShape.createGeometryMask()
+    this.bodyGraphic.setMask(this.constructionMask)
+    this.crackOverlay.setMask(this.constructionMask)
     ;(this.bodyGraphic as Phaser.GameObjects.Graphics & { setTint?: (value: number) => unknown }).setTint?.(this.factionColor)
 
     scene.add.existing(this)
@@ -305,7 +312,8 @@ export class Building extends Phaser.GameObjects.Container {
     // Start with zero alpha, build up from bottom
     this.setAlpha(0.3)
     this.constructionProgress = 0
-    this.visualRoot.y = 24
+    this.visualRoot.y = 14
+    this.updateConstructionMask()
     this.drawConstructionOverlay()
   }
 
@@ -313,12 +321,14 @@ export class Building extends Phaser.GameObjects.Container {
     const buildTime = this.def.stats.buildTime * 1000 || 100
     this.constructionProgress = Math.min(1, this.constructionProgress + delta / buildTime)
     this.setAlpha(0.3 + this.constructionProgress * 0.7)
-    this.visualRoot.y = (1 - this.constructionProgress) * 24
+    this.visualRoot.y = (1 - this.constructionProgress) * 14
+    this.updateConstructionMask()
     this.drawConstructionOverlay()
 
     if (this.constructionProgress >= 1) {
       this.state = 'active'
       this.visualRoot.y = 0
+      this.updateConstructionMask()
       this.constructionOverlay.clear()
       this.drawBody()
       this.emit('construction_complete', this)
@@ -339,6 +349,15 @@ export class Building extends Phaser.GameObjects.Container {
     this.constructionOverlay.strokeRect(-w / 2, h / 2 - fillH, w, fillH)
   }
 
+  private updateConstructionMask(): void {
+    const w = this.def.footprint.w * TILE_SIZE
+    const h = this.def.footprint.h * TILE_SIZE + 22
+    const revealH = h * this.constructionProgress
+    this.constructionMaskShape.clear()
+    this.constructionMaskShape.fillStyle(0xffffff, 1)
+    this.constructionMaskShape.fillRect(-w / 2 - 10, h / 2 - revealH, w + 20, revealH + 8)
+  }
+
   // ── Private: visuals ─────────────────────────────────────────
 
   private drawBody(): void {
@@ -356,35 +375,15 @@ export class Building extends Phaser.GameObjects.Container {
     const left = adjustBrightness(color, 6)
     const right = adjustBrightness(color, -24)
 
-    // Roof
-    g.fillStyle(roof, 1)
-    g.beginPath()
-    g.moveTo(0, baseY - wallH)
-    g.lineTo(halfW, baseY - wallH / 2)
-    g.lineTo(0, baseY)
-    g.lineTo(-halfW, baseY - wallH / 2)
-    g.closePath()
-    g.fillPath()
-
-    // Left wall
+    // Base walls (front-facing prism) with lighter roof strip.
     g.fillStyle(left, 1)
-    g.beginPath()
-    g.moveTo(-halfW, baseY - wallH / 2)
-    g.lineTo(0, baseY)
-    g.lineTo(0, baseY + wallH * 0.45)
-    g.lineTo(-halfW, baseY + wallH * 0.45 - wallH / 2)
-    g.closePath()
-    g.fillPath()
-
-    // Right wall
-    g.fillStyle(right, 1)
-    g.beginPath()
-    g.moveTo(0, baseY)
-    g.lineTo(halfW, baseY - wallH / 2)
-    g.lineTo(halfW, baseY + wallH * 0.45 - wallH / 2)
-    g.lineTo(0, baseY + wallH * 0.45)
-    g.closePath()
-    g.fillPath()
+    g.fillRect(-halfW, baseY - wallH * 0.7, halfW * 2, wallH * 1.15)
+    g.fillStyle(right, 0.35)
+    g.fillRect(0, baseY - wallH * 0.7, halfW, wallH * 1.15)
+    g.fillStyle(roof, 1)
+    g.fillRect(-halfW, baseY - wallH * 0.85, halfW * 2, wallH * 0.22)
+    g.lineStyle(1, adjustBrightness(roof, 25), 0.7)
+    g.lineBetween(-halfW + 2, baseY - wallH * 0.82, halfW - 2, baseY - wallH * 0.82)
 
     this.drawCategoryIcon(halfW * 2, wallH * 2)
     this.drawDamageOverlay(pct)
@@ -434,15 +433,13 @@ export class Building extends Phaser.GameObjects.Container {
     // Per-building-id specifics first
     switch (this.def.id) {
       case 'construction_yard':
-        // Crane arm + dangling hook
-        g.lineStyle(2, 0xdddddd, 0.8)
-        g.lineBetween(-hw * 0.3, hh * 0.3, -hw * 0.3, -hh * 0.6)  // mast
-        g.lineBetween(-hw * 0.3, -hh * 0.6, hw * 0.4, -hh * 0.6)  // arm
-        g.lineBetween(hw * 0.4, -hh * 0.6, hw * 0.4, -hh * 0.1)   // cable
-        g.fillStyle(0xdddddd, 0.7)
-        g.fillRect(hw * 0.3, -hh * 0.1, 6, 4)                      // hook base
+        // Crane tower + triangle jib
+        g.fillStyle(0xdddddd, 0.85)
+        g.fillRect(-hw * 0.35, -hh * 0.6, 6, hh * 1.0)
+        g.fillTriangle(-hw * 0.2, -hh * 0.55, hw * 0.38, -hh * 0.55, hw * 0.1, -hh * 0.75)
         g.lineStyle(1.5, 0xdddddd, 0.8)
-        g.lineBetween(hw * 0.33, hh * 0.13, hw * 0.53, hh * 0.13) // hook curve
+        g.lineBetween(hw * 0.2, -hh * 0.55, hw * 0.2, -hh * 0.12)
+        g.fillCircle(hw * 0.2, -hh * 0.08, 2)
         return
       case 'barracks':
         // Door arch + flag pole
@@ -478,6 +475,17 @@ export class Building extends Phaser.GameObjects.Container {
         g.fillStyle(0xd4a017, 0.8)
         g.fillRect(-5, hh * 0.15, 4, 3)
         g.fillRect(2, hh * 0.25, 3, 3)
+        return
+      case 'power_plant':
+      case 'tesla_reactor':
+      case 'nuclear_reactor':
+        // Cooling tower circle + stack
+        g.fillStyle(0x9aabbc, 0.9)
+        g.fillEllipse(0, -hh * 0.2, hw * 0.85, hh * 0.55)
+        g.fillStyle(0x667788, 0.9)
+        g.fillRect(hw * 0.35, -hh * 0.55, 6, hh * 0.5)
+        g.fillStyle(0x99aabb, 0.5)
+        g.fillCircle(hw * 0.4, -hh * 0.62, 5)
         return
       case 'tesla_coil':
         // Tall spike with electric arc at top
@@ -564,13 +572,13 @@ export class Building extends Phaser.GameObjects.Container {
         break
 
       case 'defense':
-        // Crosshair
-        g.lineStyle(2, 0xff4444, 0.85)
-        g.lineBetween(-hw * 0.4, 0, hw * 0.4, 0)
-        g.lineBetween(0, -hh * 0.4, 0, hh * 0.4)
-        g.strokeCircle(0, 0, r)
-        g.fillStyle(0xff4444, 0.6)
-        g.fillCircle(0, 0, 2)
+        // Small gunbox + barrel
+        g.fillStyle(0x666666, 0.9)
+        g.fillRect(-8, -8, 16, 16)
+        g.fillStyle(0x333333, 1)
+        g.fillRect(2, -2, 11, 4)
+        g.lineStyle(1, 0xff5555, 0.7)
+        g.strokeRect(-8, -8, 16, 16)
         break
 
       case 'tech':
@@ -713,6 +721,7 @@ export class Building extends Phaser.GameObjects.Container {
       if (!nearest) return
 
       this.emit('fire_at_target', this, nearest)
+      this.playDefenseMuzzleFlash(nearest.x, nearest.y)
       this.attackCooldown = 1 / attack.fireRate
 
       if (this.def.id === 'grand_cannon') {
@@ -723,6 +732,27 @@ export class Building extends Phaser.GameObjects.Container {
           targetCategory: nearest.def?.category ?? 'unknown',
         })
       }
+    })
+  }
+
+  private playDefenseMuzzleFlash(targetX: number, targetY: number): void {
+    const iso = cartToScreen(this.x, this.y)
+    const flash = this.scene.add.graphics()
+    const dir = new Phaser.Math.Vector2(targetX - this.x, targetY - this.y)
+    if (dir.lengthSq() < 0.0001) dir.set(1, 0)
+    dir.normalize()
+    const sx = iso.x + dir.x * 10
+    const sy = iso.y - 10 + dir.y * 6
+    flash.fillStyle(0xffee66, 0.95)
+    flash.fillCircle(sx, sy, 3)
+    flash.lineStyle(2, 0xffbb44, 0.9)
+    flash.lineBetween(sx, sy, sx + dir.x * 10, sy + dir.y * 6)
+    flash.setDepth(60)
+    this.scene.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: 120,
+      onComplete: () => flash.destroy(),
     })
   }
 }

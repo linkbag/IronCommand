@@ -84,14 +84,17 @@ export class Unit extends Phaser.GameObjects.Container {
   // Visuals
   facing = 0 // 0: NE, 1: SE, 2: SW, 3: NW
   private visualRoot: Phaser.GameObjects.Container
-  private bodySprite: Phaser.GameObjects.Image
-  private turretSprite: Phaser.GameObjects.Image | null
+  private bodyGraphic: Phaser.GameObjects.Graphics
+  private turretGraphic: Phaser.GameObjects.Graphics
+  private muzzleFlash: Phaser.GameObjects.Graphics
   private shadowEllipse: Phaser.GameObjects.Ellipse
   private healthBar: Phaser.GameObjects.Graphics
   private selectionCircle: Phaser.GameObjects.Graphics
+  private selectionPulseTween: Phaser.Tweens.Tween | null = null
   private isSelected: boolean
   private factionColor: number
   private labelText: Phaser.GameObjects.Text
+  private weaponFxTimer = 0
   private turretFacing = 1 // 0: NE, 1: SE, 2: SW, 3: NW
 
   constructor(
@@ -138,11 +141,9 @@ export class Unit extends Phaser.GameObjects.Container {
     const shadowW = this.def.category === 'infantry' ? 20 : this.def.category === 'aircraft' ? 18 : 26
     const shadowH = this.def.category === 'infantry' ? 8 : this.def.category === 'aircraft' ? 6 : 10
     this.shadowEllipse = scene.add.ellipse(0, this.def.category === 'aircraft' ? 9 : 5, shadowW, shadowH, 0x000000, 0.3)
-    this.bodySprite = scene.add.image(0, this.def.category === 'aircraft' ? -8 : 0, this.def.spriteKey).setOrigin(0.5, 0.75)
-    this.turretSprite = null
-    if (this.scene.textures.exists(`${this.def.spriteKey}_turret_iso_se`)) {
-      this.turretSprite = scene.add.image(0, this.def.category === 'aircraft' ? -8 : 0, `${this.def.spriteKey}_turret_iso_se`).setOrigin(0.5, 0.75)
-    }
+    this.bodyGraphic = scene.add.graphics()
+    this.turretGraphic = scene.add.graphics()
+    this.muzzleFlash = scene.add.graphics()
     this.healthBar = scene.add.graphics()
     this.labelText = scene.add.text(0, 0, this.getLabel(), {
       fontSize: '6px',
@@ -151,19 +152,22 @@ export class Unit extends Phaser.GameObjects.Container {
     }).setOrigin(0.5, 0.5)
     this.labelText.y = -22
 
-    if (this.turretSprite) {
-      this.visualRoot.add([this.selectionCircle, this.shadowEllipse, this.bodySprite, this.turretSprite, this.healthBar, this.labelText])
-    } else {
-      this.visualRoot.add([this.selectionCircle, this.shadowEllipse, this.bodySprite, this.healthBar, this.labelText])
-    }
+    this.visualRoot.add([
+      this.selectionCircle,
+      this.shadowEllipse,
+      this.bodyGraphic,
+      this.turretGraphic,
+      this.muzzleFlash,
+      this.healthBar,
+      this.labelText,
+    ])
     this.add(this.visualRoot)
 
     this.drawBody()
     this.drawTurret()
     this.drawHealthBar()
     this.drawSelectionCircle()
-    this.bodySprite.setTint(this.factionColor)
-    this.turretSprite?.setTint(this.factionColor)
+    this.muzzleFlash.setVisible(false)
     this.syncRenderTransform()
 
     scene.add.existing(this)
@@ -217,6 +221,23 @@ export class Unit extends Phaser.GameObjects.Container {
   setSelected(selected: boolean): void {
     this.isSelected = selected
     this.drawSelectionCircle()
+    if (selected) {
+      this.selectionPulseTween?.stop()
+      this.selectionCircle.setAlpha(0.75)
+      this.selectionPulseTween = this.scene.tweens.add({
+        targets: this.selectionCircle,
+        alpha: { from: 0.45, to: 1 },
+        scaleX: { from: 0.95, to: 1.08 },
+        scaleY: { from: 0.95, to: 1.08 },
+        duration: 360,
+        yoyo: true,
+        repeat: -1,
+      })
+    } else {
+      this.selectionPulseTween?.stop()
+      this.selectionPulseTween = null
+      this.selectionCircle.setAlpha(1).setScale(1)
+    }
   }
 
   takeDamage(amount: number, _sourcePlayerId: number): void {
@@ -323,6 +344,10 @@ export class Unit extends Phaser.GameObjects.Container {
     if (this.state === 'dying') return
 
     this.attackCooldown = Math.max(0, this.attackCooldown - delta / 1000)
+    this.weaponFxTimer = Math.max(0, this.weaponFxTimer - delta)
+    if (this.weaponFxTimer <= 0 && this.muzzleFlash.visible) {
+      this.muzzleFlash.setVisible(false)
+    }
 
     // Iron Curtain invulnerability timer
     if (this.invulnerable && this.invulnerableTimer > 0) {
@@ -384,13 +409,15 @@ export class Unit extends Phaser.GameObjects.Container {
     // Emit event for EntityManager / combat system
     this.emit('unit_died', this)
 
-    // Small explosion flash
+    // Explosion flash + ring
     const flash = this.scene.add.graphics()
     const isInfantry = this.def.category === 'infantry'
     const radius = isInfantry ? 8 : 20
     const screenPos = cartToScreen(this.x, this.y)
-    flash.fillStyle(0xff8800, 1)
+    flash.fillStyle(0xff6622, 1)
     flash.fillCircle(screenPos.x, screenPos.y, radius)
+    flash.lineStyle(3, 0xffaa33, 0.95)
+    flash.strokeCircle(screenPos.x, screenPos.y, radius * 0.7)
     flash.setDepth(50)
 
     this.scene.tweens.add({
@@ -398,7 +425,7 @@ export class Unit extends Phaser.GameObjects.Container {
       alpha: 0,
       scaleX: 2,
       scaleY: 2,
-      duration: 400,
+      duration: 520,
       onComplete: () => flash.destroy(),
     })
 
@@ -578,6 +605,7 @@ export class Unit extends Phaser.GameObjects.Container {
       }
       if (nearest && nearestDist <= rangePixels) {
         this.emit('fire_at_target', this, nearest)
+        this.playWeaponEffect(nearest.x, nearest.y)
         this.updateTurretFacingFromVector(nearest.x - this.x, nearest.y - this.y)
         this.attackCooldown = 1 / this.def.attack!.fireRate
       }
@@ -689,6 +717,7 @@ export class Unit extends Phaser.GameObjects.Container {
       const cooldown = 1 / (this.def.attack.fireRate * this.getVeterancyFireRateMultiplier())
       this.attackCooldown = cooldown
       this.emit('fire_at_target', this, this.target)
+      this.playWeaponEffect(this.target.x, this.target.y)
     }
   }
 
@@ -859,6 +888,7 @@ export class Unit extends Phaser.GameObjects.Container {
           this.cargoLoads += 1
           this.cargoValue += isGems ? GEMS_PER_LOAD : ORE_PER_LOAD
           this.emit('harvest_ore', tilePos, ORE_HARVEST_RATE)
+          this.playHarvestScoopFx(isGems === true)
         }
       } else if (oreAmount <= 0) {
         // No ore here — find next ore field
@@ -923,35 +953,83 @@ export class Unit extends Phaser.GameObjects.Container {
   }
 
   private drawBody(): void {
-    const isoKey = `${this.def.spriteKey}_iso_${this.getFacingSuffix()}`
-    const fallbackKey = `${this.def.spriteKey}_iso_se`
-    if (this.scene.textures.exists(isoKey)) {
-      this.bodySprite.setTexture(isoKey)
-    } else if (this.scene.textures.exists(fallbackKey)) {
-      this.bodySprite.setTexture(fallbackKey)
-    } else {
-      this.bodySprite.setTexture(this.def.spriteKey)
+    const g = this.bodyGraphic
+    g.clear()
+    g.y = this.def.category === 'aircraft' ? -8 : 0
+    g.rotation = this.getFacingRotation(this.facing)
+    const main = this.factionColor
+    const light = adjustBrightness(main, 30)
+    const dark = adjustBrightness(main, -40)
+
+    if (this.def.category === 'infantry') {
+      g.fillStyle(0xf0d0b0, 1)
+      g.fillCircle(0, -9, 2.5)
+      g.fillStyle(main, 1)
+      g.fillRect(-2.5, -7, 5, 8)
+      g.fillStyle(dark, 1)
+      g.fillRect(-2.5, 1, 2, 5)
+      g.fillRect(0.5, 1, 2, 5)
+      return
     }
-    this.bodySprite.setTint(this.factionColor)
+
+    if (this.def.category === 'aircraft') {
+      g.fillStyle(light, 1)
+      g.fillTriangle(0, -10, -12, 8, 12, 8)
+      g.fillStyle(dark, 0.9)
+      g.fillRect(-2, 6, 4, 7)
+      return
+    }
+
+    if (this.def.category === 'harvester') {
+      g.fillStyle(main, 1)
+      g.fillRect(-11, -6, 22, 12)
+      g.fillStyle(light, 1)
+      g.fillRect(-8, -9, 16, 4)
+      g.fillStyle(dark, 1)
+      g.fillRect(8, -2, 8, 4)
+      g.fillRect(14, -5, 3, 10)
+      return
+    }
+
+    if (this.def.category === 'naval') {
+      g.fillStyle(main, 1)
+      g.fillEllipse(0, 0, 28, 12)
+      g.fillStyle(light, 0.95)
+      g.fillRect(-4, -8, 8, 6)
+      return
+    }
+
+    // Vehicle / tank fallback.
+    g.fillStyle(main, 1)
+    g.fillRect(-10, -6, 20, 12)
+    g.fillStyle(light, 1)
+    g.fillRect(-8, -9, 16, 4)
   }
 
   private drawTurret(): void {
-    if (!this.turretSprite) return
-    const dirs: Array<'ne' | 'se' | 'sw' | 'nw'> = ['ne', 'se', 'sw', 'nw']
-    const suffix = dirs[this.turretFacing] ?? 'se'
-    const key = `${this.def.spriteKey}_turret_iso_${suffix}`
-    if (this.scene.textures.exists(key)) {
-      this.turretSprite.setTexture(key)
-      this.turretSprite.setVisible(true)
-    } else {
-      this.turretSprite.setVisible(false)
-    }
-    this.turretSprite.setTint(this.factionColor)
-  }
+    const g = this.turretGraphic
+    g.clear()
+    g.y = this.def.category === 'aircraft' ? -8 : 0
+    g.rotation = this.getFacingRotation(this.turretFacing)
+    g.setVisible(true)
 
-  private getFacingSuffix(): 'ne' | 'se' | 'sw' | 'nw' {
-    const dirs: Array<'ne' | 'se' | 'sw' | 'nw'> = ['ne', 'se', 'sw', 'nw']
-    return dirs[this.facing] ?? 'se'
+    if (this.def.category === 'vehicle' || this.def.category === 'harvester') {
+      g.fillStyle(adjustBrightness(this.factionColor, -15), 1)
+      g.fillCircle(0, 0, 4)
+      g.lineStyle(2, adjustBrightness(this.factionColor, -40), 1)
+      g.lineBetween(2, 0, 13, 0)
+      return
+    }
+
+    if ((this.def.category as string) === 'defense') {
+      g.fillStyle(0x777777, 1)
+      g.fillCircle(0, 0, 4)
+      g.lineStyle(2, 0x333333, 1)
+      g.lineBetween(2, 0, 11, 0)
+      return
+    }
+
+    g.setVisible(false)
   }
 
   private updateFacingFromVector(dx: number, dy: number): void {
@@ -959,20 +1037,22 @@ export class Unit extends Phaser.GameObjects.Container {
     const angle = Math.atan2(dy, dx)
     const normalized = (angle + Math.PI * 2) % (Math.PI * 2)
     this.facing = Math.round(normalized / (Math.PI / 2)) % 4
-    if (!this.turretSprite) {
-      this.turretFacing = this.facing
-    }
+    this.turretFacing = this.facing
     this.drawBody()
     this.drawTurret()
   }
 
   private updateTurretFacingFromVector(dx: number, dy: number): void {
-    if (!this.turretSprite) return
     if (Math.abs(dx) < 0.0001 && Math.abs(dy) < 0.0001) return
     const angle = Math.atan2(dy, dx)
     const normalized = (angle + Math.PI * 2) % (Math.PI * 2)
     this.turretFacing = Math.round(normalized / (Math.PI / 2)) % 4
     this.drawTurret()
+  }
+
+  private getFacingRotation(dir: number): number {
+    const rotations = [-Math.PI / 4, Math.PI / 4, (3 * Math.PI) / 4, (-3 * Math.PI) / 4]
+    return rotations[dir] ?? Math.PI / 4
   }
 
   private syncRenderTransform(): void {
@@ -998,10 +1078,10 @@ export class Unit extends Phaser.GameObjects.Container {
     // Background
     g.fillStyle(0x333333, 0.8)
     g.fillRect(-barW / 2, barY, barW, barH)
-    const isFriendly = this.playerId === 0
-    const barColor = isFriendly
-      ? (pct > 0.3 ? 0x4ade80 : 0x2f9e5a)
-      : (pct > 0.3 ? 0xe94560 : 0x9f2436)
+    const barColor =
+      pct > 0.6 ? 0x4ade80
+      : pct > 0.3 ? 0xffcc33
+      : 0xe94560
     g.fillStyle(barColor, 1)
     g.fillRect(-barW / 2, barY, barW * pct, barH)
 
@@ -1026,7 +1106,7 @@ export class Unit extends Phaser.GameObjects.Container {
     if (!this.isSelected) return
     const w = this.def.category === 'infantry' ? 22 : this.def.category === 'aircraft' ? 20 : 30
     const h = this.def.category === 'infantry' ? 10 : this.def.category === 'aircraft' ? 8 : 14
-    g.lineStyle(2, 0x00ffff, 0.9)
+    g.lineStyle(2, 0x66ffff, 1)
     // Segmented ellipse to mimic RA2 dashed selection ring.
     for (let i = 0; i < 10; i++) {
       if (i % 2 === 1) continue
@@ -1036,6 +1116,44 @@ export class Unit extends Phaser.GameObjects.Container {
       g.moveTo(Math.cos(a0) * (w / 2), 2 + Math.sin(a0) * (h / 2))
       g.lineTo(Math.cos(a1) * (w / 2), 2 + Math.sin(a1) * (h / 2))
       g.strokePath()
+    }
+  }
+
+  private playWeaponEffect(targetX: number, targetY: number): void {
+    const muzzleX = 12
+    const muzzleY = this.def.category === 'aircraft' ? -8 : 0
+    const dx = targetX - this.x
+    const dy = targetY - this.y
+    const len = Math.min(18, Math.hypot(dx, dy) * 0.15)
+    const dirX = Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 ? 1 : dx / Math.hypot(dx, dy)
+    const dirY = Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 ? 0 : dy / Math.hypot(dx, dy)
+
+    this.muzzleFlash.clear()
+    this.muzzleFlash.setVisible(true)
+    this.muzzleFlash.lineStyle(2, 0xfff06a, 0.95)
+    this.muzzleFlash.lineBetween(muzzleX, muzzleY, muzzleX + dirX * len, muzzleY + dirY * len)
+    this.muzzleFlash.fillStyle(0xffee66, 0.95)
+    this.muzzleFlash.fillCircle(muzzleX, muzzleY, 3)
+    this.weaponFxTimer = 80
+  }
+
+  private playHarvestScoopFx(isGems: boolean): void {
+    const color = isGems ? 0x6bd4ff : 0xd4a017
+    for (let i = 0; i < 4; i++) {
+      const dot = this.scene.add.graphics()
+      const start = cartToScreen(this.x, this.y)
+      const offX = Phaser.Math.Between(-6, 6)
+      dot.fillStyle(color, 0.9)
+      dot.fillCircle(start.x + offX, start.y + 2, 2)
+      dot.setDepth(48)
+      this.scene.tweens.add({
+        targets: dot,
+        alpha: 0,
+        y: dot.y - Phaser.Math.Between(8, 14),
+        x: dot.x + Phaser.Math.Between(-4, 4),
+        duration: 240,
+        onComplete: () => dot.destroy(),
+      })
     }
   }
 }

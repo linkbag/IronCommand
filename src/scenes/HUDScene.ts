@@ -78,6 +78,7 @@ interface BuildBtn extends Phaser.GameObjects.Container {
   _readyTxt: Phaser.GameObjects.Text
   _hotkeyTxt: Phaser.GameObjects.Text
   _hotkey: string
+  _hoverTween?: Phaser.Tweens.Tween
 }
 
 // ── Dynamic build catalogue based on faction side ──────────────────────
@@ -159,6 +160,7 @@ export class HUDScene extends Phaser.Scene {
   private buildZones: Phaser.GameObjects.Zone[] = []
 
   private buildProgress:  Map<string, number> = new Map()  // 0-1
+  private buildProgressDisplay: Map<string, number> = new Map() // smoothed 0-1
   private buildTimers:    Map<string, number> = new Map()  // ms remaining
   private unitBuildQueues: Map<BuildTab, Array<string>> = new Map()
   private pendingPlace:   Set<string>         = new Set()  // ready to place
@@ -570,12 +572,30 @@ export class HUDScene extends Phaser.Scene {
 
       zone.on('pointerover', () => {
         const g = ctr._bg; g.clear()
-        g.fillStyle(0x2a3a6e, 1)
+        g.fillStyle(0x314985, 1)
         g.fillRect(-BTN_W / 2, -BTN_H / 2, BTN_W, BTN_H)
-        g.lineStyle(2, HUD_ACCENT, 1)
+        g.fillStyle(0xffffff, 0.07)
+        g.fillRect(-BTN_W / 2 + 1, -BTN_H / 2 + 1, BTN_W - 2, 10)
+        g.lineStyle(2, 0xff88aa, 1)
         g.strokeRect(-BTN_W / 2, -BTN_H / 2, BTN_W, BTN_H)
+        ctr._hoverTween?.stop()
+        ctr._hoverTween = this.tweens.add({
+          targets: ctr,
+          scaleX: 1.035,
+          scaleY: 1.035,
+          duration: 100,
+        })
       })
-      zone.on('pointerout',  () => this.drawItemBg(ctr))
+      zone.on('pointerout',  () => {
+        this.drawItemBg(ctr)
+        ctr._hoverTween?.stop()
+        ctr._hoverTween = this.tweens.add({
+          targets: ctr,
+          scaleX: 1,
+          scaleY: 1,
+          duration: 100,
+        })
+      })
       zone.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
         const button = ptr.button ?? 0
         if (button === 2) {
@@ -1184,6 +1204,7 @@ export class HUDScene extends Phaser.Scene {
 
   private startBuildItem(item: BuildableItem): void {
     this.buildProgress.set(item.id, 0)
+    this.buildProgressDisplay.set(item.id, 0)
     // 1.5x faster than default build times
     this.buildTimers.set(item.id, item.buildTime * 1000 / 1.5)
     this.creditsPaid.set(item.id, 0)
@@ -1420,7 +1441,6 @@ export class HUDScene extends Phaser.Scene {
     if (now < until) return
     this.alertCooldownUntil.set(dedupeKey, now + 2500)
 
-    const cornerX = 16
     const palette: Record<AlertType, { bg: number; text: string; border: number }> = {
       success: { bg: 0x0a1a0a, text: '#4ade80', border: 0x4ade80 },
       warning: { bg: 0x1a1800, text: '#ffdd44', border: 0xddbb00 },
@@ -1453,7 +1473,7 @@ export class HUDScene extends Phaser.Scene {
     })
 
     const alertY = 12 + this.alertEntries.length * ALERT_SPACING
-    const ctr    = this.add.container(cornerX, alertY)
+    const ctr    = this.add.container(0, alertY)
     ctr.setDepth(200)
 
     const iconTxt = this.add.text(0, 0, iconByType[type], {
@@ -1477,18 +1497,20 @@ export class HUDScene extends Phaser.Scene {
     bgGfx.strokeRect(0, -ph / 2, pw, ph)
 
     ctr.add([bgGfx, iconTxt, txt])
-    ctr.setAlpha(0).setScale(0.85)
+    const finalX = this.scale.width - SIDEBAR_W - pw - 16
+    ctr.setX(this.scale.width + pw + 16).setAlpha(0).setScale(0.95)
 
     const entry: AlertEntry = { container: ctr, createdAt: now }
     this.alertEntries.push(entry)
 
-    this.tweens.add({ targets: ctr, alpha: 1, scale: 1, duration: 180, ease: 'Back.Out' })
+    this.tweens.add({ targets: ctr, x: finalX, alpha: 1, scale: 1, duration: 240, ease: 'Cubic.Out' })
 
     entry.tween = this.tweens.add({
       targets: ctr,
+      x: finalX + 40,
       alpha: 0,
       delay: 3500,
-      duration: 500,
+      duration: 450,
       onComplete: () => {
         ctr.destroy()
         this.alertEntries = this.alertEntries.filter(e => e.container !== ctr)
@@ -1757,7 +1779,8 @@ export class HUDScene extends Phaser.Scene {
     if (Math.abs(diff) < 0.5) {
       this.displayedCredits = this.targetCredits
     } else {
-      this.displayedCredits += diff * Math.min(1, delta / 150)
+      const accel = Phaser.Math.Clamp(delta / 120, 0.05, 0.45)
+      this.displayedCredits += diff * accel
     }
     this.creditsText.setText(`$ ${Math.max(0, Math.floor(this.displayedCredits)).toLocaleString()}`)
 
@@ -1765,6 +1788,9 @@ export class HUDScene extends Phaser.Scene {
     if (this.displayedCredits - prevDisplayed > 5) {
       this.creditsText.setColor('#44ff66')
       this.time.delayedCall(200, () => this.creditsText.setColor('#ffd700'))
+    } else if (prevDisplayed - this.displayedCredits > 5) {
+      this.creditsText.setColor('#ff7777')
+      this.time.delayedCall(180, () => this.creditsText.setColor('#ffd700'))
     }
   }
 
@@ -1962,6 +1988,7 @@ export class HUDScene extends Phaser.Scene {
 
     done.forEach(id => {
       this.buildProgress.delete(id)
+      this.buildProgressDisplay.delete(id)
       this.buildTimers.delete(id)
       this.creditsPaid.delete(id)
       const item = this.buildItems.find(i => i.id === id)!
@@ -1987,7 +2014,10 @@ export class HUDScene extends Phaser.Scene {
     // Update button visuals
     this.buildBtns.forEach(btn => {
       const item    = btn._item
-      const prog    = this.buildProgress.get(item.id) ?? 0
+      const targetProg = this.buildProgress.get(item.id) ?? 0
+      const prevProg = this.buildProgressDisplay.get(item.id) ?? 0
+      const prog = Phaser.Math.Linear(prevProg, targetProg, 0.35)
+      this.buildProgressDisplay.set(item.id, prog)
       const pending = this.pendingPlace.has(item.id)
       const bar     = btn._progressBar
       bar.clear()
@@ -1997,12 +2027,12 @@ export class HUDScene extends Phaser.Scene {
         const radius = 14
         const start = -Math.PI / 2
         const end = start + Math.PI * 2 * prog
-        bar.fillStyle(0x4ade80, 0.2)
+        bar.fillStyle(0x4ade80, 0.24)
         bar.slice(0, 0, radius, start, end, false)
         bar.lineTo(0, 0)
         bar.closePath()
         bar.fillPath()
-        bar.lineStyle(2, 0x4ade80, 0.95)
+        bar.lineStyle(2, 0x8dffb4, 0.98)
         bar.beginPath()
         bar.arc(0, 0, radius, start, end, false)
         bar.strokePath()
