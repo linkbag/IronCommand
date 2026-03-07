@@ -18,16 +18,19 @@ const MINIMAP_TERRAIN_COLORS: Record<number, number> = {
   7: 0x1e4d1a,  // FOREST
 }
 
-const FOG_OVERLAY_ALPHA: Record<FogState, number> = {
-  [FogState.HIDDEN]:   1.0,
-  [FogState.EXPLORED]: 0.45,
-  [FogState.VISIBLE]:  0.0,
+function dimColor(color: number): number {
+  const r = (color >> 16) & 0xff
+  const g = (color >> 8) & 0xff
+  const b = color & 0xff
+  return ((r >> 1) << 16) | ((g >> 1) << 8) | (b >> 1)
 }
 
 export interface MinimapEntityDot {
   worldX: number
   worldY: number
   color: number   // player color
+  isFriendly?: boolean
+  alwaysVisible?: boolean
 }
 
 export class Minimap {
@@ -89,21 +92,27 @@ export class Minimap {
   update(time: number, entityDots: MinimapEntityDot[]): void {
     if (time - this.lastUpdateTime >= this.UPDATE_INTERVAL) {
       this.lastUpdateTime = time
+      this.renderTerrainToTexture()
       this.renderOverlay(entityDots)
     }
     this.drawViewport()
   }
 
-  // ── Terrain (baked once into RenderTexture) ────────────────────
+  // ── Terrain (redrawn on update so fog sync is exact) ────────────
 
   private renderTerrainToTexture(): void {
     const { tiles, width, height } = this.gameMap.data
+    this.terrainRender.clear()
     const g = this.scene.add.graphics()
 
     for (let row = 0; row < height; row++) {
       for (let col = 0; col < width; col++) {
         const tile = tiles[row][col]
-        const color = MINIMAP_TERRAIN_COLORS[tile.terrain] ?? 0x4a7c3f
+        const terrainColor = MINIMAP_TERRAIN_COLORS[tile.terrain] ?? 0x4a7c3f
+        const color =
+          tile.fogState === FogState.HIDDEN ? 0x000000
+          : tile.fogState === FogState.EXPLORED ? dimColor(terrainColor)
+          : terrainColor
         const px = Math.floor(col * this.scaleX)
         const py = Math.floor(row * this.scaleY)
         const pw = Math.max(1, Math.ceil(this.scaleX))
@@ -117,34 +126,22 @@ export class Minimap {
     g.destroy()
   }
 
-  // ── Overlay (fog + units, updated periodically) ───────────────
+  // ── Overlay (units only, updated periodically) ─────────────────
 
   private renderOverlay(entityDots: MinimapEntityDot[]): void {
     const g = this.overlay
     g.clear()
 
-    const { tiles, width, height } = this.gameMap.data
-
-    // Fog overlay
-    for (let row = 0; row < height; row++) {
-      for (let col = 0; col < width; col++) {
-        const tile = tiles[row][col]
-        const alpha = FOG_OVERLAY_ALPHA[tile.fogState]
-        if (alpha > 0) {
-          const px = this.screenX + col * this.scaleX
-          const py = this.screenY + row * this.scaleY
-          const pw = Math.max(1, Math.ceil(this.scaleX))
-          const ph = Math.max(1, Math.ceil(this.scaleY))
-          g.fillStyle(0x000000, alpha)
-          g.fillRect(px, py, pw, ph)
-        }
-      }
-    }
-
     // Entity dots
     const mapW = this.gameMap.worldWidth
     const mapH = this.gameMap.worldHeight
+    const map = this.gameMap.data
     for (const dot of entityDots) {
+      const tc = Math.floor(dot.worldX / TILE_SIZE)
+      const tr = Math.floor(dot.worldY / TILE_SIZE)
+      const fog = map.tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
+      const canShow = dot.alwaysVisible || dot.isFriendly || fog === FogState.VISIBLE
+      if (!canShow) continue
       const px = this.screenX + (dot.worldX / mapW) * this.size
       const py = this.screenY + (dot.worldY / mapH) * this.size
       g.fillStyle(dot.color)

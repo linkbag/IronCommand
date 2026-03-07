@@ -153,7 +153,7 @@ export class Pathfinder {
     }
 
     // Goal must be reachable
-    if (!isAir && !this.mapRef.isPassable(goal.col, goal.row)) {
+    if (!this.isWalkable(goal.col, goal.row, isAir)) {
       // Try to find nearest passable tile to goal
       const fallback = this.nearestPassable(goal, 3)
       if (!fallback) return []
@@ -195,14 +195,14 @@ export class Pathfinder {
         const nc = current.col + dir.dc
         const nr = current.row + dir.dr
         if (nc < 0 || nc >= width || nr < 0 || nr >= height) continue
-        if (!isAir && !this.mapRef.isPassable(nc, nr)) continue
+        if (!this.isWalkable(nc, nr, isAir)) continue
 
         const nKey = encodeCoord(nc, nr, width)
         if (closedSet.has(nKey)) continue
 
         // Diagonal: only if both cardinal neighbors are passable
         if (dir.cost > 1 && !isAir) {
-          if (!this.mapRef.isPassable(current.col, nr) || !this.mapRef.isPassable(nc, current.row)) continue
+          if (!this.isWalkable(current.col, nr, false) || !this.isWalkable(nc, current.row, false)) continue
         }
 
         const g = current.g + dir.cost
@@ -226,12 +226,19 @@ export class Pathfinder {
         for (let dr = -r; dr <= r; dr++) {
           if (Math.abs(dc) !== r && Math.abs(dr) !== r) continue
           const c = origin.col + dc, row = origin.row + dr
-          if (c >= 0 && c < width && row >= 0 && row < height && this.mapRef.isPassable(c, row)) {
+          if (c >= 0 && c < width && row >= 0 && row < height && this.isWalkable(c, row, false)) {
             return { col: c, row }
           }
         }
       }
     }
     return null
+  }
+
+  // Pathing intentionally ignores fog of war; only terrain walkability blocks movement.
+  private isWalkable(col: number, row: number, isAir: boolean): boolean {
+    if (isAir) return true
+    const tile = this.mapRef.getTile(col, row)
+    return !!tile && tile.passable
   }
 }

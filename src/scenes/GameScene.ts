@@ -1327,7 +1327,46 @@ export class GameScene extends Phaser.Scene {
   private handleRightClick(ptr: Phaser.Input.Pointer): void {
     ;(ptr.event as MouseEvent | undefined)?.preventDefault()
     this.cursorMode = 'normal'
-    this.deselectAll()
+    if (this.selectedIds.size === 0) return
+
+    const worldX = ptr.worldX
+    const worldY = ptr.worldY
+    const appendOrder = this.waypointMode
+
+    const clickRadius = TILE_SIZE * 2
+    const enemies = this.entityMgr.getEnemyUnitsInRange(worldX, worldY, clickRadius, 0)
+    const enemyBuilds = this.entityMgr.getEnemyBuildingsInRange(worldX, worldY, clickRadius, 0)
+    const attackTarget = enemies[0] ?? enemyBuilds[0]
+    if (attackTarget) {
+      this.selectedIds.forEach(id => {
+        const unit = this.entityMgr.getUnit(id)
+        if (!unit || unit.playerId !== 0) return
+        unit.giveOrder({ type: 'attack', targetEntityId: attackTarget.id }, appendOrder)
+      })
+      this.showUnitAck('Attacking')
+      return
+    }
+
+    const clickTile = this.gameMap.worldToTile(worldX, worldY)
+    const tile = this.gameMap.getTile(clickTile.col, clickTile.row)
+    let harvestIssued = false
+    let moveIssued = false
+
+    this.selectedIds.forEach(id => {
+      const unit = this.entityMgr.getUnit(id)
+      if (!unit || unit.playerId !== 0) return
+
+      if (tile?.terrain === TerrainType.ORE && unit.def.category === 'harvester') {
+        unit.giveOrder({ type: 'harvest', target: { x: worldX, y: worldY } }, appendOrder)
+        harvestIssued = true
+      } else {
+        unit.giveOrder({ type: 'move', target: { x: worldX, y: worldY } }, appendOrder)
+        moveIssued = true
+      }
+    })
+
+    if (harvestIssued && !moveIssued) this.showUnitAck('Harvesting')
+    else this.showUnitAck('Moving out')
   }
 
   // ── Unit acknowledgment text popup ─────────────────────────────
