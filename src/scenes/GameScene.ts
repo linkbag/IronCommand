@@ -72,6 +72,7 @@ export class GameScene extends Phaser.Scene {
   // ── Last alert position (for Space key) ────────────────────
   private lastAlertPos: Position | null = null
   private fogAnchorSources: Array<{ pos: TileCoord; range: number }> = []
+  private playerSpawnIndexById: Map<number, number> = new Map()
   private waypointMode = false
   private paratrooperCooldownMs: Map<number, number> = new Map()
   private gameOver = false
@@ -100,6 +101,7 @@ export class GameScene extends Phaser.Scene {
     this.cursorMode = 'normal'
     this.lastAlertPos = null
     this.fogAnchorSources = []
+    this.playerSpawnIndexById = new Map()
     this.waypointMode = false
     this.paratrooperCooldownMs = new Map()
     this.gameOver = false
@@ -317,9 +319,7 @@ export class GameScene extends Phaser.Scene {
     this.selectionRect.setScrollFactor(0).setDepth(200)
 
     // ── 14. Camera at player spawn (convert to iso coords) ────
-    const spawnIdx = (cfg.playerSpawn >= 0 && cfg.playerSpawn < this.gameMap.data.startPositions.length)
-      ? cfg.playerSpawn : 0
-    const startPos = this.gameMap.data.startPositions[spawnIdx]
+    const startPos = this.getSpawnPositionForPlayer(this.gameState.localPlayerId)
     if (startPos) {
       // Convert Cartesian start position to isometric screen position (with map offset)
       const screenStart = cartToScreen(startPos.x, startPos.y)
@@ -341,8 +341,7 @@ export class GameScene extends Phaser.Scene {
 
     // Keep a visible "home sector" so the opening view is playable on large monitors.
     // Without this, the initial revealed area can be too small and appear as a black screen.
-    const localSpawn = this.gameMap.data.startPositions[this.gameState.localPlayerId]
-      ?? this.gameMap.data.startPositions[0]
+    const localSpawn = this.getSpawnPositionForPlayer(this.gameState.localPlayerId)
     if (localSpawn) {
       const anchorRange = Math.max(
         16,
@@ -374,15 +373,6 @@ export class GameScene extends Phaser.Scene {
     console.log('[IC] Map world size:', this.gameMap.worldWidth, 'x', this.gameMap.worldHeight)
     console.log('[IC] Iso world size:', this.gameMap.isoWorldWidth, 'x', this.gameMap.isoWorldHeight)
     console.log('[IC] Iso offsetX:', this.gameMap.isoOffsetX)
-
-    // Debug: draw a bright marker at camera center to verify rendering works
-    const dbg = this.add.graphics()
-    dbg.setDepth(999)
-    const cx = this.camX + this.scale.width / 2
-    const cy = this.camY + this.scale.height / 2
-    dbg.fillStyle(0xff00ff, 1)
-    dbg.fillCircle(cx, cy, 20)
-    console.log('[IC] Debug marker at:', cx, cy)
 
     // Prevent browser context menu on the game canvas
     this.game.canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault())
@@ -892,15 +882,18 @@ export class GameScene extends Phaser.Scene {
     const { startPositions } = this.gameMap.data
     const { tiles, width, height } = this.gameMap.data
     const players = this.gameState.players
+    const spawnAssignment = this.computeSpawnAssignment(players.length, startPositions.length)
 
     console.log('[IC] spawnStartingEntities:', players.length, 'players,',
       startPositions.length, 'start positions')
 
     players.forEach((player, i) => {
-      const spawnWorld = startPositions[i] ?? startPositions[0]
+      const spawnIdx = spawnAssignment[i] ?? 0
+      this.playerSpawnIndexById.set(player.id, spawnIdx)
+      const spawnWorld = startPositions[spawnIdx] ?? startPositions[0]
       const st = this.gameMap.worldToTile(spawnWorld.x, spawnWorld.y)
       const side: FactionSide = FACTIONS[player.faction].side
-      console.log(`[IC] Player ${player.id} (${player.faction}/${side}) spawn: tile(${st.col},${st.row}) world(${spawnWorld.x},${spawnWorld.y})`)
+      console.log(`[IC] Player ${player.id} (${player.faction}/${side}) spawn[${spawnIdx}]: tile(${st.col},${st.row}) world(${spawnWorld.x},${spawnWorld.y})`)
 
       // Construction Yard — start active
       const cy = this.entityMgr.createBuilding(player.id, 'construction_yard',
@@ -1317,7 +1310,7 @@ export class GameScene extends Phaser.Scene {
 
     // H — snap camera to home base
     this.input.keyboard!.on('keydown-H', () => {
-      const home = this.gameMap.data.startPositions[0]
+      const home = this.getSpawnPositionForPlayer(this.gameState.localPlayerId)
       if (home) {
         const isoHome = cartToScreen(home.x, home.y)
         this.camX = isoHome.x - this.scale.width / 2
@@ -1925,6 +1918,41 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private computeSpawnAssignment(playerCount: number, spawnCount: number): number[] {
+    const assignments: number[] = []
+    if (spawnCount <= 0 || playerCount <= 0) return assignments
+
+    const preferred = this.skirmishCfg.playerSpawn
+    const localSpawnIdx = Number.isInteger(preferred) && preferred >= 0 && preferred < spawnCount
+      ? preferred
+      : 0
+
+    const used = new Set<number>()
+    assignments[0] = localSpawnIdx
+    used.add(localSpawnIdx)
+
+    let cursor = 0
+    for (let i = 1; i < playerCount; i++) {
+      while (used.has(cursor) && cursor < spawnCount) cursor++
+      const idx = cursor < spawnCount ? cursor : localSpawnIdx
+      assignments[i] = idx
+      used.add(idx)
+    }
+
+    return assignments
+  }
+
+  private getSpawnPositionForPlayer(playerId: number): Position | null {
+    const positions = this.gameMap.data.startPositions
+    if (positions.length === 0) return null
+    const idx = this.playerSpawnIndexById.get(playerId)
+    if (idx !== undefined && idx >= 0 && idx < positions.length) {
+      return positions[idx]
+    }
+    const fallback = Phaser.Math.Clamp(playerId, 0, positions.length - 1)
+    return positions[fallback] ?? positions[0]
+  }
+
   private spawnParatrooperDrop(playerId: number): void {
     const enemyTargets = this.entityMgr.getAllBuildings().filter(b => b.playerId !== playerId && b.state !== 'dying')
     let cx: number
@@ -1934,7 +1962,7 @@ export class GameScene extends Phaser.Scene {
       cx = t.x + Phaser.Math.Between(-TILE_SIZE * 2, TILE_SIZE * 2)
       cy = t.y + Phaser.Math.Between(-TILE_SIZE * 2, TILE_SIZE * 2)
     } else {
-      const spawn = this.gameMap.data.startPositions[playerId] ?? this.gameMap.data.startPositions[0]
+      const spawn = this.getSpawnPositionForPlayer(playerId) ?? this.gameMap.data.startPositions[0]
       cx = spawn.x + TILE_SIZE * 4
       cy = spawn.y + TILE_SIZE * 2
     }
