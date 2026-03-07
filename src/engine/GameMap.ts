@@ -10,6 +10,7 @@ import {
   ORE_REGEN_RATE,
 } from '../types'
 import type { TileData, GameMap as GameMapData, Position, TileCoord } from '../types'
+import { tileToScreen, screenToTile, getIsoWorldBounds } from './IsoUtils'
 
 // ── Terrain color palette ─────────────────────────────────────
 
@@ -676,6 +677,34 @@ export class GameMap {
       x: col * TILE_SIZE + TILE_SIZE / 2,
       y: row * TILE_SIZE + TILE_SIZE / 2,
     }
+  }
+
+  /** Convert isometric screen position to tile coordinates */
+  isoToTile(isoX: number, isoY: number): TileCoord {
+    const { col, row } = screenToTile(isoX, isoY)
+    return { col: Math.floor(col), row: Math.floor(row) }
+  }
+
+  /** Convert tile coordinates to isometric screen position (tile center) */
+  tileToIso(col: number, row: number): Position {
+    const pos = tileToScreen(col, row)
+    // Offset to tile center
+    return { x: pos.x + 32, y: pos.y + 16 }
+  }
+
+  /** Isometric world width in pixels */
+  get isoWorldWidth(): number {
+    return getIsoWorldBounds(this.data.width, this.data.height).width
+  }
+
+  /** Isometric world height in pixels */
+  get isoWorldHeight(): number {
+    return getIsoWorldBounds(this.data.width, this.data.height).height
+  }
+
+  /** X offset for isometric rendering (row 0 starts offset to the right) */
+  get isoOffsetX(): number {
+    return getIsoWorldBounds(this.data.width, this.data.height).offsetX
   }
 
   isPassable(col: number, row: number, isAir = false): boolean {

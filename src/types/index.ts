@@ -194,6 +194,8 @@ export type GameEvent =
 // ── Config ────────────────────────────────────────────────────
 
 export const TILE_SIZE = 32
+export const ISO_TILE_W = 64   // isometric diamond width (2:1 ratio)
+export const ISO_TILE_H = 32   // isometric diamond height
 export const MAP_DEFAULT_WIDTH = 128
 export const MAP_DEFAULT_HEIGHT = 128
 export const STARTING_CREDITS = 10000

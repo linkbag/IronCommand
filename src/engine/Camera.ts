@@ -1,4 +1,5 @@
 import Phaser from 'phaser'
+import { isoToCart } from './IsoUtils'
 
 // ── RTS Camera ────────────────────────────────────────────────
 // Edge scrolling, middle-mouse pan, scroll zoom, WASD/arrows, snap
@@ -223,6 +224,16 @@ export class RTSCamera {
 
   /** Returns the visible world rect */
   get worldView(): Phaser.Geom.Rectangle { return this.cam.worldView }
+
+  /**
+   * Convert screen mouse coordinates to Cartesian world position
+   * via isometric transform. Use this for input handling.
+   * ptr.worldX/worldY are in isometric screen space;
+   * this returns Cartesian game coordinates.
+   */
+  screenToWorld(isoWorldX: number, isoWorldY: number): { x: number; y: number } {
+    return isoToCart(isoWorldX, isoWorldY)
+  }
 
   private clampScroll(): void {
     this.cam.scrollX = Phaser.Math.Clamp(

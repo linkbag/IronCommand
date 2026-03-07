@@ -16,6 +16,7 @@ import { BUILDING_DEFS, getPowerBuildingDefId, NEUTRAL_BUILDING_IDS, SUPERWEAPON
 import { UNIT_DEFS, getHarvesterDefId, getBasicInfantryDefId } from '../entities/UnitDefs'
 import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, FactionSide } from '../types'
 import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL_PLAYER_ID } from '../types'
+import { isoToCart, getIsoWorldBounds } from '../engine/IsoUtils'
 import { FACTIONS } from '../data/factions'
 import type { SkirmishConfig } from './SetupScene'
 
@@ -376,10 +377,10 @@ export class GameScene extends Phaser.Scene {
     // Handle camera target from HUD (minimap click, H key)
     this.handleCameraTarget()
 
-    // Camera scroll + clamp to map bounds
+    // Camera scroll + clamp to isometric map bounds
     this.handleCameraScroll(delta)
-    const maxX = this.gameMap.worldWidth - this.scale.width
-    const maxY = this.gameMap.worldHeight - this.scale.height
+    const maxX = this.gameMap.isoWorldWidth - this.scale.width
+    const maxY = this.gameMap.isoWorldHeight - this.scale.height
     this.camX = Phaser.Math.Clamp(this.camX, 0, Math.max(0, maxX))
     this.camY = Phaser.Math.Clamp(this.camY, 0, Math.max(0, maxY))
     this.cameras.main.setScroll(this.camX, this.camY)
@@ -1368,11 +1369,17 @@ export class GameScene extends Phaser.Scene {
     })
   }
 
+  // ── Isometric input helper ───────────────────────────────────────
+
+  /** Convert pointer's world position (isometric screen space) to Cartesian game coordinates */
+  private ptrToCart(ptr: Phaser.Input.Pointer): { x: number; y: number } {
+    return isoToCart(ptr.worldX, ptr.worldY)
+  }
+
   // ── Ctrl+click force fire ──────────────────────────────────────
 
   private handleForceAttack(ptr: Phaser.Input.Pointer): void {
-    const worldX = ptr.worldX
-    const worldY = ptr.worldY
+    const { x: worldX, y: worldY } = this.ptrToCart(ptr)
 
     // Find ANY entity near click (friendly or enemy)
     const allUnits = this.entityMgr.getUnitsInRange(worldX, worldY, TILE_SIZE * 2)
@@ -1391,8 +1398,7 @@ export class GameScene extends Phaser.Scene {
 
   // ── Sell mode click ──────────────────────────────────────────────
   private handleSellClick(ptr: Phaser.Input.Pointer): void {
-    const worldX = ptr.worldX
-    const worldY = ptr.worldY
+    const { x: worldX, y: worldY } = this.ptrToCart(ptr)
     const buildings = this.entityMgr.getBuildingsInRange(worldX, worldY, TILE_SIZE * 2)
       .filter(b => b.playerId === 0 && b.state !== 'dying')
 
@@ -1413,8 +1419,7 @@ export class GameScene extends Phaser.Scene {
 
   // ── Repair mode click ─────────────────────────────────────────────
   private handleRepairClick(ptr: Phaser.Input.Pointer): void {
-    const worldX = ptr.worldX
-    const worldY = ptr.worldY
+    const { x: worldX, y: worldY } = this.ptrToCart(ptr)
     const buildings = this.entityMgr.getBuildingsInRange(worldX, worldY, TILE_SIZE * 2)
       .filter(b => b.playerId === 0 && b.state !== 'dying')
 
@@ -1445,8 +1450,7 @@ export class GameScene extends Phaser.Scene {
     }
     if (this.selectedIds.size === 0) return
 
-    const worldX = ptr.worldX
-    const worldY = ptr.worldY
+    const { x: worldX, y: worldY } = this.ptrToCart(ptr)
     const appendOrder = this.waypointMode
 
     const clickRadius = TILE_SIZE * 2
@@ -1521,7 +1525,9 @@ export class GameScene extends Phaser.Scene {
     this.isLeftPointerActive = true
     this.isDragging = false
     this.dragAnchorScreen = { x: ptr.x, y: ptr.y }
-    this.dragAnchorWorld  = { x: ptr.worldX, y: ptr.worldY }
+    // Store Cartesian world position (converted from isometric screen space)
+    const cart = this.ptrToCart(ptr)
+    this.dragAnchorWorld  = { x: cart.x, y: cart.y }
   }
 
   private updateDragSelect(ptr: Phaser.Input.Pointer): void {
@@ -1546,10 +1552,12 @@ export class GameScene extends Phaser.Scene {
 
   private endDragSelect(ptr: Phaser.Input.Pointer): void {
     const shiftHeld = !!(ptr.event as MouseEvent)?.shiftKey
-    const x1 = Math.min(this.dragAnchorWorld.x, ptr.worldX)
-    const y1 = Math.min(this.dragAnchorWorld.y, ptr.worldY)
-    const x2 = Math.max(this.dragAnchorWorld.x, ptr.worldX)
-    const y2 = Math.max(this.dragAnchorWorld.y, ptr.worldY)
+    // Convert current pointer position from isometric to Cartesian
+    const cartEnd = this.ptrToCart(ptr)
+    const x1 = Math.min(this.dragAnchorWorld.x, cartEnd.x)
+    const y1 = Math.min(this.dragAnchorWorld.y, cartEnd.y)
+    const x2 = Math.max(this.dragAnchorWorld.x, cartEnd.x)
+    const y2 = Math.max(this.dragAnchorWorld.y, cartEnd.y)
 
     if (!shiftHeld) this.deselectAll()
 
@@ -1566,8 +1574,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleLeftClick(ptr: Phaser.Input.Pointer): void {
-    const worldX = ptr.worldX
-    const worldY = ptr.worldY
+    const { x: worldX, y: worldY } = this.ptrToCart(ptr)
     const shiftHeld = !!(ptr.event as MouseEvent)?.shiftKey
 
     // Attack-move mode consumes the next left click.
