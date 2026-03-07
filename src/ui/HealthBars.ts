@@ -4,6 +4,7 @@
 // ============================================================
 
 import Phaser from 'phaser'
+import { cartToIso } from '../engine/IsoUtils'
 
 export interface EntityForHP {
   id: string
@@ -45,8 +46,9 @@ export class HealthBars {
       const pct = e.hp / e.maxHp
       if (pct >= 1 && !this.selectedIds.has(e.id)) continue
 
-      const sx = e.x - this.BAR_W / 2
-      const sy = e.y + this.BAR_OFF_Y
+      const isoPos = cartToIso(e.x, e.y)
+      const sx = isoPos.x - this.BAR_W / 2
+      const sy = isoPos.y + this.BAR_OFF_Y
 
       // ── Health bar ───────────────────────────────────────────────
       // Background shadow
@@ -73,7 +75,7 @@ export class HealthBars {
       // ── Veterancy chevrons ───────────────────────────────────────
       const rank = e.veterancy ?? 0
       if (rank > 0 && this.selectedIds.has(e.id)) {
-        this.drawChevrons(g, e.x, sy - this.CHEV_H - this.CHEV_GAP, rank)
+        this.drawChevrons(g, isoPos.x, sy - this.CHEV_H - this.CHEV_GAP, rank)
       }
     }
   }

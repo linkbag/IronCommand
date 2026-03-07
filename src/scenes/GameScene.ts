@@ -16,7 +16,7 @@ import { BUILDING_DEFS, getPowerBuildingDefId, NEUTRAL_BUILDING_IDS, SUPERWEAPON
 import { UNIT_DEFS, getHarvesterDefId, getBasicInfantryDefId } from '../entities/UnitDefs'
 import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, FactionSide } from '../types'
 import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL_PLAYER_ID } from '../types'
-import { isoToCart, getIsoWorldBounds } from '../engine/IsoUtils'
+import { cartToIso, isoToCart, getIsoWorldBounds } from '../engine/IsoUtils'
 import { FACTIONS } from '../data/factions'
 import type { SkirmishConfig } from './SetupScene'
 
@@ -63,7 +63,6 @@ export class GameScene extends Phaser.Scene {
   private isDragging = false
   private isLeftPointerActive = false
   private dragAnchorScreen = { x: 0, y: 0 }
-  private dragAnchorWorld = { x: 0, y: 0 }
   private cursorMode: string = 'normal'
 
   // ── Selection ───────────────────────────────────────────────
@@ -1525,9 +1524,6 @@ export class GameScene extends Phaser.Scene {
     this.isLeftPointerActive = true
     this.isDragging = false
     this.dragAnchorScreen = { x: ptr.x, y: ptr.y }
-    // Store Cartesian world position (converted from isometric screen space)
-    const cart = this.ptrToCart(ptr)
-    this.dragAnchorWorld  = { x: cart.x, y: cart.y }
   }
 
   private updateDragSelect(ptr: Phaser.Input.Pointer): void {
@@ -1552,19 +1548,20 @@ export class GameScene extends Phaser.Scene {
 
   private endDragSelect(ptr: Phaser.Input.Pointer): void {
     const shiftHeld = !!(ptr.event as MouseEvent)?.shiftKey
-    // Convert current pointer position from isometric to Cartesian
-    const cartEnd = this.ptrToCart(ptr)
-    const x1 = Math.min(this.dragAnchorWorld.x, cartEnd.x)
-    const y1 = Math.min(this.dragAnchorWorld.y, cartEnd.y)
-    const x2 = Math.max(this.dragAnchorWorld.x, cartEnd.x)
-    const y2 = Math.max(this.dragAnchorWorld.y, cartEnd.y)
+    const sx1 = Math.min(this.dragAnchorScreen.x, ptr.x)
+    const sy1 = Math.min(this.dragAnchorScreen.y, ptr.y)
+    const sx2 = Math.max(this.dragAnchorScreen.x, ptr.x)
+    const sy2 = Math.max(this.dragAnchorScreen.y, ptr.y)
 
     if (!shiftHeld) this.deselectAll()
 
-    // Select player 0 units within the drag rect
+    // Drag box is drawn in screen space, so test unit positions in iso screen space.
     const units = this.entityMgr.getUnitsForPlayer(0)
     units.forEach(u => {
-      if (u.x >= x1 && u.x <= x2 && u.y >= y1 && u.y <= y2) {
+      const iso = cartToIso(u.x, u.y)
+      const screenX = iso.x - this.camX
+      const screenY = iso.y - this.camY
+      if (screenX >= sx1 && screenX <= sx2 && screenY >= sy1 && screenY <= sy2) {
         this.selectedIds.add(u.id)
         u.setSelected(true)
       }

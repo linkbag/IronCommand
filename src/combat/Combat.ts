@@ -10,6 +10,7 @@ import type { EntityManager } from '../entities/EntityManager'
 import type { AttackStats } from '../types'
 import { DamageType } from '../types'
 import { TILE_SIZE } from '../types'
+import { cartToIso } from '../engine/IsoUtils'
 
 // Type multipliers: who's strong against what
 // RA2-authentic type multipliers — balanced for realistic counter-play:
@@ -434,16 +435,18 @@ export class Combat extends Phaser.Events.EventEmitter {
     const radius = radii[size]
     const duration = { small: 300, medium: 500, large: 700 }[size]
 
+    const iso = cartToIso(x, y)
+
     // Fireball
     const fireball = this.scene.add.graphics()
     fireball.fillStyle(0xff6600, 1)
-    fireball.fillCircle(x, y, radius)
+    fireball.fillCircle(iso.x, iso.y, radius)
     fireball.setDepth(45)
 
     // Inner bright core
     const core = this.scene.add.graphics()
     core.fillStyle(0xffff88, 1)
-    core.fillCircle(x, y, radius * 0.5)
+    core.fillCircle(iso.x, iso.y, radius * 0.5)
     core.setDepth(46)
 
     this.scene.tweens.add({
@@ -465,8 +468,8 @@ export class Combat extends Phaser.Events.EventEmitter {
       const smoke = this.scene.add.graphics()
       const angle = Math.random() * Math.PI * 2
       const dist = Math.random() * radius * 0.8
-      const sx = x + Math.cos(angle) * dist
-      const sy = y + Math.sin(angle) * dist
+      const sx = iso.x + Math.cos(angle) * dist
+      const sy = iso.y + Math.sin(angle) * dist
       smoke.fillStyle(0x555555, 0.7)
       smoke.fillCircle(sx, sy, Math.random() * radius * 0.4 + 3)
       smoke.setDepth(44)
@@ -494,7 +497,8 @@ export class Combat extends Phaser.Events.EventEmitter {
         bombIdsToRemove.push(targetId)
         continue
       }
-      bomb.marker.setPosition(bomb.target.x, bomb.target.y)
+      const markerPos = cartToIso(bomb.target.x, bomb.target.y)
+      bomb.marker.setPosition(markerPos.x, markerPos.y)
     }
 
     for (const targetId of bombIdsToRemove) {
@@ -519,8 +523,11 @@ export class Combat extends Phaser.Events.EventEmitter {
       } else {
         const px = Phaser.Math.Linear(p.fromX, p.toX, p.progress)
         const py = Phaser.Math.Linear(p.fromY, p.toY, p.progress)
+        const isoPos = cartToIso(px, py)
+        const isoFrom = cartToIso(p.fromX, p.fromY)
         p.graphic.clear()
-        this.drawProjectileGraphic(p.graphic, px, py, p.attack.damageType, p.fromX, p.fromY)
+        p.graphic.setDepth(30 + isoPos.y * 0.01)
+        this.drawProjectileGraphic(p.graphic, isoPos.x, isoPos.y, p.attack.damageType, isoFrom.x, isoFrom.y)
       }
     }
 
@@ -549,7 +556,8 @@ export class Combat extends Phaser.Events.EventEmitter {
     marker.lineStyle(1.5, 0xff6600, 1)
     marker.strokeCircle(0, 0, 5)
     marker.lineBetween(0, -5, 0, -9)
-    marker.setPosition(target.x, target.y)
+    const targetPos = cartToIso(target.x, target.y)
+    marker.setPosition(targetPos.x, targetPos.y)
 
     const pulseTween = this.scene.tweens.add({
       targets: marker,
@@ -632,12 +640,13 @@ export class Combat extends Phaser.Events.EventEmitter {
   private createRadiationZone(x: number, y: number, sourcePlayerId: number): void {
     const radiusPixels = 2 * TILE_SIZE
     const now = this.scene.time.now
+    const iso = cartToIso(x, y)
     const graphic = this.scene.add.graphics()
     graphic.setDepth(34)
     graphic.fillStyle(0x99ff44, 0.22)
-    graphic.fillCircle(x, y, radiusPixels)
+    graphic.fillCircle(iso.x, iso.y, radiusPixels)
     graphic.lineStyle(1.5, 0xccff66, 0.5)
-    graphic.strokeCircle(x, y, radiusPixels)
+    graphic.strokeCircle(iso.x, iso.y, radiusPixels)
 
     this.scene.tweens.add({
       targets: graphic,
@@ -693,8 +702,9 @@ export class Combat extends Phaser.Events.EventEmitter {
     onHit: () => void,
   ): void {
     const g = this.scene.add.graphics()
-    g.setDepth(30)
-    this.drawProjectileGraphic(g, fromX, fromY, attack.damageType)
+    const fromIso = cartToIso(fromX, fromY)
+    g.setDepth(30 + fromIso.y * 0.01)
+    this.drawProjectileGraphic(g, fromIso.x, fromIso.y, attack.damageType)
 
     this.projectiles.push({
       graphic: g,
@@ -787,9 +797,10 @@ export class Combat extends Phaser.Events.EventEmitter {
       [DamageType.FIRE]: 0xff6600,
       [DamageType.ELECTRIC]: 0x66aaff,
     }
+    const iso = cartToIso(x, y)
     const flash = this.scene.add.graphics()
     flash.fillStyle(flashColors[dmgType] ?? 0xffff44, 0.9)
-    flash.fillCircle(x, y, 4)
+    flash.fillCircle(iso.x, iso.y, 4)
     flash.setDepth(35)
     this.scene.tweens.add({
       targets: flash,
@@ -851,17 +862,19 @@ export class Combat extends Phaser.Events.EventEmitter {
   }
 
   private createChainArc(fromX: number, fromY: number, toX: number, toY: number): void {
+    const fromIso = cartToIso(fromX, fromY)
+    const toIso = cartToIso(toX, toY)
     const g = this.scene.add.graphics()
     g.setDepth(36)
     g.lineStyle(2, 0xaaddff, 0.9)
 
     const segments = 6
-    let px = fromX
-    let py = fromY
+    let px = fromIso.x
+    let py = fromIso.y
     for (let i = 1; i <= segments; i++) {
       const t = i / segments
-      const nx = Phaser.Math.Linear(fromX, toX, t) + (Math.random() - 0.5) * 8
-      const ny = Phaser.Math.Linear(fromY, toY, t) + (Math.random() - 0.5) * 8
+      const nx = Phaser.Math.Linear(fromIso.x, toIso.x, t) + (Math.random() - 0.5) * 8
+      const ny = Phaser.Math.Linear(fromIso.y, toIso.y, t) + (Math.random() - 0.5) * 8
       g.lineBetween(px, py, nx, ny)
       px = nx
       py = ny
