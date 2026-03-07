@@ -56,7 +56,11 @@ export class GameScene extends Phaser.Scene {
   // ── Camera ──────────────────────────────────────────────────
   private camX = 0
   private camY = 0
+  private camTargetX = 0
+  private camTargetY = 0
   private camSpeed = 400  // px/s
+  private camLerp = 0.16
+  private edgeFadeOverlay!: Phaser.GameObjects.Graphics
 
   // ── Input ───────────────────────────────────────────────────
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys
@@ -111,6 +115,8 @@ export class GameScene extends Phaser.Scene {
     this.selectedIds = new Set()
     this.camX = 0
     this.camY = 0
+    this.camTargetX = 0
+    this.camTargetY = 0
     this.cursorMode = 'normal'
     this.patrolAnchorByUnit = new Map()
     this.selectionPulseTweens.forEach(tw => tw.stop())
@@ -418,6 +424,7 @@ export class GameScene extends Phaser.Scene {
     this.selectionRect.setScrollFactor(0).setDepth(200)
     this.rallyOverlay = this.add.graphics()
     this.rallyOverlay.setScrollFactor(0).setDepth(190)
+    this.edgeFadeOverlay = this.add.graphics().setScrollFactor(0).setDepth(189)
 
     this.pauseOverlay = this.add.rectangle(
       this.scale.width / 2,
@@ -448,6 +455,8 @@ export class GameScene extends Phaser.Scene {
     const initMaxY = this.gameMap.isoWorldHeight - this.scale.height
     this.camX = Phaser.Math.Clamp(this.camX, 0, Math.max(0, initMaxX))
     this.camY = Phaser.Math.Clamp(this.camY, 0, Math.max(0, initMaxY))
+    this.camTargetX = this.camX
+    this.camTargetY = this.camY
     this.cameras.main.setScroll(this.camX, this.camY)
     } catch (e) { console.error('[IC] CRASH in section 13-14 (UI/camera):', e); throw e }
 
@@ -532,10 +541,16 @@ export class GameScene extends Phaser.Scene {
     this.handleCameraScroll(delta)
     const maxX = this.gameMap.isoWorldWidth - this.scale.width
     const maxY = this.gameMap.isoWorldHeight - this.scale.height
-    this.camX = Phaser.Math.Clamp(this.camX, 0, Math.max(0, maxX))
-    this.camY = Phaser.Math.Clamp(this.camY, 0, Math.max(0, maxY))
+    this.camTargetX = Phaser.Math.Clamp(this.camTargetX, 0, Math.max(0, maxX))
+    this.camTargetY = Phaser.Math.Clamp(this.camTargetY, 0, Math.max(0, maxY))
+    const lerpFactor = 1 - Math.pow(1 - this.camLerp, Math.max(1, delta / 16.67))
+    this.camX = Phaser.Math.Linear(this.camX, this.camTargetX, lerpFactor)
+    this.camY = Phaser.Math.Linear(this.camY, this.camTargetY, lerpFactor)
+    if (Math.abs(this.camX - this.camTargetX) < 0.4) this.camX = this.camTargetX
+    if (Math.abs(this.camY - this.camTargetY) < 0.4) this.camY = this.camTargetY
     this.cameras.main.setScroll(this.camX, this.camY)
     this.drawRallyOverlay()
+    this.drawEdgeBoundaryFade(Math.max(0, maxX), Math.max(0, maxY))
 
     // Pathfinder cache maintenance
     this.pathfinder.tick()
@@ -608,8 +623,8 @@ export class GameScene extends Phaser.Scene {
     const tx = this.registry.get('camTargetX') as number | undefined
     const ty = this.registry.get('camTargetY') as number | undefined
     if (tx !== undefined && ty !== undefined) {
-      this.camX = tx
-      this.camY = ty
+      this.camTargetX = tx
+      this.camTargetY = ty
       this.registry.remove('camTargetX')
       this.registry.remove('camTargetY')
     }
@@ -1549,8 +1564,8 @@ export class GameScene extends Phaser.Scene {
       const home = this.getSpawnPositionForPlayer(this.gameState.localPlayerId)
       if (home) {
         const isoHome = cartToScreen(home.x, home.y)
-        this.camX = isoHome.x - this.scale.width / 2
-        this.camY = isoHome.y - this.scale.height / 2
+        this.camTargetX = isoHome.x - this.scale.width / 2
+        this.camTargetY = isoHome.y - this.scale.height / 2
       }
     })
 
@@ -1799,6 +1814,23 @@ export class GameScene extends Phaser.Scene {
     })
   }
 
+  private showFloatingText(msg: string, screenX: number, screenY: number): void {
+    const text = this.add.text(screenX, screenY, msg, {
+      fontFamily: 'monospace',
+      fontSize: '10px',
+      color: '#66ffff',
+      stroke: '#001018',
+      strokeThickness: 3,
+    }).setScrollFactor(0).setDepth(220).setOrigin(0.5)
+    this.tweens.add({
+      targets: text,
+      y: text.y - 16,
+      alpha: 0,
+      duration: 850,
+      onComplete: () => text.destroy(),
+    })
+  }
+
   private startDragSelect(ptr: Phaser.Input.Pointer): void {
     this.isLeftPointerActive = true
     this.isDragging = false
@@ -1847,6 +1879,9 @@ export class GameScene extends Phaser.Scene {
     })
 
     this.syncSelectionState()
+    if (this.selectedIds.size > 1) {
+      this.showFloatingText(`${this.selectedIds.size} UNITS`, sx2 + 10, sy1 - 8)
+    }
   }
 
   private handleLeftClick(ptr: Phaser.Input.Pointer): void {
@@ -2111,8 +2146,42 @@ export class GameScene extends Phaser.Scene {
     if (ptr.y < edgeW)     dy -= speed * dt
     if (ptr.y > H - edgeW) dy += speed * dt
 
-    this.camX += dx
-    this.camY += dy
+    this.camTargetX += dx
+    this.camTargetY += dy
+  }
+
+  private drawEdgeBoundaryFade(maxX: number, maxY: number): void {
+    const g = this.edgeFadeOverlay
+    g.clear()
+    const w = this.scale.width
+    const h = this.scale.height
+    const fadeDist = 90
+    const leftAmt = Phaser.Math.Clamp(1 - this.camX / fadeDist, 0, 1)
+    const rightAmt = Phaser.Math.Clamp(1 - (maxX - this.camX) / fadeDist, 0, 1)
+    const topAmt = Phaser.Math.Clamp(1 - this.camY / fadeDist, 0, 1)
+    const botAmt = Phaser.Math.Clamp(1 - (maxY - this.camY) / fadeDist, 0, 1)
+
+    const drawSide = (amount: number, horizontal: boolean, invert: boolean) => {
+      if (amount <= 0) return
+      const strips = 14
+      for (let i = 0; i < strips; i++) {
+        const t = (i + 1) / strips
+        const alpha = amount * 0.16 * (1 - t)
+        g.fillStyle(0x000000, alpha)
+        if (horizontal) {
+          const y = invert ? h - t * fadeDist : (t - 1 / strips) * fadeDist
+          g.fillRect(0, y, w, fadeDist / strips + 1)
+        } else {
+          const x = invert ? w - t * fadeDist : (t - 1 / strips) * fadeDist
+          g.fillRect(x, 0, fadeDist / strips + 1, h)
+        }
+      }
+    }
+
+    drawSide(leftAmt, false, false)
+    drawSide(rightAmt, false, true)
+    drawSide(topAmt, true, false)
+    drawSide(botAmt, true, true)
   }
 
   // ── Win / Loss ────────────────────────────────────────────────
