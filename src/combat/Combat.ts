@@ -93,18 +93,41 @@ interface Projectile {
   onHit: () => void
 }
 
+interface TimedBomb {
+  target: Unit | Building
+  sourceUnitId: string
+  sourcePlayerId: number
+  attack: AttackStats
+  vetMult: number
+  marker: Phaser.GameObjects.Graphics
+  pulseTween: Phaser.Tweens.Tween
+  fuse: Phaser.Time.TimerEvent
+}
+
+interface RadiationZone {
+  x: number
+  y: number
+  radiusPixels: number
+  sourcePlayerId: number
+  expiresAt: number
+  nextTickAt: number
+  graphic: Phaser.GameObjects.Graphics
+}
+
 export class Combat extends Phaser.Events.EventEmitter {
   private scene: Phaser.Scene
   private em: EntityManager
   private projectiles: Projectile[]
-  private chronoEraseProgress: Map<string, number>
+  private timedBombs: Map<string, TimedBomb>
+  private radiationZones: RadiationZone[]
 
   constructor(scene: Phaser.Scene, entityManager: EntityManager) {
     super()
     this.scene = scene
     this.em = entityManager
     this.projectiles = []
-    this.chronoEraseProgress = new Map()
+    this.timedBombs = new Map()
+    this.radiationZones = []
 
     this.wireEntityManager()
   }
@@ -207,6 +230,28 @@ export class Combat extends Phaser.Events.EventEmitter {
     // RA2 Veterancy: damage multiplier for units
     const vetMult = (attacker instanceof Unit) ? attacker.getVeterancyDamageMultiplier() : 1.0
 
+    // Crazy Ivan: plants timed explosives instead of immediate damage.
+    if (attacker instanceof Unit && attacker.def.id === 'crazy_ivan') {
+      this.placeTimedBomb(attacker, target, attack, vetMult)
+      return
+    }
+
+    // Suicide units: range-0 attacks explode on contact, apply AoE, and die.
+    if (attacker instanceof Unit && attack.range === 0) {
+      const center = { x: target.x, y: target.y }
+      const scaledDamage = Math.ceil(attack.damage * vetMult)
+      this.dealSplashDamage(
+        center,
+        attack.splash * TILE_SIZE,
+        scaledDamage,
+        attack.damageType,
+        attacker.playerId,
+      )
+      this.createExplosion(center.x, center.y, this.getBlastSizeFromSplash(attack.splash))
+      attacker.takeDamage(attacker.hp + scaledDamage, attacker.playerId)
+      return
+    }
+
     if (attack.projectileSpeed <= 0) {
       // Hitscan — instant damage
       const baseDmg = this.calculateDamage(
@@ -240,8 +285,9 @@ export class Combat extends Phaser.Events.EventEmitter {
           target.id,
         )
       }
-      if (attacker instanceof Unit) {
-        this.applyUnitSpecialOnHit(attacker, target)
+
+      if (attacker instanceof Unit && attacker.def.id === 'desolator') {
+        this.createRadiationZone(target.x, target.y, attacker.playerId)
       }
     } else {
       // Muzzle flash at attacker position
@@ -286,8 +332,9 @@ export class Combat extends Phaser.Events.EventEmitter {
                 target.id,
               )
             }
-            if (attacker instanceof Unit) {
-              this.applyUnitSpecialOnHit(attacker, target)
+
+            if (attacker instanceof Unit && attacker.def.id === 'desolator') {
+              this.createRadiationZone(target.x, target.y, attacker.playerId)
             }
           }
           this.createExplosion(target.x, target.y, this.getExplosionSize(target))
@@ -399,6 +446,20 @@ export class Combat extends Phaser.Events.EventEmitter {
   update(delta: number): void {
     const dt = delta / 1000
     const toRemove: number[] = []
+    const bombIdsToRemove: string[] = []
+    this.updateRadiationZones()
+
+    for (const [targetId, bomb] of this.timedBombs.entries()) {
+      if (!this.isEntityAlive(bomb.target)) {
+        bombIdsToRemove.push(targetId)
+        continue
+      }
+      bomb.marker.setPosition(bomb.target.x, bomb.target.y)
+    }
+
+    for (const targetId of bombIdsToRemove) {
+      this.removeTimedBomb(targetId, true)
+    }
 
     for (let i = 0; i < this.projectiles.length; i++) {
       const p = this.projectiles[i]
@@ -435,6 +496,153 @@ export class Combat extends Phaser.Events.EventEmitter {
     this.em.on('fire_at_target', (attacker: Unit | Building, target: Unit | Building) => {
       this.resolveAttack(attacker, target)
     })
+  }
+
+  private placeTimedBomb(attacker: Unit, target: Unit | Building, attack: AttackStats, vetMult: number): void {
+    // Keep one active bomb per target to avoid stacking many fuses instantly.
+    if (this.timedBombs.has(target.id)) return
+
+    const marker = this.scene.add.graphics()
+    marker.setDepth(47)
+    marker.fillStyle(0x222222, 1)
+    marker.fillCircle(0, 0, 5)
+    marker.lineStyle(1.5, 0xff6600, 1)
+    marker.strokeCircle(0, 0, 5)
+    marker.lineBetween(0, -5, 0, -9)
+    marker.setPosition(target.x, target.y)
+
+    const pulseTween = this.scene.tweens.add({
+      targets: marker,
+      alpha: 0.25,
+      yoyo: true,
+      repeat: -1,
+      duration: 220,
+    })
+
+    const fuse = this.scene.time.delayedCall(3000, () => {
+      this.detonateTimedBomb(target.id)
+    })
+
+    this.timedBombs.set(target.id, {
+      target,
+      sourceUnitId: attacker.id,
+      sourcePlayerId: attacker.playerId,
+      attack,
+      vetMult,
+      marker,
+      pulseTween,
+      fuse,
+    })
+  }
+
+  private detonateTimedBomb(targetId: string): void {
+    const bomb = this.timedBombs.get(targetId)
+    if (!bomb) return
+    this.removeTimedBomb(targetId, false)
+
+    if (!this.isEntityAlive(bomb.target)) return
+
+    const center = { x: bomb.target.x, y: bomb.target.y }
+    const scaledDamage = Math.ceil(bomb.attack.damage * bomb.vetMult)
+    const damageAttack: AttackStats = { ...bomb.attack, damage: scaledDamage }
+
+    const hpBefore = bomb.target.hp
+    const directDamage = this.calculateDamage(
+      damageAttack,
+      this.getTargetCategory(bomb.target),
+      bomb.target.def.stats.armor,
+    )
+    bomb.target.takeDamage(directDamage, bomb.sourcePlayerId)
+
+    if (hpBefore > 0 && bomb.target.hp <= 0) {
+      const source = this.em.getUnit(bomb.sourceUnitId)
+      if (source) source.recordKill()
+    }
+
+    if (bomb.attack.splash > 0) {
+      this.dealSplashDamage(
+        center,
+        bomb.attack.splash * TILE_SIZE,
+        scaledDamage,
+        bomb.attack.damageType,
+        bomb.sourcePlayerId,
+        bomb.target.id,
+      )
+    }
+
+    this.createExplosion(center.x, center.y, this.getBlastSizeFromSplash(bomb.attack.splash))
+  }
+
+  private removeTimedBomb(targetId: string, cancelFuse: boolean): void {
+    const bomb = this.timedBombs.get(targetId)
+    if (!bomb) return
+
+    if (cancelFuse) {
+      bomb.fuse.remove(false)
+    }
+    bomb.pulseTween.stop()
+    bomb.marker.destroy()
+    this.timedBombs.delete(targetId)
+  }
+
+  private isEntityAlive(entity: Unit | Building): boolean {
+    return entity.hp > 0 && entity.state !== 'dying'
+  }
+
+  private createRadiationZone(x: number, y: number, sourcePlayerId: number): void {
+    const radiusPixels = 2 * TILE_SIZE
+    const now = this.scene.time.now
+    const graphic = this.scene.add.graphics()
+    graphic.setDepth(34)
+    graphic.fillStyle(0x99ff44, 0.22)
+    graphic.fillCircle(x, y, radiusPixels)
+    graphic.lineStyle(1.5, 0xccff66, 0.5)
+    graphic.strokeCircle(x, y, radiusPixels)
+
+    this.scene.tweens.add({
+      targets: graphic,
+      alpha: 0.45,
+      yoyo: true,
+      repeat: -1,
+      duration: 350,
+    })
+
+    this.radiationZones.push({
+      x,
+      y,
+      radiusPixels,
+      sourcePlayerId,
+      expiresAt: now + 5000,
+      nextTickAt: now + 500,
+      graphic,
+    })
+  }
+
+  private updateRadiationZones(): void {
+    const now = this.scene.time.now
+    const survivors: RadiationZone[] = []
+
+    for (const zone of this.radiationZones) {
+      if (now >= zone.expiresAt) {
+        zone.graphic.destroy()
+        continue
+      }
+
+      if (now >= zone.nextTickAt) {
+        zone.nextTickAt = now + 500
+        const units = this.em.getUnitsInRange(zone.x, zone.y, zone.radiusPixels)
+        for (const unit of units) {
+          if (!this.isEntityAlive(unit)) continue
+          if (unit.playerId === zone.sourcePlayerId) continue
+          if (unit.def.category !== 'infantry') continue
+          unit.takeDamage(12, zone.sourcePlayerId)
+        }
+      }
+
+      survivors.push(zone)
+    }
+
+    this.radiationZones = survivors
   }
 
   private spawnProjectile(
@@ -646,26 +854,9 @@ export class Combat extends Phaser.Events.EventEmitter {
     return 'medium'
   }
 
-  private isAirEntity(entity: Unit | Building): boolean {
-    return entity.def.category === 'aircraft'
-  }
-
-  private getEffectiveAttack(attacker: Unit | Building, target: Unit | Building): AttackStats {
-    const base = attacker.def.attack!
-
-    // Japan Mecha Walker: missiles for air, autocannon shells for ground.
-    if (attacker instanceof Unit && attacker.def.id === 'mecha_walker' && !this.isAirEntity(target)) {
-      return {
-        ...base,
-        damage: 95,
-        projectileSpeed: 620,
-        damageType: DamageType.EXPLOSIVE,
-        canAttackAir: false,
-        canAttackGround: true,
-        splash: 0.35,
-      }
-    }
-
-    return base
+  private getBlastSizeFromSplash(splashTiles: number): 'small' | 'medium' | 'large' {
+    if (splashTiles >= 3) return 'large'
+    if (splashTiles >= 1.5) return 'medium'
+    return 'small'
   }
 }
