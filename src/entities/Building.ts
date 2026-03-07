@@ -420,7 +420,7 @@ export class Building extends Phaser.GameObjects.Container {
 
   private updateRenderTransform(): void {
     const isoPos = cartToScreen(this.x, this.y)
-    this.visualRoot.setPosition(isoPos.x - this.x, isoPos.y - this.y)
+    this.visualRoot?.setPosition(isoPos.x - this.x, isoPos.y - this.y)
     this.setDepth(isoPos.y + 5)
     this.drawRallyLine()
   }

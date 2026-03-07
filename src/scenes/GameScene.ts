@@ -136,6 +136,7 @@ export class GameScene extends Phaser.Scene {
     const cfg = this.skirmishCfg
 
     // ── 1. Procedural map ─────────────────────────────────────
+    try {
     const mapDims: Record<string, number> = { small: 64, medium: 128, large: 256 }
     const mapSize = mapDims[cfg.mapSize] ?? 64
     const seed = cfg.mapSeed ?? Math.floor(Math.random() * 99999) + 1
@@ -143,22 +144,32 @@ export class GameScene extends Phaser.Scene {
     this.gameMap.renderTerrain()
     // NOTE: Don't pre-render fog as full black here. All tiles start HIDDEN.
     // updateFogOfWar() at the end of create() will reveal + render fog properly.
+    } catch (e) { console.error('[IC] CRASH in section 1 (map):', e); throw e }
 
     // ── 2. Pathfinder ─────────────────────────────────────────
+    try {
     this.pathfinder = new Pathfinder(this.gameMap)
 
     // Wire IRTSScene methods (Unit calls these via scene cast)
     this.findPath  = (from, to) => this.pathfinder.findPath(from, to)
     this.worldToTile = (x, y) => this.gameMap.worldToTile(x, y)
     this.tileToWorld = (col, row) => this.gameMap.tileToWorld(col, row)
+    } catch (e) { console.error('[IC] CRASH in section 2 (pathfinder):', e); throw e }
 
     // ── 3. Entity manager ─────────────────────────────────────
+    try {
     this.entityMgr = new EntityManager(this)
+    } catch (e) { console.error('[IC] CRASH in section 3 (entity manager):', e); throw e }
 
     // ── 4. Combat system ──────────────────────────────────────
+    try {
     this.combat = new Combat(this, this.entityMgr)
+    } catch (e) { console.error('[IC] CRASH in section 4 (combat):', e); throw e }
 
     // ── 5. Build player list ──────────────────────────────────
+    let allPlayers: Player[]
+    let aiPlayers: Player[]
+    try {
     const playerFaction = cfg.playerFaction
     const factionKeys = Object.keys(FACTIONS) as FactionId[]
 
@@ -169,7 +180,7 @@ export class GameScene extends Phaser.Scene {
       isAI: false, isDefeated: false, entities: [], buildQueue: [],
     }
 
-    const aiPlayers: Player[] = []
+    aiPlayers = []
     for (let i = 0; i < cfg.aiCount; i++) {
       const fac = factionKeys[(factionKeys.indexOf(playerFaction) + i + 1) % factionKeys.length]
       aiPlayers.push({
@@ -179,15 +190,17 @@ export class GameScene extends Phaser.Scene {
         isAI: true, isDefeated: false, entities: [], buildQueue: [],
       })
     }
-    const allPlayers = [humanPlayer, ...aiPlayers]
+    allPlayers = [humanPlayer, ...aiPlayers]
 
     // ── 5b. Alliance mode ─────────────────────────────────────
     this.entityMgr.setAllianceMode(
       cfg.gameMode === 'alliance',
       allPlayers.map(p => ({ id: p.id, faction: p.faction }))
     )
+    } catch (e) { console.error('[IC] CRASH in section 5 (players):', e); throw e }
 
     // ── 6. Economy ────────────────────────────────────────────
+    try {
     const playerIds = allPlayers.map(p => p.id)
     this.economy = new Economy(this.entityMgr, playerIds)
     // Patch if custom starting credits differ from default
@@ -200,11 +213,15 @@ export class GameScene extends Phaser.Scene {
         }
       }
     }
+    } catch (e) { console.error('[IC] CRASH in section 6 (economy):', e); throw e }
 
     // ── 7. Production ─────────────────────────────────────────
+    try {
     this.production = new Production(this.entityMgr, this.economy)
+    } catch (e) { console.error('[IC] CRASH in section 7 (production):', e); throw e }
 
     // ── 8. AI commanders ──────────────────────────────────────
+    try {
     this.aiCommanders = aiPlayers.map(p =>
       new AI(p.id, cfg.aiDifficulty, this.entityMgr, this.economy, this.production, p.faction)
     )
@@ -213,8 +230,10 @@ export class GameScene extends Phaser.Scene {
       const buildSpeed = cfg.aiDifficulty === 'hard' ? 1.3 : 1.0
       this.production.setPlayerBuildSpeedMultiplier(p.id, buildSpeed)
     }
+    } catch (e) { console.error('[IC] CRASH in section 8 (AI):', e); throw e }
 
     // ── 9. Game state ─────────────────────────────────────────
+    try {
     this.gameState = {
       phase: 'playing' as GamePhase,
       tick: 0,
@@ -225,13 +244,16 @@ export class GameScene extends Phaser.Scene {
     }
     this.matchStartMs = this.time.now
     this.lastCombatMs = this.matchStartMs
+    } catch (e) { console.error('[IC] CRASH in section 9 (game state):', e); throw e }
 
     // ── 10. Event wiring ──────────────────────────────────────
+    try {
     this.wireEntityEvents()
     this.wireOreEvents()
     this.wireEconomyEvents()
     this.wireHUDEvents()
     this.wireProductionEvents()
+    } catch (e) { console.error('[IC] CRASH in section 10 (event wiring):', e); throw e }
 
     // AI superweapon fire events
     this.entityMgr.on('ai_fire_superweapon', (data: { defId: string; targetX: number; targetY: number; playerId: number }) => {
@@ -354,13 +376,20 @@ export class GameScene extends Phaser.Scene {
     })
 
     // ── 11. Spawn starting entities ───────────────────────────
+    try {
     this.spawnStartingEntities()
+    } catch (e) { console.error('[IC] CRASH in section 11a (spawnStartingEntities):', e); throw e }
+    try {
     this.spawnNeutralBuildings()
+    } catch (e) { console.error('[IC] CRASH in section 11b (spawnNeutralBuildings):', e); throw e }
 
     // ── 12. Input ─────────────────────────────────────────────
+    try {
     this.setupInput()
+    } catch (e) { console.error('[IC] CRASH in section 12 (setupInput):', e); throw e }
 
     // ── 13. UI elements (fixed to screen, don't scroll) ───────
+    try {
     this.selectionRect = this.add.graphics()
     this.selectionRect.setScrollFactor(0).setDepth(200)
 
@@ -378,11 +407,15 @@ export class GameScene extends Phaser.Scene {
     this.camX = Phaser.Math.Clamp(this.camX, 0, Math.max(0, initMaxX))
     this.camY = Phaser.Math.Clamp(this.camY, 0, Math.max(0, initMaxY))
     this.cameras.main.setScroll(this.camX, this.camY)
+    } catch (e) { console.error('[IC] CRASH in section 13-14 (UI/camera):', e); throw e }
 
     // ── 15. Launch HUD overlay ────────────────────────────────
+    try {
     this.scene.launch('HUDScene', { gameState: this.gameState })
+    } catch (e) { console.error('[IC] CRASH in section 15 (HUD launch):', e); throw e }
 
     // ── 16. Initial fog reveal around player base ─────────────
+    try {
     console.log('[IC] Units:', this.entityMgr.getAllUnits().length,
                 'Buildings:', this.entityMgr.getAllBuildings().length)
     console.log('[IC] StartPos[0]:', this.gameMap.data.startPositions[0])
@@ -415,6 +448,7 @@ export class GameScene extends Phaser.Scene {
       console.warn('[IC] WARNING: No tiles revealed! Force-revealing entire map.')
       this.gameMap.revealAll()
     }
+    } catch (e) { console.error('[IC] CRASH in section 16 (fog):', e); throw e }
 
     // Push initial camera to registry for HUD
     this.registry.set('camX', this.camX)
@@ -443,6 +477,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private _updateInternal(delta: number) {
+    if (!this.cursors || !this.gameMap) return  // create() didn't finish
     if (this.gameOver || this.gameState.phase !== 'playing') return
 
     this.gameState.tick++
@@ -1860,6 +1895,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleCameraScroll(delta: number): void {
+    if (!this.cursors) return  // setupInput() hasn't run yet (create crashed)
     // Camera target snap is handled by handleCameraTarget() already
     const dt = delta / 1000
     const speed = this.camSpeed

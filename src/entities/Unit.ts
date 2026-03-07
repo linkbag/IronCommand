@@ -976,6 +976,7 @@ export class Unit extends Phaser.GameObjects.Container {
   }
 
   private syncRenderTransform(): void {
+    if (!this.visualRoot) return
     const screenPos = cartToScreen(this.x, this.y)
     this.visualRoot.setPosition(screenPos.x - this.x, screenPos.y - this.y)
     this.setDepth(screenPos.y + 10)
