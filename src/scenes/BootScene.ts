@@ -7,7 +7,7 @@ import Phaser from 'phaser'
 import { ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from '../engine/IsoUtils'
 
 type InfantryKind =
-  | 'gi' | 'conscript' | 'engineer' | 'spy' | 'attack_dog' | 'tanya'
+  | 'gi' | 'conscript' | 'engineer' | 'rocketeer' | 'spy' | 'attack_dog' | 'tanya'
   | 'chrono_legionnaire' | 'sniper' | 'flak_trooper' | 'tesla_trooper'
   | 'crazy_ivan' | 'yuri' | 'desolator' | 'terrorist'
 
