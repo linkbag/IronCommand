@@ -1836,11 +1836,23 @@ export class HUDScene extends Phaser.Scene {
         ? first.defId.replace(/_/g, ' ').toUpperCase()
         : `${ids.length} UNITS`
     )
-    this.selectedInfoTxt.setText(
-      ids.length === 1
-        ? `HP: ${first.hp}/${first.maxHp}  (${hpPc}%)`
-        : `${first.defId.replace(/_/g, ' ').toUpperCase()} + ${ids.length - 1} more`
-    )
+    // Check if this is a production building — show primary status
+    const producerTypes = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery']
+    const isProducer = ids.length === 1 && producerTypes.includes(first.defId)
+    const prod = this.registry.get('production') as { isPrimaryProducer(pid: number, bid: string): boolean; getSpeedBonus(pid: number, defId: string): number } | undefined
+    const isPrimary = isProducer && prod?.isPrimaryProducer(0, first.id)
+    const speedBonus = isProducer && prod ? prod.getSpeedBonus(0, first.defId) : 1
+
+    let infoText = ids.length === 1
+      ? `HP: ${first.hp}/${first.maxHp}  (${hpPc}%)`
+      : `${first.defId.replace(/_/g, ' ').toUpperCase()} + ${ids.length - 1} more`
+
+    if (isProducer && ids.length === 1) {
+      infoText += `\n${isPrimary ? '★ PRIMARY' : 'Click to set primary'}`
+      if (speedBonus > 1) infoText += ` | +${Math.round((speedBonus - 1) * 100)}% speed`
+    }
+
+    this.selectedInfoTxt.setText(infoText)
 
     // HP bar fill
     const col   = pct > 0.5 ? 0x4ade80 : pct > 0.25 ? 0xffdd44 : 0xe94560

@@ -493,10 +493,27 @@ export class AI {
     const combatUnits = this.getCombatUnits()
     if (combatUnits.length >= MAX_ARMY[this.difficulty]) return
 
-    const unitToBuild = this.chooseUnitToBuild()
-    if (!unitToBuild) return
+    // AI should continuously build and spend credits — queue multiple units per tick
+    // Queue units from all available production buildings simultaneously
+    const maxQueuePerTick = this.difficulty === 'hard' ? 5 : this.difficulty === 'medium' ? 3 : 2
+    let queued = 0
 
-    this.queueUnitIfPossible(unitToBuild, gameState)
+    for (let i = 0; i < maxQueuePerTick; i++) {
+      const unitToBuild = this.chooseUnitToBuild()
+      if (!unitToBuild) break
+
+      const player = gameState.players.find(p => p.id === this.playerId)
+      const unitDef = UNIT_DEFS[unitToBuild]
+      if (!player || !unitDef || player.credits < unitDef.stats.cost) break
+
+      if (this.queueUnitIfPossible(unitToBuild, gameState)) {
+        queued++
+        // Don't let credits sit idle — keep spending
+        if (combatUnits.length + queued >= MAX_ARMY[this.difficulty]) break
+      } else {
+        break
+      }
+    }
   }
 
   private chooseUnitToBuild(): string | null {

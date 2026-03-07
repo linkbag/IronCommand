@@ -42,6 +42,16 @@ function scaleColor(color: number, factor: number): number {
   return (r << 16) | (g << 8) | b
 }
 
+/** Linearly interpolate between two colors. t=0 → colorA, t=1 → colorB */
+function lerpColor(colorA: number, colorB: number, t: number): number {
+  const rA = (colorA >> 16) & 0xff, gA = (colorA >> 8) & 0xff, bA = colorA & 0xff
+  const rB = (colorB >> 16) & 0xff, gB = (colorB >> 8) & 0xff, bB = colorB & 0xff
+  const r = Math.round(rA + (rB - rA) * t)
+  const g = Math.round(gA + (gB - gA) * t)
+  const b = Math.round(bA + (bB - bA) * t)
+  return (r << 16) | (g << 8) | b
+}
+
 // ── Map Generator ─────────────────────────────────────────────
 
 function lerp(a: number, b: number, t: number): number {
@@ -396,7 +406,10 @@ export class GameMap {
     if (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS) return base
     const maxAmt = tile.terrain === TerrainType.GEMS ? GEMS_TILE_MAX : ORE_TILE_MAX
     const ratio = Phaser.Math.Clamp(tile.oreAmount / maxAmt, 0, 1)
-    return scaleColor(base, 0.55 + ratio * 0.45)
+    // Lerp from grass green (depleted) → ore yellow (full)
+    // Full ore = base ore color, depleted = grass green
+    const grassColor = 0x4a7c3f
+    return lerpColor(grassColor, base, ratio)
   }
 
   /** Deterministic hash for per-tile details */
@@ -459,17 +472,20 @@ export class GameMap {
     const tile = this.getTile(col, row)
     const maxAmt = (tile && tile.terrain === TerrainType.GEMS) ? GEMS_TILE_MAX : ORE_TILE_MAX
     const ratio = Phaser.Math.Clamp(oreAmount / maxAmt, 0, 1)
-    // Metallic veins
-    g.lineStyle(1, 0xb8860b, 0.2 + ratio * 0.5)
+    if (ratio < 0.05) return // Too depleted — just show grass color, no ore detail
+    // Metallic veins — fade with depletion
+    const veinColor = lerpColor(0x5a7a40, 0xb8860b, ratio) // green-ish → gold
+    g.lineStyle(1, veinColor, 0.1 + ratio * 0.6)
     const vx = this.tileHash(col, row, 110) * 14 + 4
     const vy = this.tileHash(col, row, 111) * 14 + 4
     g.lineBetween(px + vx, py + vy, px + vx + 10, py + vy + 6)
-    // Small nugget shapes
-    g.fillStyle(0xe8c020, 0.25 + ratio * 0.55)
+    // Small nugget shapes — fewer and dimmer when depleted
+    const nuggetColor = lerpColor(0x6a8a4a, 0xe8c020, ratio) // green-ish → gold
+    g.fillStyle(nuggetColor, 0.1 + ratio * 0.7)
     const nx = this.tileHash(col, row, 112) * 22 + 5
     const ny = this.tileHash(col, row, 113) * 22 + 5
     g.fillRect(px + nx, py + ny, 3, 2)
-    g.fillRect(px + nx + 8, py + ny + 4, 2, 3)
+    if (ratio > 0.3) g.fillRect(px + nx + 8, py + ny + 4, 2, 3) // Second nugget only when ore is decent
   }
 
   private drawForestDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
