@@ -118,7 +118,7 @@ export class Building extends Phaser.GameObjects.Container {
     this.constructionMask = this.constructionMaskShape.createGeometryMask()
     this.bodyGraphic.setMask(this.constructionMask)
     this.crackOverlay.setMask(this.constructionMask)
-    ;(this.bodyGraphic as Phaser.GameObjects.Graphics & { setTint?: (value: number) => unknown }).setTint?.(this.factionColor)
+    // NOTE: Do NOT setTint on Graphics — it multiplicatively washes out the manually-drawn colors
 
     scene.add.existing(this)
     this.updateRenderTransform()
@@ -328,8 +328,11 @@ export class Building extends Phaser.GameObjects.Container {
     if (this.constructionProgress >= 1) {
       this.state = 'active'
       this.visualRoot.y = 0
-      this.updateConstructionMask()
+      // Remove the construction mask so the full building is visible
+      this.bodyGraphic.clearMask(false)
+      this.crackOverlay.clearMask(false)
       this.constructionOverlay.clear()
+      this.constructionMaskShape.clear()
       this.drawBody()
       this.emit('construction_complete', this)
     }
@@ -350,12 +353,15 @@ export class Building extends Phaser.GameObjects.Container {
   }
 
   private updateConstructionMask(): void {
-    const w = this.def.footprint.w * TILE_SIZE
-    const h = this.def.footprint.h * TILE_SIZE + 22
-    const revealH = h * this.constructionProgress
+    const dims = this.getIsoDims()
+    // Full bounding box of the iso building (from top of roof to bottom of base)
+    const totalH = (dims.halfH + dims.wallH + dims.halfH) + 30  // generous padding
+    const totalW = dims.halfW * 2 + 20
+    const revealH = totalH * this.constructionProgress
+    const bottomY = dims.baseY + dims.halfH + 15
     this.constructionMaskShape.clear()
     this.constructionMaskShape.fillStyle(0xffffff, 1)
-    this.constructionMaskShape.fillRect(-w / 2 - 10, h / 2 - revealH, w + 20, revealH + 8)
+    this.constructionMaskShape.fillRect(-totalW / 2, bottomY - revealH, totalW, revealH)
   }
 
   // ── Private: visuals ─────────────────────────────────────────
