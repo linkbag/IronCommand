@@ -221,6 +221,32 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     )
   }
 
+  // Alliance mode: players on the same side (alliance/collective) are allies
+  private allianceMode = false
+  private playerFactions: Map<number, FactionId> = new Map()
+
+  setAllianceMode(enabled: boolean, players: Array<{ id: number; faction: string }>): void {
+    this.allianceMode = enabled
+    this.playerFactions.clear()
+    for (const p of players) {
+      this.playerFactions.set(p.id, p.faction as FactionId)
+    }
+    console.log(`[EntityManager] Alliance mode: ${enabled}`, Object.fromEntries(this.playerFactions))
+  }
+
+  /** Check if two players are enemies (accounts for alliance mode) */
+  isEnemy(playerA: number, playerB: number): boolean {
+    if (playerA === playerB) return false
+    if (playerB < 0) return true // neutral buildings
+    if (!this.allianceMode) return true // FFA: everyone is enemy
+    const facA = this.playerFactions.get(playerA)
+    const facB = this.playerFactions.get(playerB)
+    if (!facA || !facB) return true
+    const sideA = FACTIONS[facA]?.side
+    const sideB = FACTIONS[facB]?.side
+    return sideA !== sideB // same side = allies, different side = enemies
+  }
+
   /** Returns closest enemy unit from (x,y) within range, as seen by playerId */
   getEnemyUnitsInRange(
     x: number,
@@ -229,7 +255,7 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     ownPlayerId: number,
   ): Unit[] {
     return this.getUnitsInRange(x, y, radiusPixels).filter(
-      u => u.playerId !== ownPlayerId && u.state !== 'dying'
+      u => this.isEnemy(ownPlayerId, u.playerId) && u.state !== 'dying'
     )
   }
 
@@ -240,7 +266,7 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     ownPlayerId: number,
   ): Building[] {
     return this.getBuildingsInRange(x, y, radiusPixels).filter(
-      b => b.playerId !== ownPlayerId && b.state !== 'dying'
+      b => this.isEnemy(ownPlayerId, b.playerId) && b.state !== 'dying'
     )
   }
 

@@ -28,7 +28,7 @@ const ACK_LINES: Record<string, string[]> = {
   harvester: ['Returning', 'Harvesting', 'On my way'],
 }
 const PLAYER_TINT = 0x4488ff
-const ENEMY_TINT = 0xff4444
+const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff] // red, orange, purple for up to 3 AI
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
@@ -90,6 +90,7 @@ export class GameScene extends Phaser.Scene {
       aiCount: 1,
       aiDifficulty: 'medium',
       startingCredits: STARTING_CREDITS,
+      gameMode: 'ffa',
     }
     // Reset per-session state
     this.aiCommanders = []
@@ -149,12 +150,18 @@ export class GameScene extends Phaser.Scene {
       const fac = factionKeys[(factionKeys.indexOf(playerFaction) + i + 1) % factionKeys.length]
       aiPlayers.push({
         id: i + 1, name: `AI ${i + 1}`, faction: fac,
-        color: ENEMY_TINT, credits: cfg.startingCredits,
+        color: AI_TINTS[i] ?? 0xff4444, credits: cfg.startingCredits,
         power: 0, powerGenerated: 0, powerConsumed: 0,
         isAI: true, isDefeated: false, entities: [], buildQueue: [],
       })
     }
     const allPlayers = [humanPlayer, ...aiPlayers]
+
+    // ── 5b. Alliance mode ─────────────────────────────────────
+    this.entityMgr.setAllianceMode(
+      cfg.gameMode === 'alliance',
+      allPlayers.map(p => ({ id: p.id, faction: p.faction }))
+    )
 
     // ── 6. Economy ────────────────────────────────────────────
     const playerIds = allPlayers.map(p => p.id)
@@ -309,11 +316,13 @@ export class GameScene extends Phaser.Scene {
     this.selectionRect = this.add.graphics()
     this.selectionRect.setScrollFactor(0).setDepth(200)
 
-    // ── 14. Camera at player spawn ────────────────────────────
+    // ── 14. Camera at player spawn (convert to iso coords) ────
     const startPos = this.gameMap.data.startPositions[0]
     if (startPos) {
-      this.camX = startPos.x - this.scale.width / 2
-      this.camY = startPos.y - this.scale.height / 2
+      // Convert Cartesian start position to isometric screen position
+      const isoStart = cartToIso(startPos.x, startPos.y)
+      this.camX = isoStart.x + this.gameMap.isoOffsetX - this.scale.width / 2
+      this.camY = isoStart.y - this.scale.height / 2
     }
     this.cameras.main.setScroll(this.camX, this.camY)
 
@@ -1748,7 +1757,8 @@ export class GameScene extends Phaser.Scene {
       return
     }
 
-    const opponents = players.filter(p => p.id !== localId)
+    // In alliance mode, only enemy-side players need to be defeated
+    const opponents = players.filter(p => this.entityMgr.isEnemy(localId, p.id))
     if (opponents.length > 0 && opponents.every(p => p.isDefeated)) {
       this.triggerVictory()
     }

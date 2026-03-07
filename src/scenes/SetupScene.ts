@@ -7,12 +7,15 @@ import Phaser from 'phaser'
 import type { FactionId } from '../types'
 import { FACTIONS, FACTION_IDS } from '../data/factions'
 
+export type GameMode = 'ffa' | 'alliance'
+
 export interface SkirmishConfig {
   playerFaction: FactionId
   mapSize: 'small' | 'medium' | 'large'
   aiCount: number
   aiDifficulty: 'easy' | 'medium' | 'hard'
   startingCredits: number
+  gameMode: GameMode  // 'ffa' = free for all, 'alliance' = team-based (same side = allies)
 }
 
 const STYLE = {
@@ -52,6 +55,7 @@ export class SetupScene extends Phaser.Scene {
     aiCount: 1,
     aiDifficulty: 'medium',
     startingCredits: 10000,
+    gameMode: 'ffa',
   }
 
   // Graphic refs for redraws
@@ -378,13 +382,63 @@ export class SetupScene extends Phaser.Scene {
       this.aiCountText.setText(`${this.config.aiCount}`)
     })
     plusZone.on('pointerdown', () => {
-      this.config.aiCount = Math.min(7, this.config.aiCount + 1)
+      this.config.aiCount = Math.min(3, this.config.aiCount + 1)
       this.aiCountText.setText(`${this.config.aiCount}`)
     })
     minusZone.on('pointerover', () => minusText.setColor('#ffffff'))
     minusZone.on('pointerout',  () => minusText.setColor('#e94560'))
     plusZone.on('pointerover', () => plusText.setColor('#ffffff'))
     plusZone.on('pointerout',  () => plusText.setColor('#e94560'))
+
+    cy += 44
+
+    // ── Game Mode Toggle ──────────────────────────────────────
+    this.add.text(panelX + 10, cy, 'GAME MODE', {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      color: '#aaaaaa',
+    })
+    cy += 20
+
+    const modeOptions = [
+      { label: '⚔ FREE FOR ALL', value: 'ffa' },
+      { label: '🤝 ALLIANCE (by side)', value: 'alliance' },
+    ]
+    const modeBtnW = (stepperW - 4) / 2
+    const modeTexts: Phaser.GameObjects.Text[] = []
+    const modeBgs: Phaser.GameObjects.Graphics[] = []
+
+    modeOptions.forEach((opt, idx) => {
+      const mx = panelX + 10 + idx * (modeBtnW + 4)
+      const bg = this.add.graphics()
+      modeBgs.push(bg)
+      const txt = this.add.text(mx + modeBtnW / 2, cy + 16, opt.label, {
+        fontFamily: 'monospace',
+        fontSize: '10px',
+        color: '#ffffff',
+      }).setOrigin(0.5)
+      modeTexts.push(txt)
+
+      const zone = this.add.zone(mx + modeBtnW / 2, cy + 16, modeBtnW, 32).setInteractive({ cursor: 'pointer' })
+      zone.on('pointerdown', () => {
+        this.config.gameMode = opt.value as GameMode
+        drawModeButtons()
+      })
+    })
+
+    const drawModeButtons = () => {
+      modeOptions.forEach((opt, idx) => {
+        const mx = panelX + 10 + idx * (modeBtnW + 4)
+        const isSelected = this.config.gameMode === opt.value
+        modeBgs[idx].clear()
+        modeBgs[idx].fillStyle(isSelected ? STYLE.selectedBg : STYLE.btnNormal, 1)
+        modeBgs[idx].fillRect(mx, cy, modeBtnW, 32)
+        modeBgs[idx].lineStyle(1, isSelected ? STYLE.selected : STYLE.panelBorder, 1)
+        modeBgs[idx].strokeRect(mx, cy, modeBtnW, 32)
+        modeTexts[idx].setColor(isSelected ? '#e94560' : '#778899')
+      })
+    }
+    drawModeButtons()
   }
 
   private createRadioGroup(
