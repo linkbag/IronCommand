@@ -170,7 +170,6 @@ export class HUDScene extends Phaser.Scene {
   // ── Minimap ───────────────────────────────────────────────────────
   private mmGfx!: Phaser.GameObjects.Graphics
   private mmTerrainGfx!: Phaser.GameObjects.Graphics
-  private mmTerrainDrawn = false
   private mmW = SIDEBAR_W - 8
   private mmH = MINIMAP_H
 
@@ -303,8 +302,24 @@ export class HUDScene extends Phaser.Scene {
       const rx = ptr.x - x
       const ry = ptr.y - y
       const map = this.gameState.map
-      const wx = (rx / w) * map.width * 32
-      const wy = (ry / h) * map.height * 32
+      const wx = Phaser.Math.Clamp((rx / w) * map.width * TILE_SIZE, 0, map.width * TILE_SIZE - 1)
+      const wy = Phaser.Math.Clamp((ry / h) * map.height * TILE_SIZE, 0, map.height * TILE_SIZE - 1)
+
+      if ((ptr.button ?? 0) === 2 || ptr.rightButtonDown()) {
+        const selectedIds = (this.registry.get('selectedIds') as string[]) ?? []
+        if (selectedIds.length > 0) {
+          const gs = this.scene.get('GameScene')
+          if (gs) {
+            gs.events.emit('issueOrder', {
+              ids: selectedIds,
+              type: 'move',
+              target: { x: wx, y: wy },
+            })
+          }
+        }
+        return
+      }
+
       this.registry.set('camTargetX', wx - this.sidebarX / 2)
       this.registry.set('camTargetY', wy - this.scale.height / 2)
     })
@@ -1498,10 +1513,9 @@ export class HUDScene extends Phaser.Scene {
     const ox     = this.sidebarX + 4
     const oy     = this.minimapY
 
-    // Draw terrain once (cached)
-    if (!this.mmTerrainDrawn && map.tiles) {
-      this.mmTerrainDrawn = true
-      const tg = this.mmTerrainGfx
+    const tg = this.mmTerrainGfx
+    tg.clear()
+    if (map.tiles) {
       const terrainColors: Record<number, number> = {
         0: 0x3a6a30, // grass
         1: 0x1a5a90, // water
@@ -1512,13 +1526,23 @@ export class HUDScene extends Phaser.Scene {
         6: 0x7a5510, // bridge
         7: 0x1a4a18, // forest
       }
+      const dimColor = (color: number): number => {
+        const r = (color >> 16) & 0xff
+        const gc = (color >> 8) & 0xff
+        const b = color & 0xff
+        return ((r >> 1) << 16) | ((gc >> 1) << 8) | (b >> 1)
+      }
       // Sample every Nth tile for performance
       const step = Math.max(1, Math.floor(1 / Math.max(scaleX, scaleY)))
       for (let row = 0; row < map.height; row += step) {
         for (let col = 0; col < map.width; col += step) {
           const tile = map.tiles[row]?.[col]
           if (!tile) continue
-          const color = terrainColors[tile.terrain] ?? 0x333333
+          const terrainColor = terrainColors[tile.terrain] ?? 0x333333
+          const color =
+            tile.fogState === FogState.HIDDEN ? 0x000000
+            : tile.fogState === FogState.EXPLORED ? dimColor(terrainColor)
+            : terrainColor
           tg.fillStyle(color, 1)
           tg.fillRect(
             ox + col * scaleX,
