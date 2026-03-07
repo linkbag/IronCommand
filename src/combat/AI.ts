@@ -10,9 +10,9 @@ import type { Production } from '../economy/Production'
 import type { GameState, FactionSide, FactionId } from '../types'
 import { TILE_SIZE } from '../types'
 import { UNIT_DEFS, getBasicInfantryDefId, getMainTankDefId, getHarvesterDefId, getFactionUnitIds } from '../entities/UnitDefs'
-import { BUILDING_DEFS, getPowerBuildingDefId } from '../entities/BuildingDefs'
+import { BUILDING_DEFS, NEUTRAL_BUILDING_IDS, getPowerBuildingDefId } from '../entities/BuildingDefs'
 import { FACTIONS } from '../data/factions'
-import type { Unit } from '../entities/Unit'
+import { Unit } from '../entities/Unit'
 import type { Building } from '../entities/Building'
 
 export type AIDifficulty = 'easy' | 'medium' | 'hard'
@@ -27,6 +27,10 @@ type PendingWave = {
 type AttackGroup = {
   unitIds: string[]
   initialCount: number
+  target: { x: number; y: number }
+  retreating: boolean
+  focusTargetId: string | null
+  focusRetargetMs: number
 }
 
 // ── Constants ──────────────────────────────────────────────────
@@ -95,6 +99,15 @@ const DEFENDER_RESPONSE_RADIUS: Record<AIDifficulty, number> = {
 }
 
 const RETREAT_HEALTH_PCT = 0.35
+const GROUP_RETREAT_THRESHOLD = 0.5
+const GROUP_REGROUP_HEALTH_PCT = 0.8
+const FOCUS_FIRE_INTERVAL_MS = 800
+const KITE_REISSUE_MS = 750
+const FORMATION_ARC_DEGREES = 120
+const OVERWHELMED_FORCE_RATIO = 1.3
+const BASE_THREAT_RADIUS_TILES = 14
+const AA_RESPONSE_RADIUS_TILES = 24
+const EMERGENCY_SELL_COOLDOWN_MS = 15000
 const REBUILD_RECOVERY_MS: Record<AIDifficulty, number> = {
   easy: 70000,
   medium: 50000,
@@ -151,6 +164,9 @@ export class AI {
   private rebuildUntilMs: number
   private aggressionUntilMs: number
   private activeAttackGroups: AttackGroup[]
+  private unitKiteUntilMs: Map<string, number>
+  private antiAirEmergencyUntilMs: number
+  private lastEmergencySellMs: number
 
   private static readonly SW_COOLDOWNS: Record<string, number> = {
     nuclear_silo: 300000,
@@ -194,6 +210,9 @@ export class AI {
     this.rebuildUntilMs = 0
     this.aggressionUntilMs = 0
     this.activeAttackGroups = []
+    this.unitKiteUntilMs = new Map()
+    this.antiAirEmergencyUntilMs = 0
+    this.lastEmergencySellMs = -EMERGENCY_SELL_COOLDOWN_MS
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -231,6 +250,8 @@ export class AI {
     this.updatePhase()
     this.assessEnemyComposition(gameState)
     this.ensureHarvesting(gameState)
+    this.microSpecialUnits(gameState)
+    this.handleAntiAirResponse(gameState)
 
     if (this.handleLastStand(gameState)) return
 
@@ -464,39 +485,48 @@ export class AI {
     const buildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state !== 'dying')
     if (buildings.length === 0) return
 
-    const baseRadiusPx = BASE_DEFENSE_RADIUS[this.difficulty] * TILE_SIZE
-    let threatPos: { x: number; y: number } | null = null
+    const enemyAttackers = this.getEnemyCombatUnits(gameState)
+    if (enemyAttackers.length === 0) return
 
-    outer:
-    for (const p of gameState.players) {
-      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
-      for (const eu of this.em.getUnitsForPlayer(p.id)) {
-        if (eu.state === 'dying' || !eu.def.attack) continue
-        for (const b of buildings) {
-          if (dist(eu.x, eu.y, b.x, b.y) < baseRadiusPx) {
-            threatPos = { x: eu.x, y: eu.y }
-            break outer
-          }
+    const threatRadiusPx = BASE_THREAT_RADIUS_TILES * TILE_SIZE
+    const threatened: Array<{ enemy: Unit; building: Building; d: number }> = []
+    for (const enemy of enemyAttackers) {
+      let nearest: Building | null = null
+      let nearestDist = Infinity
+      for (const b of buildings) {
+        const d = dist(enemy.x, enemy.y, b.x, b.y)
+        if (d < nearestDist) {
+          nearestDist = d
+          nearest = b
         }
       }
-    }
-
-    if (!threatPos) return
-
-    const responseRadiusPx = DEFENDER_RESPONSE_RADIUS[this.difficulty] * TILE_SIZE
-    const defenders = this.getCombatUnits().filter(u => u.state === 'idle')
-    let rallied = 0
-
-    for (const u of defenders) {
-      if (dist(u.x, u.y, threatPos.x, threatPos.y) < responseRadiusPx) {
-        u.giveOrder({ type: 'attackMove', target: threatPos })
-        rallied++
+      if (nearest && nearestDist <= threatRadiusPx) {
+        threatened.push({ enemy, building: nearest, d: nearestDist })
       }
     }
+    if (threatened.length === 0) return
 
-    if (rallied > 0) {
-      console.log(`[AI] Player ${this.playerId} rallied ${rallied} units to defend base`)
+    const prioritized = threatened
+      .slice()
+      .sort((a, b) => {
+        const ap = this.getDefensePriority(a.building)
+        const bp = this.getDefensePriority(b.building)
+        if (ap !== bp) return ap - bp
+        return a.d - b.d
+      })[0]
+
+    const threatPos = { x: prioritized.enemy.x, y: prioritized.enemy.y }
+    const defenders = this.getCombatUnits().filter(u => !this.isUnitInRetreatingGroup(u.id))
+    this.issueFormationApproach(defenders, threatPos)
+
+    const enemyStrength = threatened.length
+    const ownStrength = Math.max(1, defenders.length)
+    if (enemyStrength > ownStrength * OVERWHELMED_FORCE_RATIO) {
+      this.sellExpendableBuildingForEmergency()
+      this.queueEmergencyDefenseUnits(gameState)
     }
+
+    console.log(`[AI] Player ${this.playerId} defending base with ${defenders.length} units`)
   }
 
   // ── Army building ────────────────────────────────────────────
@@ -532,6 +562,11 @@ export class AI {
     const hasBarracks = this.hasActiveBuilding('barracks')
     const hasWarFactory = this.hasActiveBuilding('war_factory')
     if (!hasBarracks && !hasWarFactory) return null
+
+    if (this.matchTimer < this.antiAirEmergencyUntilMs) {
+      const emergencyAA = this.chooseEmergencyAntiAirUnit()
+      if (emergencyAA) return emergencyAA
+    }
 
     const basicInf = getBasicInfantryDefId(this.side)
     const mainTank = getMainTankDefId(this.side)
@@ -768,7 +803,14 @@ export class AI {
       }
       const ids = group.units.map(u => u.id)
       pendingGroups.push({ unitIds: ids, target: group.target })
-      this.activeAttackGroups.push({ unitIds: ids, initialCount: ids.length })
+      this.activeAttackGroups.push({
+        unitIds: ids,
+        initialCount: ids.length,
+        target: group.target,
+        retreating: false,
+        focusTargetId: null,
+        focusRetargetMs: 0,
+      })
     }
 
     this.pendingWave = {
@@ -794,12 +836,12 @@ export class AI {
 
     let sent = 0
     for (const group of this.pendingWave.groups) {
-      for (const id of group.unitIds) {
-        const u = this.em.getUnit(id)
-        if (!u || u.state === 'dying') continue
-        u.giveOrder({ type: 'attackMove', target: group.target })
-        sent++
-      }
+      const units = group.unitIds
+        .map(id => this.em.getUnit(id))
+        .filter((u): u is Unit => !!u && u.state !== 'dying')
+      if (units.length === 0) continue
+      this.issueFormationApproach(units, group.target)
+      sent += units.length
     }
 
     this.pendingWave = null
@@ -965,11 +1007,324 @@ export class AI {
     if (!fallback) return
     for (const u of this.getCombatUnits()) {
       if (u.state === 'dying') continue
+      if (this.isUnitInRetreatingGroup(u.id)) continue
       const hpPct = u.hp / Math.max(1, u.def.stats.maxHp)
-      if (hpPct <= RETREAT_HEALTH_PCT) {
+      const localEnemy = this.findClosestEnemyEntity(u.x, u.y, 7 * TILE_SIZE)
+      const canFinish = localEnemy && (localEnemy.hp / Math.max(1, this.getEntityMaxHp(localEnemy.id)) <= 0.2)
+      if (hpPct <= RETREAT_HEALTH_PCT && !canFinish) {
         u.giveOrder({ type: 'move', target: fallback })
       }
     }
+  }
+
+  // ── Tactical micro ───────────────────────────────────────────
+
+  private microSpecialUnits(gameState: GameState): void {
+    const fallback = this.getFallbackPosition()
+    const neutralSet = new Set<string>(NEUTRAL_BUILDING_IDS)
+
+    const engineers = this.em.getUnitsForPlayer(this.playerId).filter(
+      u => u.state !== 'dying' && u.def.id === 'engineer',
+    )
+    const capturable = this.em.getAllBuildings().filter(
+      b => b.state !== 'dying' && b.playerId !== this.playerId && (neutralSet.has(b.def.id) || this.isEnemyPlayer(b.playerId)),
+    )
+    for (const eng of engineers) {
+      if (eng.state !== 'idle') continue
+      const target = capturable
+        .slice()
+        .sort((a, b) => dist(eng.x, eng.y, a.x, a.y) - dist(eng.x, eng.y, b.x, b.y))[0]
+      if (target) {
+        eng.giveOrder({ type: 'attack', targetEntityId: target.id })
+      }
+    }
+
+    const enemyAttackers = this.getEnemyCombatUnits(gameState)
+    const harvesters = this.em.getUnitsForPlayer(this.playerId).filter(
+      u => u.state !== 'dying' && u.def.category === 'harvester',
+    )
+    for (const h of harvesters) {
+      const nearbyEnemy = enemyAttackers.find(e => dist(h.x, h.y, e.x, e.y) <= 5 * TILE_SIZE)
+      if (nearbyEnemy && fallback) {
+        h.giveOrder({ type: 'move', target: fallback })
+      }
+    }
+  }
+
+  private handleAntiAirResponse(gameState: GameState): void {
+    const enemyAir = this.getEnemyAirUnits(gameState)
+    if (enemyAir.length === 0) return
+
+    this.antiAirEmergencyUntilMs = Math.max(this.antiAirEmergencyUntilMs, this.matchTimer + 30000)
+    const aaUnits = this.getCombatUnits().filter(u => !!u.def.attack?.canAttackAir)
+
+    if (aaUnits.length === 0) {
+      const emergencyAA = this.chooseEmergencyAntiAirUnit()
+      if (emergencyAA) {
+        this.queueUnitIfPossible(emergencyAA, gameState)
+      }
+      return
+    }
+
+    const ownBase = this.getFallbackPosition()
+    const intercept = enemyAir
+      .slice()
+      .sort((a, b) => {
+        if (!ownBase) return a.hp - b.hp
+        return dist(a.x, a.y, ownBase.x, ownBase.y) - dist(b.x, b.y, ownBase.x, ownBase.y)
+      })[0]
+    if (!intercept) return
+
+    for (const aa of aaUnits) {
+      if (!this.canUnitAttackEntity(aa, intercept)) continue
+      if (dist(aa.x, aa.y, intercept.x, intercept.y) <= AA_RESPONSE_RADIUS_TILES * TILE_SIZE) {
+        aa.giveOrder({ type: 'attack', targetEntityId: intercept.id })
+      } else {
+        aa.giveOrder({ type: 'attackMove', target: { x: intercept.x, y: intercept.y } })
+      }
+    }
+  }
+
+  private chooseEmergencyAntiAirUnit(): string | null {
+    const candidates = this.side === 'alliance'
+      ? ['ifv', 'rocketeer', getBasicInfantryDefId(this.side)]
+      : ['flak_track', 'flak_trooper', getBasicInfantryDefId(this.side)]
+    for (const id of candidates) {
+      if (this.canProduceUnit(id)) return id
+    }
+    return null
+  }
+
+  private applyGroupFocusFire(group: AttackGroup, units: Unit[]): void {
+    const focusTarget = this.pickFocusTargetForGroup(units, group.focusTargetId)
+    if (!focusTarget) {
+      group.focusTargetId = null
+      return
+    }
+    group.focusTargetId = focusTarget.id
+    for (const u of units) {
+      if (this.isKiteOnCooldown(u.id)) continue
+      if (!this.canUnitAttackEntity(u, focusTarget)) continue
+      u.giveOrder({ type: 'attack', targetEntityId: focusTarget.id })
+    }
+  }
+
+  private pickFocusTargetForGroup(units: Unit[], currentTargetId: string | null): Unit | Building | null {
+    const centerX = this.avg(units.map(u => u.x))
+    const centerY = this.avg(units.map(u => u.y))
+    const radiusPx = 9 * TILE_SIZE
+    const enemies = [
+      ...this.em.getEnemyUnitsInRange(centerX, centerY, radiusPx, this.playerId),
+      ...this.em.getEnemyBuildingsInRange(centerX, centerY, radiusPx, this.playerId),
+    ].filter(e => e.state !== 'dying')
+    if (enemies.length === 0) return null
+
+    if (currentTargetId) {
+      const current = enemies.find(e => e.id === currentTargetId)
+      if (current && current.hp > 0) return current
+    }
+
+    return enemies
+      .slice()
+      .sort((a, b) => {
+        const as = this.scoreEntityThreat(a) - (a.hp / Math.max(1, this.getEntityMaxHp(a.id)))
+        const bs = this.scoreEntityThreat(b) - (b.hp / Math.max(1, this.getEntityMaxHp(b.id)))
+        return bs - as
+      })[0]
+  }
+
+  private scoreEntityThreat(entity: Unit | Building): number {
+    const attack = entity.def.attack
+    if (!attack) return 0
+    const dps = attack.damage * attack.fireRate
+    const antiAirBias = attack.canAttackAir ? 8 : 0
+    const splashBias = attack.splash > 0 ? 6 : 0
+    return dps + attack.range + antiAirBias + splashBias
+  }
+
+  private applyGroupKiting(units: Unit[]): void {
+    for (const u of units) {
+      if (!this.isKitingUnit(u) || this.isKiteOnCooldown(u.id)) continue
+      const myAttack = u.def.attack
+      if (!myAttack) continue
+
+      const nearbyEnemies = this.em.getEnemyUnitsInRange(u.x, u.y, 8 * TILE_SIZE, this.playerId)
+      if (nearbyEnemies.length === 0) continue
+
+      const target = nearbyEnemies
+        .filter(e => e.state !== 'dying' && !!e.def.attack)
+        .filter(e => (e.def.attack?.range ?? 0) + 0.75 < myAttack.range)
+        .sort((a, b) => dist(u.x, u.y, a.x, a.y) - dist(u.x, u.y, b.x, b.y))[0]
+      if (!target) continue
+
+      const d = dist(u.x, u.y, target.x, target.y)
+      if (d > myAttack.range * TILE_SIZE * 0.9) continue
+
+      const retreatPos = this.getKiteRetreatPosition(u, target)
+      u.giveOrder({ type: 'move', target: retreatPos })
+      u.giveOrder({ type: 'attack', targetEntityId: target.id }, true)
+      this.unitKiteUntilMs.set(u.id, this.matchTimer + KITE_REISSUE_MS)
+    }
+  }
+
+  private isKitingUnit(unit: Unit): boolean {
+    const attack = unit.def.attack
+    if (!attack) return false
+    if (attack.range < 6) return false
+    return unit.def.id === 'v3_launcher'
+      || unit.def.id === 'sniper'
+      || unit.def.id === 'rocketeer'
+      || attack.range >= 8
+  }
+
+  private isKiteOnCooldown(unitId: string): boolean {
+    return (this.unitKiteUntilMs.get(unitId) ?? 0) > this.matchTimer
+  }
+
+  private getKiteRetreatPosition(unit: Unit, threat: Unit): { x: number; y: number } {
+    const dx = unit.x - threat.x
+    const dy = unit.y - threat.y
+    const l = Math.max(1, Math.sqrt(dx * dx + dy * dy))
+    const fallback = this.getFallbackPosition()
+    const biasX = fallback ? (fallback.x - unit.x) * 0.3 : 0
+    const biasY = fallback ? (fallback.y - unit.y) * 0.3 : 0
+    const raw = {
+      x: unit.x + (dx / l) * TILE_SIZE * 2 + biasX,
+      y: unit.y + (dy / l) * TILE_SIZE * 2 + biasY,
+    }
+    return this.clampToMap(raw)
+  }
+
+  private issueFormationApproach(units: Unit[], target: { x: number; y: number }): void {
+    if (units.length === 0) return
+    const center = { x: this.avg(units.map(u => u.x)), y: this.avg(units.map(u => u.y)) }
+    const toTargetX = target.x - center.x
+    const toTargetY = target.y - center.y
+    const len = Math.max(1, Math.sqrt(toTargetX * toTargetX + toTargetY * toTargetY))
+    const nx = toTargetX / len
+    const ny = toTargetY / len
+    const px = -ny
+    const py = nx
+
+    const sorted = units.slice().sort((a, b) => this.unitRoleRank(a) - this.unitRoleRank(b))
+    const arc = (FORMATION_ARC_DEGREES * Math.PI) / 180
+    const half = arc / 2
+
+    for (let i = 0; i < sorted.length; i++) {
+      const u = sorted[i]
+      const role = this.unitRoleRank(u)
+      const roleDepth = role === 0 ? 3 : role === 1 ? 5 : 7
+      const t = sorted.length === 1 ? 0.5 : i / (sorted.length - 1)
+      const angle = -half + arc * t
+      const lateral = Math.sin(angle) * TILE_SIZE * 3
+      const approach = {
+        x: target.x - nx * roleDepth * TILE_SIZE + px * lateral,
+        y: target.y - ny * roleDepth * TILE_SIZE + py * lateral,
+      }
+      u.giveOrder({ type: 'attackMove', target: this.clampToMap(approach) })
+    }
+  }
+
+  private unitRoleRank(unit: Unit): number {
+    const range = unit.def.attack?.range ?? 0
+    if (unit.def.category === 'vehicle' && range <= 6) return 0 // frontline
+    if (range >= 8 || unit.def.id === 'v3_launcher' || unit.def.id === 'sniper') return 2 // backline
+    return 1 // midline
+  }
+
+  private getEnemyCombatUnits(gameState: GameState): Unit[] {
+    const out: Unit[] = []
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      out.push(...this.em.getUnitsForPlayer(p.id).filter(u => u.state !== 'dying' && !!u.def.attack))
+    }
+    return out
+  }
+
+  private getEnemyAirUnits(gameState: GameState): Unit[] {
+    const out: Unit[] = []
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      out.push(...this.em.getUnitsForPlayer(p.id).filter(u => u.state !== 'dying' && u.def.category === 'aircraft'))
+    }
+    return out
+  }
+
+  private getDefensePriority(building: Building): number {
+    if (building.def.category === 'production') return 0
+    if (building.def.id === 'construction_yard') return 1
+    if (building.def.id === 'ore_refinery') return 2
+    return 3
+  }
+
+  private sellExpendableBuildingForEmergency(): void {
+    if (this.matchTimer - this.lastEmergencySellMs < EMERGENCY_SELL_COOLDOWN_MS) return
+    const expendable = this.em.getBuildingsForPlayer(this.playerId)
+      .filter(b => b.state === 'active')
+      .filter(b => b.def.id !== 'construction_yard' && b.def.id !== 'ore_refinery' && b.def.category !== 'production')
+      .sort((a, b) => {
+        const ap = a.def.category === 'defense' ? 0 : a.def.category === 'power' ? 1 : 2
+        const bp = b.def.category === 'defense' ? 0 : b.def.category === 'power' ? 1 : 2
+        if (ap !== bp) return ap - bp
+        return a.def.stats.cost - b.def.stats.cost
+      })[0]
+    if (!expendable) return
+    const refund = expendable.sell()
+    if (refund > 0) {
+      this.economy.addCredits(this.playerId, refund)
+      this.lastEmergencySellMs = this.matchTimer
+    }
+  }
+
+  private queueEmergencyDefenseUnits(gameState: GameState): void {
+    const first = this.matchTimer < this.antiAirEmergencyUntilMs ? this.chooseEmergencyAntiAirUnit() : null
+    const fallbackChoices = [first, getMainTankDefId(this.side), getBasicInfantryDefId(this.side)].filter(
+      (id): id is string => !!id,
+    )
+    for (const unitId of fallbackChoices) {
+      if (this.queueUnitIfPossible(unitId, gameState)) return
+    }
+  }
+
+  private isUnitInRetreatingGroup(unitId: string): boolean {
+    return this.activeAttackGroups.some(g => g.retreating && g.unitIds.includes(unitId))
+  }
+
+  private canUnitAttackEntity(unit: Unit, entity: Unit | Building): boolean {
+    const attack = unit.def.attack
+    if (!attack) return false
+    const isAir = entity instanceof Unit && entity.def.category === 'aircraft'
+    return isAir ? attack.canAttackAir : attack.canAttackGround
+  }
+
+  private findClosestEnemyEntity(x: number, y: number, radius: number): Unit | Building | null {
+    const enemies = [
+      ...this.em.getEnemyUnitsInRange(x, y, radius, this.playerId),
+      ...this.em.getEnemyBuildingsInRange(x, y, radius, this.playerId),
+    ].filter(e => e.state !== 'dying')
+    if (enemies.length === 0) return null
+    return enemies
+      .slice()
+      .sort((a, b) => dist(x, y, a.x, a.y) - dist(x, y, b.x, b.y))[0]
+  }
+
+  private getEntityMaxHp(entityId: string): number {
+    const entity = this.em.getEntity(entityId)
+    return entity?.def.stats.maxHp ?? 1
+  }
+
+  private clampToMap(pos: { x: number; y: number }): { x: number; y: number } {
+    const mapW = this.mapWidthTiles > 0 ? this.mapWidthTiles * TILE_SIZE : pos.x + TILE_SIZE
+    const mapH = this.mapHeightTiles > 0 ? this.mapHeightTiles * TILE_SIZE : pos.y + TILE_SIZE
+    return {
+      x: clamp(pos.x, TILE_SIZE, Math.max(TILE_SIZE, mapW - TILE_SIZE)),
+      y: clamp(pos.y, TILE_SIZE, Math.max(TILE_SIZE, mapH - TILE_SIZE)),
+    }
+  }
+
+  private avg(values: number[]): number {
+    if (values.length === 0) return 0
+    return values.reduce((sum, n) => sum + n, 0) / values.length
   }
 
   // ── Scouting ─────────────────────────────────────────────────
@@ -1426,13 +1781,28 @@ export class AI {
   private updateAttackGroups(): void {
     if (this.activeAttackGroups.length === 0) return
     const fallback = this.getFallbackPosition()
+    const now = this.matchTimer
     this.activeAttackGroups = this.activeAttackGroups.filter(group => {
       const alive = group.unitIds
         .map(id => this.em.getUnit(id))
         .filter((u): u is Unit => !!u && u.state !== 'dying')
       if (alive.length === 0) return false
 
-      if (alive.length <= Math.floor(group.initialCount / 2)) {
+      group.unitIds = alive.map(u => u.id)
+
+      const casualties = group.initialCount - alive.length
+      const casualtyRatio = casualties / Math.max(1, group.initialCount)
+      const enemyAnchor = this.findClosestEnemyEntity(
+        this.avg(alive.map(u => u.x)),
+        this.avg(alive.map(u => u.y)),
+        9 * TILE_SIZE,
+      )
+      const enemyAlmostDead = enemyAnchor
+        ? enemyAnchor.hp / Math.max(1, this.getEntityMaxHp(enemyAnchor.id)) <= 0.2
+        : false
+
+      if (!group.retreating && casualtyRatio >= GROUP_RETREAT_THRESHOLD && !enemyAlmostDead) {
+        group.retreating = true
         if (fallback) {
           for (const u of alive) {
             u.giveOrder({ type: 'move', target: fallback })
@@ -1440,8 +1810,32 @@ export class AI {
         }
         this.rebuildUntilMs = Math.max(this.rebuildUntilMs, this.matchTimer + REBUILD_RECOVERY_MS[this.difficulty])
         this.isAttacking = false
-        return false
+        return true
       }
+
+      if (group.retreating) {
+        const avgHpPct = this.avg(alive.map(u => u.hp / Math.max(1, u.def.stats.maxHp)))
+        if (fallback) {
+          for (const u of alive) {
+            if (dist(u.x, u.y, fallback.x, fallback.y) > 4 * TILE_SIZE) {
+              u.giveOrder({ type: 'move', target: fallback })
+            }
+          }
+        }
+        if (avgHpPct >= GROUP_REGROUP_HEALTH_PCT) {
+          group.retreating = false
+          group.initialCount = alive.length
+          group.focusTargetId = null
+        }
+        return true
+      }
+
+      if (now >= group.focusRetargetMs) {
+        this.applyGroupFocusFire(group, alive)
+        group.focusRetargetMs = now + FOCUS_FIRE_INTERVAL_MS
+      }
+
+      this.applyGroupKiting(alive)
       return true
     })
   }
