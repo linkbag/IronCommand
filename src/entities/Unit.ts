@@ -433,6 +433,7 @@ export class Unit extends Phaser.GameObjects.Container {
       let nearest: IEntityRef | null = null
       let nearestDist = Infinity
       for (const e of enemies) {
+        if (!this.canAttackTarget(e)) continue
         const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
         if (d < nearestDist) { nearestDist = d; nearest = e }
       }
@@ -499,6 +500,13 @@ export class Unit extends Phaser.GameObjects.Container {
         return
       }
     }
+    if (!this.canAttackTarget(this.target)) {
+      this.target = this.findNearbyEnemy()
+      if (!this.target) {
+        this.processNextOrder()
+        return
+      }
+    }
 
     const dist = Phaser.Math.Distance.Between(this.x, this.y, this.target.x, this.target.y)
     const rangePixels = this.def.attack.range * TILE_SIZE
@@ -526,6 +534,7 @@ export class Unit extends Phaser.GameObjects.Container {
     // EntityManager listens to this event and returns nearby enemies
     this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: IEntityRef[]) => {
       for (const e of enemies) {
+        if (!this.canAttackTarget(e)) continue
         const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
         if (d < nearestDist) {
           nearestDist = d
@@ -535,6 +544,18 @@ export class Unit extends Phaser.GameObjects.Container {
     })
 
     return nearest
+  }
+
+  private isAirTarget(entity: IEntityRef): boolean {
+    const maybeCategory = (entity as { def?: { category?: string } }).def?.category
+    return maybeCategory === 'aircraft'
+  }
+
+  private canAttackTarget(entity: IEntityRef): boolean {
+    if (!this.def.attack) return false
+    return this.isAirTarget(entity)
+      ? this.def.attack.canAttackAir
+      : this.def.attack.canAttackGround
   }
 
   // ── Private: harvest ─────────────────────────────────────────
