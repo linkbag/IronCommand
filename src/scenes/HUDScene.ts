@@ -2162,6 +2162,7 @@ export class HUDScene extends Phaser.Scene {
 
     if (isProducer && ids.length === 1) {
       infoText += `\n${isPrimary ? '★ PRIMARY' : 'Click to set primary'}`
+      infoText += '\nRight-click to set rally point'
       if (speedBonus > 1) infoText += ` | +${Math.round((speedBonus - 1) * 100)}% speed`
     }
 

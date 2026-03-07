@@ -29,6 +29,7 @@ const ACK_LINES: Record<string, string[]> = {
 }
 const PLAYER_TINT = 0x4488ff
 const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff, 0x44cc44, 0xffdd00, 0x44dddd, 0xff66aa] // red, orange, purple, green, yellow, cyan, pink
+const PRODUCER_BUILDING_IDS = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery'] as const
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
@@ -68,6 +69,7 @@ export class GameScene extends Phaser.Scene {
 
   // ── Selection ───────────────────────────────────────────────
   private selectionRect!: Phaser.GameObjects.Graphics
+  private rallyOverlay!: Phaser.GameObjects.Graphics
   private selectedIds: Set<string> = new Set()
   private selectionPulseTweens: Map<string, Phaser.Tweens.Tween> = new Map()
 
@@ -130,6 +132,7 @@ export class GameScene extends Phaser.Scene {
     this.pauseOverlay = undefined
     this.pauseText?.destroy()
     this.pauseText = undefined
+    this.rallyOverlay?.destroy()
   }
 
   create() {
@@ -413,6 +416,8 @@ export class GameScene extends Phaser.Scene {
     try {
     this.selectionRect = this.add.graphics()
     this.selectionRect.setScrollFactor(0).setDepth(200)
+    this.rallyOverlay = this.add.graphics()
+    this.rallyOverlay.setScrollFactor(0).setDepth(190)
 
     this.pauseOverlay = this.add.rectangle(
       this.scale.width / 2,
@@ -530,6 +535,7 @@ export class GameScene extends Phaser.Scene {
     this.camX = Phaser.Math.Clamp(this.camX, 0, Math.max(0, maxX))
     this.camY = Phaser.Math.Clamp(this.camY, 0, Math.max(0, maxY))
     this.cameras.main.setScroll(this.camX, this.camY)
+    this.drawRallyOverlay()
 
     // Pathfinder cache maintenance
     this.pathfinder.tick()
@@ -643,6 +649,7 @@ export class GameScene extends Phaser.Scene {
       this.staleMateBoostActive = false
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p) p.entities = p.entities.filter(id => id !== entityId)
+      if (this.selectedIds.delete(entityId)) this.syncSelectionState()
       if (playerId !== this.gameState.localPlayerId) {
         this.playerBuildingsDestroyed++
       }
@@ -1012,9 +1019,9 @@ export class GameScene extends Phaser.Scene {
     if (!unitDef) return null
 
     const buildings = this.entityMgr.getBuildingsForPlayer(playerId)
-      .filter(b => b.state === 'active')
+      .filter(b => b.state === 'active' || b.state === 'low_power')
 
-    const producerByCategory: Record<string, string[]> = {
+    const producerByCategory: Record<string, Array<typeof PRODUCER_BUILDING_IDS[number]>> = {
       infantry: ['barracks'],
       vehicle: ['war_factory'],
       aircraft: ['air_force_command', 'war_factory'],
@@ -1024,6 +1031,13 @@ export class GameScene extends Phaser.Scene {
 
     const candidates = producerByCategory[unitDef.category] ?? []
     for (const producerDefId of candidates) {
+      const primaryId = this.production.getPrimaryProducer(playerId, producerDefId)
+      if (primaryId) {
+        const primary = this.entityMgr.getBuilding(primaryId)
+        if (primary && (primary.state === 'active' || primary.state === 'low_power')) {
+          return primary
+        }
+      }
       const found = buildings.find(b => b.def.id === producerDefId)
       if (found) return found
     }
@@ -1693,6 +1707,18 @@ export class GameScene extends Phaser.Scene {
     const { x: worldX, y: worldY } = this.ptrToCart(ptr)
     if (this.selectedIds.size === 0) return
 
+    const rallyProducer = this.getSelectedProductionBuildingForRally()
+    if (rallyProducer) {
+      const rallyPoint = {
+        x: Phaser.Math.Clamp(worldX, TILE_SIZE, this.gameMap.worldWidth - TILE_SIZE),
+        y: Phaser.Math.Clamp(worldY, TILE_SIZE, this.gameMap.worldHeight - TILE_SIZE),
+      }
+      rallyProducer.setRallyPoint(rallyPoint)
+      const hud = this.scene.get('HUDScene')
+      if (hud) hud.events.emit('evaAlert', { message: 'Rally point set', type: 'info' })
+      return
+    }
+
     const clickRadius = TILE_SIZE * 2
     const enemies = this.entityMgr.getEnemyUnitsInRange(worldX, worldY, clickRadius, 0)
     const enemyBuilds = this.entityMgr.getEnemyBuildingsInRange(worldX, worldY, clickRadius, 0)
@@ -1870,8 +1896,7 @@ export class GameScene extends Phaser.Scene {
     // Check if clicking on own production building → set as primary producer
     const ownBuilding = this.getOwnBuildingAt(worldX, worldY)
     if (ownBuilding) {
-      const producerTypes = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery']
-      if (producerTypes.includes(ownBuilding.def.id)) {
+      if (PRODUCER_BUILDING_IDS.includes(ownBuilding.def.id as typeof PRODUCER_BUILDING_IDS[number])) {
         this.production.setPrimaryProducer(0, ownBuilding.id)
         const hudScene = this.scene.get('HUDScene')
         if (hudScene) {
@@ -1970,15 +1995,67 @@ export class GameScene extends Phaser.Scene {
   }
 
   private syncSelectionState(): void {
+    this.refreshBuildingSelectionVisuals()
     this.gameState.selectedEntityIds = Array.from(this.selectedIds)
     this.registry.set('selectedIds', this.gameState.selectedEntityIds)
     this.updateSelectionPulse()
   }
 
   private deselectAll(): void {
-    this.selectedIds.forEach(id => this.entityMgr.getUnit(id)?.setSelected(false))
+    this.selectedIds.forEach(id => {
+      this.entityMgr.getUnit(id)?.setSelected(false)
+      this.entityMgr.getBuilding(id)?.setSelected(false)
+    })
     this.selectedIds.clear()
     this.syncSelectionState()
+  }
+
+  private refreshBuildingSelectionVisuals(): void {
+    const selected = this.selectedIds
+    for (const building of this.entityMgr.getAllBuildings()) {
+      building.setSelected(selected.has(building.id))
+    }
+  }
+
+  private getSelectedProductionBuildingForRally(): import('../entities/Building').Building | null {
+    if (this.selectedIds.size !== 1) return null
+    const selectedId = Array.from(this.selectedIds)[0]
+    const building = this.entityMgr.getBuilding(selectedId)
+    if (!building || building.playerId !== 0) return null
+    if (building.state === 'dying' || building.state === 'constructing') return null
+    if (!PRODUCER_BUILDING_IDS.includes(building.def.id as typeof PRODUCER_BUILDING_IDS[number])) return null
+    return building
+  }
+
+  private drawRallyOverlay(): void {
+    const g = this.rallyOverlay
+    if (!g) return
+    g.clear()
+
+    const pulse = 0.5 + 0.5 * Math.sin(this.time.now / 180)
+    for (const building of this.entityMgr.getBuildingsForPlayer(0)) {
+      if ((building.state !== 'active' && building.state !== 'low_power') || !building.rallyPoint) continue
+      if (!PRODUCER_BUILDING_IDS.includes(building.def.id as typeof PRODUCER_BUILDING_IDS[number])) continue
+
+      const fromIso = cartToScreen(building.x, building.y)
+      const toIso = cartToScreen(building.rallyPoint.x, building.rallyPoint.y)
+      const fromX = fromIso.x - this.camX
+      const fromY = fromIso.y - this.camY + 8
+      const toX = toIso.x - this.camX
+      const toY = toIso.y - this.camY
+      const isSelected = this.selectedIds.has(building.id)
+      const alpha = isSelected ? 0.9 : 0.5
+
+      g.lineStyle(isSelected ? 2 : 1, 0x8fdfff, alpha)
+      g.beginPath()
+      g.moveTo(fromX, fromY)
+      g.lineTo(toX, toY)
+      g.strokePath()
+      g.fillStyle(0x8fdfff, Math.min(1, alpha + 0.2))
+      g.fillCircle(toX, toY, 3 + pulse * 2)
+      g.lineStyle(1, 0xdaf5ff, alpha)
+      g.strokeCircle(toX, toY, 6 + pulse * 2)
+    }
   }
 
   private updateSelectionPulse(): void {
