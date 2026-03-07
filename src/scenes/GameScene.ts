@@ -1683,6 +1683,35 @@ export class GameScene extends Phaser.Scene {
     this.deselectAll()
   }
 
+  // ── Formation spreading ──────────────────────────────────────────
+  // Compute offsets so grouped units fan out around a target position
+  // instead of stacking on the same tile.
+
+  private computeFormationOffsets(count: number): Array<{ dx: number; dy: number }> {
+    if (count <= 1) return [{ dx: 0, dy: 0 }]
+
+    const spacing = TILE_SIZE * 1.2  // gap between units
+    const offsets: Array<{ dx: number; dy: number }> = []
+
+    // Place units in concentric rings around center
+    offsets.push({ dx: 0, dy: 0 })  // first unit goes to exact target
+    let ring = 1
+    while (offsets.length < count) {
+      // Each ring has up to 6*ring slots (hexagonal-ish)
+      const slots = 6 * ring
+      const angleStep = (Math.PI * 2) / slots
+      for (let s = 0; s < slots && offsets.length < count; s++) {
+        const angle = angleStep * s
+        offsets.push({
+          dx: Math.cos(angle) * spacing * ring,
+          dy: Math.sin(angle) * spacing * ring,
+        })
+      }
+      ring++
+    }
+    return offsets
+  }
+
   // ── Unit acknowledgment text popup ─────────────────────────────
 
   private showUnitAck(msg: string): void {
@@ -1856,15 +1885,24 @@ export class GameScene extends Phaser.Scene {
     let harvestIssued = false
     let moveIssued = false
 
+    // Compute formation offsets so units spread out around the target
+    const unitIds = Array.from(this.selectedIds)
+    const moveUnits = unitIds
+      .map(id => this.entityMgr.getUnit(id))
+      .filter((u): u is NonNullable<typeof u> => !!u && u.playerId === 0)
+    const offsets = this.computeFormationOffsets(moveUnits.length)
+
+    let idx = 0
     this.selectedIds.forEach(id => {
       const unit = this.entityMgr.getUnit(id)
       if (!unit || unit.playerId !== 0) return
 
+      const offset = offsets[idx++] ?? { dx: 0, dy: 0 }
       if (tile?.terrain === TerrainType.ORE && unit.def.category === 'harvester') {
-        unit.giveOrder({ type: 'harvest', target: { x: worldX, y: worldY } }, appendOrder)
+        unit.giveOrder({ type: 'harvest', target: { x: worldX + offset.dx, y: worldY + offset.dy } }, appendOrder)
         harvestIssued = true
       } else {
-        unit.giveOrder({ type: 'move', target: { x: worldX, y: worldY } }, appendOrder)
+        unit.giveOrder({ type: 'move', target: { x: worldX + offset.dx, y: worldY + offset.dy } }, appendOrder)
         moveIssued = true
       }
     })
