@@ -20,9 +20,13 @@ export type AIDifficulty = 'easy' | 'medium' | 'hard'
 type AIPhase = 'early' | 'mid' | 'late'
 
 type PendingWave = {
-  unitIds: string[]
-  target: { x: number; y: number }
+  groups: Array<{ unitIds: string[]; target: { x: number; y: number } }>
   holdMs: number
+}
+
+type AttackGroup = {
+  unitIds: string[]
+  initialCount: number
 }
 
 // ── Constants ──────────────────────────────────────────────────
@@ -47,15 +51,15 @@ const ATTACK_INTERVAL_MS: Record<AIDifficulty, { min: number; max: number }> = {
 
 // Hard: first attack comes at 2 minutes
 const FIRST_ATTACK_MS: Record<AIDifficulty, number> = {
-  easy: 180000,
-  medium: 150000,
+  easy: 300000,
+  medium: 180000,
   hard: 120000,
 }
 
 const ATTACK_WAVE_SIZE: Record<AIDifficulty, { min: number; max: number }> = {
-  easy: { min: 3, max: 6 },
-  medium: { min: 4, max: 10 },
-  hard: { min: 8, max: 20 },            // bigger waves on hard (was 6-16)
+  easy: { min: 4, max: 8 },
+  medium: { min: 6, max: 12 },
+  hard: { min: 8, max: 20 },
 }
 
 const STAGING_HOLD_MS = 5000
@@ -65,10 +69,6 @@ const HARASS_INTERVAL_MS: Record<AIDifficulty, number> = {
   medium: 60000,
   hard: 25000,                           // more frequent harassment (was 35s)
 }
-
-// Hard mode bonuses
-const HARD_INCOME_BONUS = 0.25           // +25% income bonus
-const HARD_BUILD_SPEED_BONUS = 0.30      // +30% build speed bonus
 
 const DEFENSE_TARGET: Record<AIDifficulty, number> = {
   easy: 1,
@@ -92,6 +92,13 @@ const DEFENDER_RESPONSE_RADIUS: Record<AIDifficulty, number> = {
   easy: 15,
   medium: 25,
   hard: 40,
+}
+
+const RETREAT_HEALTH_PCT = 0.35
+const REBUILD_RECOVERY_MS: Record<AIDifficulty, number> = {
+  easy: 70000,
+  medium: 50000,
+  hard: 40000,
 }
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -136,9 +143,14 @@ export class AI {
   private mapWidthTiles = 0
   private mapHeightTiles = 0
 
-  private enemyComposition: { infantry: number; vehicles: number; aircraft: number }
+  private enemyComposition: { infantry: number; vehicles: number; aircraft: number; defenses: number }
   private superweaponTimers: Map<string, number> = new Map()
   private superweaponReady: Set<string> = new Set()
+  private matchTimer: number
+  private waveCount: number
+  private rebuildUntilMs: number
+  private aggressionUntilMs: number
+  private activeAttackGroups: AttackGroup[]
 
   private static readonly SW_COOLDOWNS: Record<string, number> = {
     nuclear_silo: 300000,
@@ -176,7 +188,12 @@ export class AI {
     this.lastStandTriggered = false
     this.updateLogged = false
 
-    this.enemyComposition = { infantry: 0, vehicles: 0, aircraft: 0 }
+    this.enemyComposition = { infantry: 0, vehicles: 0, aircraft: 0, defenses: 0 }
+    this.matchTimer = 0
+    this.waveCount = 0
+    this.rebuildUntilMs = 0
+    this.aggressionUntilMs = 0
+    this.activeAttackGroups = []
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -194,6 +211,7 @@ export class AI {
     this.attackTimer += delta
     this.scoutTimer += delta
     this.harassTimer += delta
+    this.matchTimer += delta
 
     this.updatePendingWave(delta)
 
@@ -214,13 +232,10 @@ export class AI {
     this.assessEnemyComposition(gameState)
     this.ensureHarvesting(gameState)
 
-    // Hard mode: passive income bonus (+25% of current credits every ~30s)
-    if (this.difficulty === 'hard') {
-      this.applyHardModeBonus()
-    }
-
     if (this.handleLastStand(gameState)) return
 
+    this.updateAttackGroups()
+    this.retreatDamagedUnits()
     this.defendBase(gameState)
     this.followTechTree(gameState)
     this.expandEconomy(gameState)
@@ -232,10 +247,6 @@ export class AI {
 
     if (this.phase === 'mid' || this.phase === 'late') {
       this.considerScouting(gameState)
-    }
-
-    if (this.difficulty === 'hard' && this.isAttacking) {
-      this.considerMultiProng(gameState)
     }
 
       // Superweapon management (medium/hard only)
@@ -261,7 +272,7 @@ export class AI {
   // ── Enemy assessment ─────────────────────────────────────────
 
   private assessEnemyComposition(gameState: GameState): void {
-    let infantry = 0, vehicles = 0, aircraft = 0
+    let infantry = 0, vehicles = 0, aircraft = 0, defenses = 0
     for (const p of gameState.players) {
       if (p.id === this.playerId || p.isDefeated) continue
       for (const u of this.em.getUnitsForPlayer(p.id)) {
@@ -270,8 +281,11 @@ export class AI {
         else if (u.def.category === 'vehicle') vehicles++
         else if (u.def.category === 'aircraft') aircraft++
       }
+      for (const b of this.em.getBuildingsForPlayer(p.id)) {
+        if (b.state !== 'dying' && b.def.category === 'defense') defenses++
+      }
     }
-    this.enemyComposition = { infantry, vehicles, aircraft }
+    this.enemyComposition = { infantry, vehicles, aircraft, defenses }
   }
 
   // ── Economy / harvesting ─────────────────────────────────────
@@ -285,9 +299,7 @@ export class AI {
       b => b.def.id === 'ore_refinery' && b.state === 'active',
     )
 
-    const desiredHarvesters = this.difficulty === 'hard'
-      ? Math.max(1, refineries.length * 2)
-      : Math.max(1, refineries.length)
+    const desiredHarvesters = Math.max(2, refineries.length * 2)
 
     if (harvesters.length < desiredHarvesters) {
       this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState)
@@ -308,8 +320,8 @@ export class AI {
   private expandEconomy(gameState: GameState): void {
     const credits = this.economy.getCredits(this.playerId)
     const refCount = this.countBuildings('ore_refinery')
-    const threshold = this.difficulty === 'easy' ? 3000 : 2000
-    const maxRef = this.difficulty === 'hard' ? 3 : 2
+    const threshold = this.difficulty === 'easy' ? 3500 : 2500
+    const maxRef = this.difficulty === 'hard' ? 4 : this.difficulty === 'medium' ? 3 : 2
 
     if (credits > threshold && refCount < maxRef) {
       if (this.tryBuildBuilding('ore_refinery', true)) {
@@ -582,7 +594,7 @@ export class AI {
     }
 
     // ── Counter-based adjustments ──
-    const { infantry: ei, vehicles: ev, aircraft: ea } = this.enemyComposition
+    const { infantry: ei, vehicles: ev, aircraft: ea, defenses: ed } = this.enemyComposition
 
     // Enemy heavy vehicles → more anti-tank
     if (ev > ei + 2) {
@@ -611,6 +623,33 @@ export class AI {
         if (this.canProduceUnit('flak_track')) pool.push('flak_track', 'flak_track', 'flak_track')
         if (this.canProduceUnit('flak_trooper')) pool.push('flak_trooper', 'flak_trooper')
       }
+    }
+
+    // Enemy turtling (many defenses) -> siege bias
+    if (ed >= 4) {
+      if (this.side === 'collective') {
+        if (this.canProduceUnit('v3_launcher')) pool.push('v3_launcher', 'v3_launcher')
+        if (this.canProduceUnit('dreadnought')) pool.push('dreadnought')
+      } else {
+        if (this.canProduceUnit('prism_tank')) pool.push('prism_tank', 'prism_tank')
+        if (this.canProduceUnit('destroyer')) pool.push('destroyer')
+      }
+    }
+
+    // If naval/air production exists, mix those units in instead of mono land spam.
+    if (this.hasActiveBuilding('naval_shipyard')) {
+      if (this.side === 'collective') {
+        if (this.canProduceUnit('dreadnought')) pool.push('dreadnought')
+        if (this.canProduceUnit('typhoon_sub')) pool.push('typhoon_sub')
+      } else {
+        if (this.canProduceUnit('destroyer')) pool.push('destroyer')
+        if (this.canProduceUnit('aegis_cruiser')) pool.push('aegis_cruiser')
+      }
+    }
+
+    if (this.hasActiveBuilding('air_force_command')) {
+      if (this.canProduceUnit('rocketeer')) pool.push('rocketeer')
+      if (this.canProduceUnit('black_eagle')) pool.push('black_eagle')
     }
 
     return pool
@@ -706,35 +745,44 @@ export class AI {
       return
     }
 
+    if (this.matchTimer < FIRST_ATTACK_MS[this.difficulty]) return
+    if (this.matchTimer < this.rebuildUntilMs) return
     if (this.attackTimer < this.nextAttackWindowMs) return
 
     const target = this.findAttackTarget(gameState)
     if (!target) return
 
-    const waveCfg = ATTACK_WAVE_SIZE[this.difficulty]
-    if (combatUnits.length < waveCfg.min) return
+    const waveSizeTarget = this.getScaledWaveSize(combatUnits.length)
+    if (waveSizeTarget <= 0) return
 
-    const waveSize = randomInt(waveCfg.min, Math.min(waveCfg.max, combatUnits.length))
-    const waveUnits = this.pickWaveUnits(combatUnits, waveSize)
+    const waveUnits = this.pickWaveUnits(combatUnits, waveSizeTarget)
     if (waveUnits.length === 0) return
 
-    const staging = this.computeStagingPoint(target, gameState)
-    for (const u of waveUnits) {
-      u.giveOrder({ type: 'move', target: staging })
+    const groups = this.buildAttackGroups(waveUnits, target, gameState)
+    const pendingGroups: Array<{ unitIds: string[]; target: { x: number; y: number } }> = []
+
+    for (const group of groups) {
+      const staging = this.computeStagingPoint(group.target, gameState)
+      for (const u of group.units) {
+        u.giveOrder({ type: 'move', target: staging })
+      }
+      const ids = group.units.map(u => u.id)
+      pendingGroups.push({ unitIds: ids, target: group.target })
+      this.activeAttackGroups.push({ unitIds: ids, initialCount: ids.length })
     }
 
     this.pendingWave = {
-      unitIds: waveUnits.map(u => u.id),
-      target,
+      groups: pendingGroups,
       holdMs: STAGING_HOLD_MS,
     }
 
     this.isAttacking = true
     this.attackTimer = 0
+    this.waveCount++
     this.nextAttackWindowMs = this.nextAttackWindow()
 
     console.log(
-      `[AI] Player ${this.playerId} staged attack (${waveUnits.length} units) at (${Math.round(staging.x)}, ${Math.round(staging.y)})`,
+      `[AI] Player ${this.playerId} staged attack (${waveUnits.length} units, ${groups.length} prong(s))`,
     )
   }
 
@@ -745,15 +793,61 @@ export class AI {
     if (this.pendingWave.holdMs > 0) return
 
     let sent = 0
-    for (const id of this.pendingWave.unitIds) {
-      const u = this.em.getUnit(id)
-      if (!u || u.state === 'dying') continue
-      u.giveOrder({ type: 'attackMove', target: this.pendingWave.target })
-      sent++
+    for (const group of this.pendingWave.groups) {
+      for (const id of group.unitIds) {
+        const u = this.em.getUnit(id)
+        if (!u || u.state === 'dying') continue
+        u.giveOrder({ type: 'attackMove', target: group.target })
+        sent++
+      }
     }
 
     this.pendingWave = null
     this.isAttacking = sent > 0
+  }
+
+  private getScaledWaveSize(available: number): number {
+    const cfg = ATTACK_WAVE_SIZE[this.difficulty]
+    const elapsedMinutes = this.matchTimer / 60000
+    const timeScale = Math.min(1, elapsedMinutes / 10)
+    const waveScale = Math.min(1, this.waveCount / 6)
+    const growth = Math.max(timeScale, waveScale)
+    const dynamicMin = Math.min(cfg.max, cfg.min + Math.floor((cfg.max - cfg.min) * growth))
+    const dynamicMax = Math.min(cfg.max, dynamicMin + Math.max(2, Math.floor((cfg.max - cfg.min) * 0.35)))
+    const requested = randomInt(dynamicMin, dynamicMax)
+    return Math.min(available, requested)
+  }
+
+  private buildAttackGroups(
+    waveUnits: Unit[],
+    target: { x: number; y: number },
+    gameState: GameState,
+  ): Array<{ units: Unit[]; target: { x: number; y: number } }> {
+    if (this.difficulty !== 'hard' || waveUnits.length < 10) {
+      return [{ units: waveUnits, target }]
+    }
+    const split = Math.floor(waveUnits.length / 2)
+    const first = waveUnits.slice(0, split)
+    const second = waveUnits.slice(split)
+    const flank = this.computeFlankTarget(target, gameState, 6 * TILE_SIZE)
+    return [
+      { units: first, target },
+      { units: second, target: flank },
+    ]
+  }
+
+  private computeFlankTarget(
+    target: { x: number; y: number },
+    gameState: GameState,
+    offset: number,
+  ): { x: number; y: number } {
+    const mapW = gameState.map.width * TILE_SIZE
+    const mapH = gameState.map.height * TILE_SIZE
+    const sign = Math.random() < 0.5 ? -1 : 1
+    return {
+      x: clamp(target.x + offset * sign, TILE_SIZE, Math.max(TILE_SIZE, mapW - TILE_SIZE)),
+      y: clamp(target.y + offset * -sign * 0.6, TILE_SIZE, Math.max(TILE_SIZE, mapH - TILE_SIZE)),
+    }
   }
 
   private pickWaveUnits(units: Unit[], desiredSize: number): Unit[] {
@@ -866,6 +960,18 @@ export class AI {
     return true
   }
 
+  private retreatDamagedUnits(): void {
+    const fallback = this.getFallbackPosition()
+    if (!fallback) return
+    for (const u of this.getCombatUnits()) {
+      if (u.state === 'dying') continue
+      const hpPct = u.hp / Math.max(1, u.def.stats.maxHp)
+      if (hpPct <= RETREAT_HEALTH_PCT) {
+        u.giveOrder({ type: 'move', target: fallback })
+      }
+    }
+  }
+
   // ── Scouting ─────────────────────────────────────────────────
 
   private considerScouting(gameState: GameState): void {
@@ -963,6 +1069,11 @@ export class AI {
     const def = BUILDING_DEFS[defId]
     if (!def) return null
 
+    if (def.category === 'defense') {
+      const defensePlacement = this.findDefensePlacement(def)
+      if (defensePlacement) return defensePlacement
+    }
+
     const buildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state !== 'dying')
     if (buildings.length === 0) return null
 
@@ -990,6 +1101,55 @@ export class AI {
     }
 
     return null
+  }
+
+  private findDefensePlacement(def: Building['def']): { col: number; row: number } | null {
+    const ownBuildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state !== 'dying')
+    const cy = ownBuildings.find(b => b.def.id === 'construction_yard' && b.state === 'active') ?? ownBuildings[0]
+    if (!cy) return null
+
+    const enemyTarget = this.findEnemyBaseAnchor()
+    const toX = (enemyTarget?.x ?? cy.x + TILE_SIZE * 8) - cy.x
+    const toY = (enemyTarget?.y ?? cy.y) - cy.y
+    const len = Math.max(1, Math.sqrt(toX * toX + toY * toY))
+    const nx = toX / len
+    const ny = toY / len
+
+    const ringDist = 5 * TILE_SIZE
+    const centerX = cy.x + nx * ringDist
+    const centerY = cy.y + ny * ringDist
+    const perpX = -ny
+    const perpY = nx
+    const lateral = [0, 2, -2, 4, -4]
+
+    for (const tileOffset of lateral) {
+      const wx = centerX + perpX * tileOffset * TILE_SIZE
+      const wy = centerY + perpY * tileOffset * TILE_SIZE
+      const col = Math.floor(wx / TILE_SIZE - def.footprint.w / 2)
+      const row = Math.floor(wy / TILE_SIZE - def.footprint.h / 2)
+      if (!this.isPlacementWithinMap(col, row, def.footprint.w, def.footprint.h)) continue
+      if (this.isTileFree(col, row, def.footprint.w, def.footprint.h)) {
+        return { col, row }
+      }
+    }
+
+    return null
+  }
+
+  private findEnemyBaseAnchor(): { x: number; y: number } | null {
+    for (const p of this.em.getAllBuildings()) {
+      if (p.playerId === this.playerId || p.state === 'dying') continue
+      if (p.def.id === 'construction_yard') return { x: p.x, y: p.y }
+    }
+    const fallback = this.em.getAllBuildings().find(b => b.playerId !== this.playerId && b.state !== 'dying')
+    return fallback ? { x: fallback.x, y: fallback.y } : null
+  }
+
+  private isPlacementWithinMap(col: number, row: number, w: number, h: number): boolean {
+    if (col < 0 || row < 0) return false
+    if (this.mapWidthTiles > 0 && col + w > this.mapWidthTiles) return false
+    if (this.mapHeightTiles > 0 && row + h > this.mapHeightTiles) return false
+    return true
   }
 
   private isTileFree(col: number, row: number, w: number, h: number): boolean {
@@ -1053,27 +1213,6 @@ export class AI {
     return null
   }
 
-  // ── Hard mode bonuses ──────────────────────────────────────
-
-  private hardBonusTimer = 0
-
-  private applyHardModeBonus(): void {
-    // Grant +25% income bonus every 10 ticks (~12s on hard)
-    this.hardBonusTimer++
-    if (this.hardBonusTimer >= 10) {
-      this.hardBonusTimer = 0
-      const currentCredits = this.economy.getCredits(this.playerId)
-      const bonus = Math.floor(currentCredits * HARD_INCOME_BONUS * 0.1)  // ~2.5% per grant
-      if (bonus > 0) {
-        this.economy.addCredits(this.playerId, bonus)
-      }
-      // Minimum drip: always grant at least 50 credits on hard
-      if (bonus < 50) {
-        this.economy.addCredits(this.playerId, 50)
-      }
-    }
-  }
-
   // ── Rebuild destroyed buildings ────────────────────────────
 
   private rebuildDestroyedBuildings(_gameState: GameState): void {
@@ -1114,6 +1253,9 @@ export class AI {
 
   private nextAttackWindow(): number {
     const w = ATTACK_INTERVAL_MS[this.difficulty]
+    if (this.matchTimer < this.aggressionUntilMs) {
+      return randomInt(Math.floor(w.min * 0.55), Math.floor(w.max * 0.7))
+    }
     return randomInt(w.min, w.max)
   }
 
@@ -1205,7 +1347,7 @@ export class AI {
     if (swId === 'iron_curtain') {
       // Target own army concentration — use on attack wave units if pending
       const units = this.pendingWave
-        ? this.pendingWave.unitIds.map(id => this.em.getUnit(id)).filter((u): u is Unit => !!u && u.state !== 'dying')
+        ? this.pendingWave.groups.flatMap(g => g.unitIds).map(id => this.em.getUnit(id)).filter((u): u is Unit => !!u && u.state !== 'dying')
         : this.getCombatUnits()
       if (units.length >= 3) {
         const cx = units.reduce((s, u) => s + u.x, 0) / units.length
@@ -1273,5 +1415,42 @@ export class AI {
   /** Expose hard-mode attack split hook for external callers. */
   triggerMultiProng(gameState: GameState): void {
     this.considerMultiProng(gameState)
+  }
+
+  setAggressiveFor(durationMs: number): void {
+    this.aggressionUntilMs = Math.max(this.aggressionUntilMs, this.matchTimer + durationMs)
+    this.rebuildUntilMs = 0
+    this.attackTimer = Math.max(this.attackTimer, this.nextAttackWindowMs)
+  }
+
+  private updateAttackGroups(): void {
+    if (this.activeAttackGroups.length === 0) return
+    const fallback = this.getFallbackPosition()
+    this.activeAttackGroups = this.activeAttackGroups.filter(group => {
+      const alive = group.unitIds
+        .map(id => this.em.getUnit(id))
+        .filter((u): u is Unit => !!u && u.state !== 'dying')
+      if (alive.length === 0) return false
+
+      if (alive.length <= Math.floor(group.initialCount / 2)) {
+        if (fallback) {
+          for (const u of alive) {
+            u.giveOrder({ type: 'move', target: fallback })
+          }
+        }
+        this.rebuildUntilMs = Math.max(this.rebuildUntilMs, this.matchTimer + REBUILD_RECOVERY_MS[this.difficulty])
+        this.isAttacking = false
+        return false
+      }
+      return true
+    })
+  }
+
+  private getFallbackPosition(): { x: number; y: number } | null {
+    const cy = this.em.getBuildingsForPlayer(this.playerId)
+      .find(b => b.def.id === 'construction_yard' && b.state !== 'dying')
+    if (cy) return { x: cy.x, y: cy.y }
+    const any = this.em.getBuildingsForPlayer(this.playerId).find(b => b.state !== 'dying')
+    return any ? { x: any.x, y: any.y } : null
   }
 }
