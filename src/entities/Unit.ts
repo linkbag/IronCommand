@@ -417,11 +417,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
     // Attack-move: check for targets while moving
     if (this.currentOrder?.type === 'attackMove' && this.def.attack) {
-      const nearbyTarget = this.findNearbyEnemy()
-      if (nearbyTarget) {
-        this.target = nearbyTarget
-        this.state = 'attacking'
-      }
+      this.updateAttackMove()
     }
   }
 
@@ -454,6 +450,10 @@ export class Unit extends Phaser.GameObjects.Container {
     if (this.currentOrder?.type === 'harvest') {
       this.state = 'harvesting'
       this.harvestTimer = 0
+    } else if (this.currentOrder?.type === 'attackMove' && this.def.attack) {
+      if (!this.updateAttackMove()) {
+        this.processNextOrder()
+      }
     } else {
       this.processNextOrder()
     }
@@ -497,6 +497,9 @@ export class Unit extends Phaser.GameObjects.Container {
 
     // Validate target still alive
     if (!this.target || this.target.hp <= 0) {
+      if (this.currentOrder?.type === 'attackMove' && this.updateAttackMove()) {
+        return
+      }
       this.target = this.findNearbyEnemy()
       if (!this.target) {
         this.processNextOrder()
@@ -504,6 +507,9 @@ export class Unit extends Phaser.GameObjects.Container {
       }
     }
     if (!this.canAttackTarget(this.target)) {
+      if (this.currentOrder?.type === 'attackMove' && this.updateAttackMove()) {
+        return
+      }
       this.target = this.findNearbyEnemy()
       if (!this.target) {
         this.processNextOrder()
@@ -512,6 +518,9 @@ export class Unit extends Phaser.GameObjects.Container {
     }
 
     if (!this.canAttackTarget(this.target)) {
+      if (this.currentOrder?.type === 'attackMove' && this.updateAttackMove()) {
+        return
+      }
       this.target = this.findNearbyEnemy()
       if (!this.target) {
         this.processNextOrder()
@@ -540,6 +549,24 @@ export class Unit extends Phaser.GameObjects.Container {
     }
   }
 
+  private updateAttackMove(): boolean {
+    const unitTarget = this.findNearbyEnemyUnit()
+    if (unitTarget) {
+      this.target = unitTarget
+      this.state = 'attacking'
+      return true
+    }
+
+    const buildingTarget = this.findNearbyEnemyBuilding()
+    if (buildingTarget) {
+      this.target = buildingTarget
+      this.state = 'attacking'
+      return true
+    }
+
+    return false
+  }
+
   private findNearbyEnemy(): IEntityRef | null {
     if (!this.def.attack) return null
     const rangePixels = this.def.attack.range * TILE_SIZE
@@ -561,11 +588,66 @@ export class Unit extends Phaser.GameObjects.Container {
     return nearest
   }
 
+  private findNearbyEnemyUnit(): IEntityRef | null {
+    if (!this.def.attack) return null
+    const rangePixels = this.def.attack.range * TILE_SIZE
+    let nearest: IEntityRef | null = null
+    let nearestDist = Infinity
+
+    this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: IEntityRef[]) => {
+      for (const e of enemies) {
+        if (!this.canAttackEntityRef(e)) continue
+        const category = e.def?.category
+        if (!category || this.isBuildingCategory(category)) continue
+        const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
+        if (d < nearestDist) {
+          nearestDist = d
+          nearest = e
+        }
+      }
+    })
+
+    return nearest
+  }
+
+  private findNearbyEnemyBuilding(): IEntityRef | null {
+    if (!this.def.attack) return null
+    const rangePixels = this.def.attack.range * TILE_SIZE
+    let nearest: IEntityRef | null = null
+    let nearestDist = Infinity
+
+    this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: IEntityRef[]) => {
+      for (const e of enemies) {
+        if (!this.canAttackEntityRef(e)) continue
+        const category = e.def?.category
+        if (!category || !this.isBuildingCategory(category)) {
+          continue
+        }
+        const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
+        if (d < nearestDist) {
+          nearestDist = d
+          nearest = e
+        }
+      }
+    })
+
+    return nearest
+  }
+
   private canAttackEntityRef(target: IEntityRef): boolean {
     if (!this.def.attack) return false
     const targetCategory = (target as { def?: { category?: string } }).def?.category
     const isAir = targetCategory === 'aircraft'
     return isAir ? this.def.attack.canAttackAir : this.def.attack.canAttackGround
+  }
+
+  private isBuildingCategory(category: string): boolean {
+    return category === 'base'
+      || category === 'power'
+      || category === 'production'
+      || category === 'defense'
+      || category === 'tech'
+      || category === 'superweapon'
   }
 
   // ── Private: harvest ─────────────────────────────────────────
@@ -629,9 +711,11 @@ export class Unit extends Phaser.GameObjects.Container {
         this.harvestTimer += delta
         if (this.harvestTimer >= HARVEST_TIME) {
           this.harvestTimer = 0
-          const harvested = Math.min(100, oreAmount, this.harvestCapacity - this.cargoAmount)
+          const richnessRatio = Phaser.Math.Clamp(oreAmount / 5, 0, 1)
+          const creditValue = Math.max(1, Math.floor(100 * richnessRatio))
+          const harvested = Math.min(creditValue, this.harvestCapacity - this.cargoAmount)
           this.cargoAmount += harvested
-          this.emit('harvest_ore', tilePos, harvested)
+          this.emit('harvest_ore', tilePos, 1)
         }
       } else if (oreAmount <= 0) {
         // No ore here — find next ore field

@@ -771,12 +771,11 @@ export class AI {
 
     if (allEnemyBuildings.length === 0) return null
 
-    // Priority: power → refineries → war factories → barracks → CY → any
+    // Priority: power plants -> refineries -> war factories -> CY -> any building.
     const priorities = [
       ['power_plant', 'tesla_reactor', 'nuclear_reactor'],
       ['ore_refinery'],
       ['war_factory'],
-      ['barracks'],
       ['construction_yard'],
     ]
 

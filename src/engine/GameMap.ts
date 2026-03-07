@@ -27,6 +27,17 @@ const FOG_ALPHA: Record<FogState, number> = {
   [FogState.VISIBLE]:  0.0,
 }
 
+const ORE_MAX_AMOUNT = 5
+const ORE_SPREAD_INTERVAL_MS = 30000
+const ORE_GROWTH_INTERVAL_MS = 45000
+
+function scaleColor(color: number, factor: number): number {
+  const r = Math.max(0, Math.min(255, Math.round(((color >> 16) & 0xff) * factor)))
+  const g = Math.max(0, Math.min(255, Math.round(((color >> 8) & 0xff) * factor)))
+  const b = Math.max(0, Math.min(255, Math.round((color & 0xff) * factor)))
+  return (r << 16) | (g << 8) | b
+}
+
 // ── Map Generator ─────────────────────────────────────────────
 
 function lerp(a: number, b: number, t: number): number {
@@ -149,7 +160,7 @@ function generateMapData(
         const tile = tiles[ty][tx]
         if (tile.terrain === TerrainType.GRASS || tile.terrain === TerrainType.SAND) {
           tile.terrain = TerrainType.ORE
-          tile.oreAmount = 1000 + Math.floor(rng() * 2000)
+          tile.oreAmount = ORE_MAX_AMOUNT
           // Ore tiles stay passable so harvesters can reach them
           tile.buildable = false
         }
@@ -233,7 +244,7 @@ function generateMapData(
 
         const t = tiles[tr][tc]
         t.terrain = TerrainType.ORE
-        t.oreAmount = 1800 + Math.floor(rng() * 1200)
+        t.oreAmount = ORE_MAX_AMOUNT
         t.passable = true
         t.buildable = false
       }
@@ -280,6 +291,9 @@ export class GameMap {
   private waterTiles: { col: number; row: number }[] = []
   private oreTiles: { col: number; row: number }[] = []
   private animFrame = 0
+  private oreSpreadTimerMs = 0
+  private oreGrowthTimerMs = 0
+  private depletedOreTiles: Set<number> = new Set()
 
   constructor(scene: Phaser.Scene, width?: number, height?: number, seed?: number) {
     this.scene = scene
@@ -307,7 +321,7 @@ export class GameMap {
     for (let row = 0; row < height; row++) {
       for (let col = 0; col < width; col++) {
         const tile = tiles[row][col]
-        const color = this.tileColor(tile.terrain, col, row)
+        const color = this.tileColor(tile, col, row)
         const px = col * TILE_SIZE
         const py = row * TILE_SIZE
 
@@ -324,7 +338,7 @@ export class GameMap {
             break
           case TerrainType.ORE:
             this.oreTiles.push({ col, row })
-            this.drawOreDetail(g, px, py, col, row)
+            this.drawOreDetail(g, px, py, col, row, tile.oreAmount)
             break
           case TerrainType.FOREST:
             this.drawForestDetail(g, px, py, col, row)
@@ -368,9 +382,12 @@ export class GameMap {
     }
   }
 
-  private tileColor(terrain: TerrainType, col: number, row: number): number {
-    const colors = TERRAIN_COLORS[terrain]
-    return colors[(col + row) % colors.length]
+  private tileColor(tile: TileData, col: number, row: number): number {
+    const colors = TERRAIN_COLORS[tile.terrain]
+    const base = colors[(col + row) % colors.length]
+    if (tile.terrain !== TerrainType.ORE) return base
+    const ratio = Phaser.Math.Clamp(tile.oreAmount / ORE_MAX_AMOUNT, 0, 1)
+    return scaleColor(base, 0.55 + ratio * 0.45)
   }
 
   /** Deterministic hash for per-tile details */
@@ -422,14 +439,22 @@ export class GameMap {
     }
   }
 
-  private drawOreDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
+  private drawOreDetail(
+    g: Phaser.GameObjects.Graphics,
+    px: number,
+    py: number,
+    col: number,
+    row: number,
+    oreAmount: number,
+  ): void {
+    const ratio = Phaser.Math.Clamp(oreAmount / ORE_MAX_AMOUNT, 0, 1)
     // Metallic veins
-    g.lineStyle(1, 0xb8860b, 0.5)
+    g.lineStyle(1, 0xb8860b, 0.2 + ratio * 0.5)
     const vx = this.tileHash(col, row, 110) * 14 + 4
     const vy = this.tileHash(col, row, 111) * 14 + 4
     g.lineBetween(px + vx, py + vy, px + vx + 10, py + vy + 6)
     // Small nugget shapes
-    g.fillStyle(0xe8c020, 0.7)
+    g.fillStyle(0xe8c020, 0.25 + ratio * 0.55)
     const nx = this.tileHash(col, row, 112) * 22 + 5
     const ny = this.tileHash(col, row, 113) * 22 + 5
     g.fillRect(px + nx, py + ny, 3, 2)
@@ -526,16 +551,19 @@ export class GameMap {
 
     // Ore sparkle
     for (const { col, row } of this.oreTiles) {
+      const tile = this.getTile(col, row)
+      if (!tile || tile.terrain !== TerrainType.ORE || tile.oreAmount <= 0) continue
+      const ratio = Phaser.Math.Clamp(tile.oreAmount / ORE_MAX_AMOUNT, 0, 1)
       const px = col * TILE_SIZE
       const py = row * TILE_SIZE
       const sx = ((this.animFrame * 9 + col * 13) % 24) + 4
       const sy = ((this.animFrame * 7 + row * 11) % 24) + 4
-      g.fillStyle(0xffffff, 0.75)
+      g.fillStyle(0xffffff, 0.2 + ratio * 0.55)
       g.fillCircle(px + sx, py + sy, 1.5)
       // Second sparkle
       const sx2 = ((this.animFrame * 17 + col * 3) % 20) + 6
       const sy2 = ((this.animFrame * 19 + row * 7) % 20) + 6
-      g.fillStyle(0xffff88, 0.5)
+      g.fillStyle(0xffff88, 0.1 + ratio * 0.45)
       g.fillCircle(px + sx2, py + sy2, 1)
     }
   }
@@ -639,6 +667,155 @@ export class GameMap {
     if (tile) tile.occupiedBy = entityId
   }
 
+  update(delta: number): void {
+    this.oreSpreadTimerMs += delta
+    this.oreGrowthTimerMs += delta
+
+    if (this.oreSpreadTimerMs >= ORE_SPREAD_INTERVAL_MS) {
+      this.oreSpreadTimerMs -= ORE_SPREAD_INTERVAL_MS
+      this.regenerateDepletedOre()
+    }
+
+    if (this.oreGrowthTimerMs >= ORE_GROWTH_INTERVAL_MS) {
+      this.oreGrowthTimerMs -= ORE_GROWTH_INTERVAL_MS
+      this.regenerateExistingOre()
+    }
+  }
+
+  harvestOreAt(col: number, row: number): void {
+    const tile = this.getTile(col, row)
+    if (!tile || tile.terrain !== TerrainType.ORE || tile.oreAmount <= 0) return
+
+    tile.oreAmount = Math.max(0, tile.oreAmount - 1)
+    if (tile.oreAmount <= 0) {
+      tile.terrain = TerrainType.GRASS
+      tile.oreAmount = 0
+      tile.passable = true
+      tile.buildable = true
+      this.depletedOreTiles.add(this.key(col, row))
+      this.removeOreTile(col, row)
+    }
+
+    this.redrawTile(col, row)
+    this.renderAnimatedTiles()
+  }
+
+  getOreRichness(col: number, row: number): number {
+    const tile = this.getTile(col, row)
+    if (!tile || tile.terrain !== TerrainType.ORE) return 0
+    return tile.oreAmount
+  }
+
   get worldWidth(): number { return this.data.width * TILE_SIZE }
   get worldHeight(): number { return this.data.height * TILE_SIZE }
+
+  private redrawTile(col: number, row: number): void {
+    const tile = this.getTile(col, row)
+    if (!tile) return
+    const px = col * TILE_SIZE
+    const py = row * TILE_SIZE
+    const g = this.terrainGraphics
+
+    g.fillStyle(this.tileColor(tile, col, row))
+    g.fillRect(px, py, TILE_SIZE, TILE_SIZE)
+
+    switch (tile.terrain) {
+      case TerrainType.GRASS:
+        this.drawGrassDetail(g, px, py, col, row)
+        break
+      case TerrainType.WATER:
+        this.drawWaterEdge(g, px, py, col, row)
+        break
+      case TerrainType.ORE:
+        this.drawOreDetail(g, px, py, col, row, tile.oreAmount)
+        break
+      case TerrainType.FOREST:
+        this.drawForestDetail(g, px, py, col, row)
+        break
+      case TerrainType.BRIDGE:
+        this.drawBridgeDetail(g, px, py)
+        break
+      case TerrainType.SAND:
+        this.drawSandDetail(g, px, py, col, row)
+        break
+      case TerrainType.ROCK:
+        this.drawRockDetail(g, px, py, col, row)
+        break
+    }
+  }
+
+  private regenerateDepletedOre(): void {
+    if (this.depletedOreTiles.size === 0) return
+    const changed: Array<{ col: number; row: number }> = []
+    for (const key of [...this.depletedOreTiles]) {
+      const col = key % this.data.width
+      const row = Math.floor(key / this.data.width)
+      const tile = this.getTile(col, row)
+
+      if (!tile || tile.terrain === TerrainType.ORE) {
+        this.depletedOreTiles.delete(key)
+        continue
+      }
+      if (!this.hasAdjacentOre(col, row)) continue
+      if (Math.random() > 0.1) continue
+
+      tile.terrain = TerrainType.ORE
+      tile.oreAmount = 1
+      tile.passable = true
+      tile.buildable = false
+      this.depletedOreTiles.delete(key)
+      this.addOreTile(col, row)
+      changed.push({ col, row })
+    }
+
+    if (changed.length > 0) {
+      for (const c of changed) this.redrawTile(c.col, c.row)
+      this.renderAnimatedTiles()
+    }
+  }
+
+  private regenerateExistingOre(): void {
+    if (this.oreTiles.length === 0) return
+    const changed: Array<{ col: number; row: number }> = []
+    for (const { col, row } of this.oreTiles) {
+      const tile = this.getTile(col, row)
+      if (!tile || tile.terrain !== TerrainType.ORE) continue
+      if (tile.oreAmount > 0 && tile.oreAmount < ORE_MAX_AMOUNT) {
+        tile.oreAmount += 1
+        changed.push({ col, row })
+      }
+    }
+
+    if (changed.length > 0) {
+      for (const c of changed) this.redrawTile(c.col, c.row)
+      this.renderAnimatedTiles()
+    }
+  }
+
+  private hasAdjacentOre(col: number, row: number): boolean {
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        if (dr === 0 && dc === 0) continue
+        const tile = this.getTile(col + dc, row + dr)
+        if (tile && tile.terrain === TerrainType.ORE && tile.oreAmount > 0) {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
+  private key(col: number, row: number): number {
+    return row * this.data.width + col
+  }
+
+  private addOreTile(col: number, row: number): void {
+    if (this.oreTiles.some(t => t.col === col && t.row === row)) return
+    this.oreTiles.push({ col, row })
+  }
+
+  private removeOreTile(col: number, row: number): void {
+    const idx = this.oreTiles.findIndex(t => t.col === col && t.row === row)
+    if (idx >= 0) this.oreTiles.splice(idx, 1)
+  }
 }

@@ -53,7 +53,7 @@ export interface TileData {
   terrain: TerrainType
   passable: boolean
   buildable: boolean
-  oreAmount: number       // 0 if not ore
+  oreAmount: number       // 0-5 richness (0 = depleted, 5 = full ore)
   fogState: FogState
   occupiedBy: string | null  // entity ID
 }

@@ -322,6 +322,7 @@ export class GameScene extends Phaser.Scene {
 
     // Entity systems (movement, combat state machines, harvest loops)
     this.entityMgr.update(delta)
+    this.gameMap.update(delta)
 
     // Projectile travel + explosion effects
     this.combat.update(delta)
@@ -651,10 +652,8 @@ export class GameScene extends Phaser.Scene {
     // Harvester depletes ore from the tile it harvested
     this.entityMgr.on('ore_harvested', (tilePos: Position, amount: number) => {
       const tc = this.gameMap.worldToTile(tilePos.x, tilePos.y)
-      const tileData = this.gameMap.getTile(tc.col, tc.row)
-      if (tileData && tileData.oreAmount > 0) {
-        tileData.oreAmount = Math.max(0, tileData.oreAmount - amount)
-      }
+      void amount
+      this.gameMap.harvestOreAt(tc.col, tc.row)
     })
 
     // Harvester asks: "where is the nearest ore field?"
@@ -671,7 +670,7 @@ export class GameScene extends Phaser.Scene {
             const tr = origin.row + dr
             if (tc < 0 || tc >= width || tr < 0 || tr >= height) continue
             const t = tiles[tr]?.[tc]
-            if (t && t.oreAmount > 100) {
+            if (t && t.oreAmount > 0) {
               foundPos = this.gameMap.tileToWorld(tc, tr)
             }
           }
@@ -729,7 +728,7 @@ export class GameScene extends Phaser.Scene {
             if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
             const tc = origin.col + dc, tr = origin.row + dr
             if (tc < 0 || tc >= width || tr < 0 || tr >= height) continue
-            if ((tiles[tr]?.[tc]?.oreAmount ?? 0) > 100) {
+            if ((tiles[tr]?.[tc]?.oreAmount ?? 0) > 0) {
               hv.giveOrder({ type: 'harvest', target: this.gameMap.tileToWorld(tc, tr) })
               sent = true
             }
@@ -836,7 +835,7 @@ export class GameScene extends Phaser.Scene {
               if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
               const tc = origin.col + dc, tr = origin.row + dr
               if (tc < 0 || tc >= width || tr < 0 || tr >= height) continue
-              if ((tiles[tr]?.[tc]?.oreAmount ?? 0) > 100) {
+              if ((tiles[tr]?.[tc]?.oreAmount ?? 0) > 0) {
                 hv.giveOrder({ type: 'harvest', target: this.gameMap.tileToWorld(tc, tr) })
                 sent = true
               }
