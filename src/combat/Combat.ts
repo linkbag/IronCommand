@@ -120,6 +120,7 @@ export class Combat extends Phaser.Events.EventEmitter {
   private projectiles: Projectile[]
   private timedBombs: Map<string, TimedBomb>
   private radiationZones: RadiationZone[]
+  private chronoEraseProgress: Map<string, number> = new Map()
 
   constructor(scene: Phaser.Scene, entityManager: EntityManager) {
     super()
@@ -222,10 +223,6 @@ export class Combat extends Phaser.Events.EventEmitter {
         return
       }
     }
-
-    const attack = this.getEffectiveAttack(attacker, target)
-    if (this.isAirEntity(target) && !attack.canAttackAir) return
-    if (!this.isAirEntity(target) && !attack.canAttackGround) return
 
     // RA2 Veterancy: damage multiplier for units
     const vetMult = (attacker instanceof Unit) ? attacker.getVeterancyDamageMultiplier() : 1.0
