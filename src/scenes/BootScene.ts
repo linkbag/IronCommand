@@ -195,31 +195,31 @@ export class BootScene extends Phaser.Scene {
     for (const n of navalDefs) tasks.push(() => this.genNaval(n.key, n.color, n.accent, n.kind))
 
     const buildingDefs: Array<{ key: string; color: number; kind: BuildingKind; w: number; h: number }> = [
-      { key: 'bld_construction_yard', color: 0x6b6e74, kind: 'construction_yard', w: 96, h: 96 },
-      { key: 'bld_power_plant', color: 0x4e6f85, kind: 'power_plant', w: 64, h: 64 },
-      { key: 'bld_tesla_reactor', color: 0x6b3b47, kind: 'tesla_reactor', w: 64, h: 64 },
-      { key: 'bld_nuclear_reactor', color: 0x4d5a6d, kind: 'nuclear_reactor', w: 96, h: 96 },
-      { key: 'bld_barracks', color: 0x4f6a54, kind: 'barracks', w: 96, h: 64 },
-      { key: 'bld_war_factory', color: 0x5f6268, kind: 'war_factory', w: 128, h: 96 },
-      { key: 'bld_airfield', color: 0x3f566c, kind: 'airfield', w: 128, h: 64 },
-      { key: 'bld_naval_yard', color: 0x305f78, kind: 'naval_yard', w: 128, h: 96 },
-      { key: 'bld_ore_refinery', color: 0x6c5d3f, kind: 'ore_refinery', w: 96, h: 64 },
-      { key: 'bld_service_depot', color: 0x6d654f, kind: 'service_depot', w: 96, h: 96 },
-      { key: 'bld_tech_center', color: 0x526487, kind: 'tech_center', w: 96, h: 96 },
-      { key: 'bld_ore_purifier', color: 0x66724a, kind: 'ore_purifier', w: 96, h: 64 },
-      { key: 'bld_spy_satellite', color: 0x39516a, kind: 'spy_satellite', w: 64, h: 64 },
-      { key: 'bld_radar_tower', color: 0x446472, kind: 'radar_tower', w: 64, h: 64 },
-      { key: 'bld_wall', color: 0x7e7e7e, kind: 'wall', w: 32, h: 32 },
-      { key: 'bld_turret', color: 0x70675a, kind: 'turret', w: 32, h: 32 },
-      { key: 'bld_aa_gun', color: 0x596263, kind: 'aa_gun', w: 32, h: 32 },
-      { key: 'bld_prism_tower', color: 0x4b6ca0, kind: 'prism_tower', w: 32, h: 32 },
-      { key: 'bld_tesla_coil', color: 0x65394f, kind: 'tesla_coil', w: 32, h: 32 },
-      { key: 'bld_gap_generator', color: 0x4a5a63, kind: 'gap_generator', w: 64, h: 64 },
-      { key: 'bld_psychic_sensor', color: 0x5f466f, kind: 'psychic_sensor', w: 64, h: 64 },
-      { key: 'bld_superweapon', color: 0x70433f, kind: 'superweapon', w: 96, h: 96 },
-      { key: 'bld_chronosphere', color: 0x3f6d8e, kind: 'chronosphere', w: 96, h: 96 },
-      { key: 'bld_iron_curtain', color: 0x6b3f48, kind: 'iron_curtain', w: 96, h: 96 },
-      { key: 'bld_grand_cannon', color: 0x606060, kind: 'grand_cannon', w: 64, h: 64 },
+      { key: 'bld_construction_yard', color: 0x6b6e74, kind: 'construction_yard', w: 192, h: 112 },
+      { key: 'bld_power_plant', color: 0x6a7280, kind: 'power_plant', w: 128, h: 80 },
+      { key: 'bld_tesla_reactor', color: 0x4f455f, kind: 'tesla_reactor', w: 128, h: 80 },
+      { key: 'bld_nuclear_reactor', color: 0x4b4f5a, kind: 'nuclear_reactor', w: 128, h: 96 },
+      { key: 'bld_barracks', color: 0x4b6a4c, kind: 'barracks', w: 128, h: 80 },
+      { key: 'bld_war_factory', color: 0x4d555e, kind: 'war_factory', w: 128, h: 96 },
+      { key: 'bld_airfield', color: 0x46586b, kind: 'airfield', w: 128, h: 80 },
+      { key: 'bld_naval_yard', color: 0x2f6278, kind: 'naval_yard', w: 128, h: 96 },
+      { key: 'bld_ore_refinery', color: 0x715f3c, kind: 'ore_refinery', w: 128, h: 80 },
+      { key: 'bld_service_depot', color: 0x63604f, kind: 'service_depot', w: 128, h: 80 },
+      { key: 'bld_tech_center', color: 0x4f5f88, kind: 'tech_center', w: 128, h: 80 },
+      { key: 'bld_ore_purifier', color: 0x5d7046, kind: 'ore_purifier', w: 128, h: 80 },
+      { key: 'bld_spy_satellite', color: 0x3e5b76, kind: 'spy_satellite', w: 128, h: 80 },
+      { key: 'bld_radar_tower', color: 0x3e6b74, kind: 'radar_tower', w: 128, h: 80 },
+      { key: 'bld_wall', color: 0x727272, kind: 'wall', w: 64, h: 48 },
+      { key: 'bld_turret', color: 0x665e52, kind: 'turret', w: 64, h: 48 },
+      { key: 'bld_aa_gun', color: 0x586261, kind: 'aa_gun', w: 64, h: 48 },
+      { key: 'bld_prism_tower', color: 0x4064a0, kind: 'prism_tower', w: 64, h: 48 },
+      { key: 'bld_tesla_coil', color: 0x493c56, kind: 'tesla_coil', w: 64, h: 48 },
+      { key: 'bld_gap_generator', color: 0x4f5a66, kind: 'gap_generator', w: 128, h: 80 },
+      { key: 'bld_psychic_sensor', color: 0x5e4c6f, kind: 'psychic_sensor', w: 128, h: 80 },
+      { key: 'bld_superweapon', color: 0x4f4c53, kind: 'superweapon', w: 128, h: 96 },
+      { key: 'bld_chronosphere', color: 0x3a6587, kind: 'chronosphere', w: 128, h: 96 },
+      { key: 'bld_iron_curtain', color: 0x5f3d46, kind: 'iron_curtain', w: 128, h: 96 },
+      { key: 'bld_grand_cannon', color: 0x5f5f5f, kind: 'grand_cannon', w: 64, h: 48 },
       { key: 'bld_cloning_vats', color: 0x5d4c61, kind: 'cloning_vats', w: 128, h: 96 },
     ]
     for (const b of buildingDefs) {
@@ -774,183 +774,191 @@ export class BootScene extends Phaser.Scene {
 
   private genBuilding(key: string, color: number, kind: BuildingKind, w: number, h: number) {
     const g = this.make.graphics({ x: 0, y: 0 }, false)
-    const roof = this.lighten(color, 8)
-    const shadow = this.darken(color, 18)
+    const roofColor = this.lighten(color, 18)
+    const leftColor = this.lighten(color, 4)
+    const rightColor = this.darken(color, 18)
+    const midX = Math.floor(w / 2)
+    const baseY = h - 18
+    const halfW = Math.floor(w * 0.38)
+    const wallH = Math.floor(Math.max(16, h * 0.38))
 
-    g.fillStyle(0x000000, 0.25)
-    g.fillRect(2, h - 6, w - 2, 6)
-    g.fillStyle(color, 1)
-    g.fillRect(0, 2, w, h - 6)
-    g.fillStyle(roof, 1)
-    g.fillRect(2, 4, w - 4, Math.max(8, Math.floor(h * 0.22)))
+    const fillPoly = (pts: Array<{ x: number; y: number }>, c: number, a = 1) => {
+      g.fillStyle(c, a)
+      g.beginPath()
+      g.moveTo(pts[0].x, pts[0].y)
+      for (let i = 1; i < pts.length; i++) g.lineTo(pts[i].x, pts[i].y)
+      g.closePath()
+      g.fillPath()
+    }
+
+    g.fillStyle(0x000000, 0.28)
+    g.fillEllipse(midX, baseY + 10, Math.floor(halfW * 2.25), Math.floor(Math.max(12, halfW * 0.55)))
+
+    if (kind === 'naval_yard') {
+      g.fillStyle(0x1e5577, 0.85)
+      g.fillRect(0, baseY + 1, w, h - baseY)
+    }
+
+    const roofTopY = baseY - wallH
+    const leftTop = { x: midX - halfW, y: roofTopY + 16 }
+    const rightTop = { x: midX + halfW, y: roofTopY + 16 }
+    const frontTop = { x: midX, y: roofTopY + 32 }
+    const topPeak = { x: midX, y: roofTopY }
+
+    fillPoly([topPeak, rightTop, frontTop, leftTop], roofColor)
+    fillPoly(
+      [leftTop, frontTop, { x: frontTop.x, y: baseY + 16 }, { x: leftTop.x, y: baseY }],
+      leftColor,
+    )
+    fillPoly(
+      [frontTop, rightTop, { x: rightTop.x, y: baseY }, { x: frontTop.x, y: baseY + 16 }],
+      rightColor,
+    )
 
     switch (kind) {
       case 'construction_yard':
-        g.fillStyle(shadow, 1)
-        g.fillRect(8, Math.floor(h * 0.45), w - 16, Math.floor(h * 0.35))
-        g.fillRect(Math.floor(w * 0.58), 10, 6, Math.floor(h * 0.55))
-        g.lineStyle(3, 0xffc94d, 1)
-        g.lineBetween(Math.floor(w * 0.58), 14, Math.floor(w * 0.86), 14)
-        g.lineBetween(Math.floor(w * 0.86), 14, Math.floor(w * 0.86), Math.floor(h * 0.42))
+        g.fillStyle(0x68727c, 1)
+        g.fillRect(midX + 14, roofTopY - 6, 8, wallH + 14)
+        g.lineStyle(3, 0xf6c94e, 1)
+        g.lineBetween(midX + 18, roofTopY - 6, midX + 62, roofTopY - 18)
+        g.lineBetween(midX + 62, roofTopY - 18, midX + 62, roofTopY + 18)
+        g.fillStyle(0xf6c94e, 1)
+        g.fillRect(midX + 59, roofTopY + 18, 6, 8)
         break
       case 'power_plant':
-      case 'tesla_reactor':
       case 'nuclear_reactor':
-        g.fillStyle(shadow, 1)
-        g.fillRect(8, Math.floor(h * 0.42), Math.floor(w * 0.35), Math.floor(h * 0.4))
-        g.fillRect(Math.floor(w * 0.52), Math.floor(h * 0.32), Math.floor(w * 0.32), Math.floor(h * 0.5))
-        if (kind === 'tesla_reactor') {
-          g.lineStyle(2, 0x67e2ff, 1)
-          g.lineBetween(Math.floor(w * 0.68), Math.floor(h * 0.18), Math.floor(w * 0.68), Math.floor(h * 0.34))
-          g.lineBetween(Math.floor(w * 0.63), Math.floor(h * 0.2), Math.floor(w * 0.73), Math.floor(h * 0.2))
-        }
-        if (kind === 'nuclear_reactor') {
-          g.fillStyle(this.lighten(color, 18), 1)
-          g.fillEllipse(Math.floor(w * 0.32), Math.floor(h * 0.3), Math.floor(w * 0.22), Math.floor(h * 0.2))
-          g.fillEllipse(Math.floor(w * 0.65), Math.floor(h * 0.24), Math.floor(w * 0.26), Math.floor(h * 0.24))
-        }
+        g.fillStyle(0x7b8791, 1)
+        g.fillEllipse(midX - 20, roofTopY + 6, 24, 14)
+        g.fillRect(midX - 31, roofTopY + 6, 22, 24)
+        g.fillEllipse(midX - 20, roofTopY + 30, 22, 10)
+        g.fillEllipse(midX + 20, roofTopY + 2, 28, 16)
+        g.fillRect(midX + 7, roofTopY + 2, 26, 30)
+        g.fillEllipse(midX + 20, roofTopY + 32, 26, 10)
+        g.fillStyle(0xd0d6de, 0.5)
+        g.fillEllipse(midX - 20, roofTopY - 4, 14, 6)
+        g.fillEllipse(midX + 20, roofTopY - 8, 16, 7)
+        break
+      case 'tesla_reactor':
+      case 'tesla_coil':
+        g.fillStyle(0x393845, 1)
+        g.fillRect(midX - 5, roofTopY - 12, 10, wallH + 12)
+        g.fillStyle(0x6fe1ff, 1)
+        g.fillCircle(midX, roofTopY - 14, 5)
+        g.lineStyle(2, 0x66d8ff, 1)
+        g.lineBetween(midX - 11, roofTopY - 16, midX + 12, roofTopY - 22)
+        g.lineBetween(midX + 12, roofTopY - 22, midX + 2, roofTopY - 9)
         break
       case 'barracks':
-        g.fillStyle(shadow, 1)
-        g.fillRect(6, Math.floor(h * 0.45), w - 12, Math.floor(h * 0.34))
-        g.lineStyle(2, 0xc94242, 1)
-        g.lineBetween(Math.floor(w * 0.2), 10, Math.floor(w * 0.2), Math.floor(h * 0.42))
-        g.fillStyle(0xc94242, 1)
-        g.fillTriangle(Math.floor(w * 0.2), 10, Math.floor(w * 0.32), 14, Math.floor(w * 0.2), 18)
+        g.fillStyle(0x2b2d2f, 0.85)
+        g.fillRect(midX - 10, baseY + 2, 20, 14)
+        g.lineStyle(2, 0xb6b7b9, 1)
+        g.lineBetween(midX + 30, roofTopY + 20, midX + 30, roofTopY - 16)
+        g.fillStyle(0xd24242, 1)
+        g.fillTriangle(midX + 30, roofTopY - 16, midX + 48, roofTopY - 10, midX + 30, roofTopY - 4)
         break
       case 'war_factory':
-        g.fillStyle(shadow, 1)
-        g.fillRect(8, Math.floor(h * 0.3), w - 16, Math.floor(h * 0.52))
-        g.fillStyle(0x252a32, 1)
-        g.fillRect(Math.floor(w * 0.2), Math.floor(h * 0.56), Math.floor(w * 0.45), Math.floor(h * 0.18))
-        g.fillStyle(this.lighten(color, 16), 1)
-        g.fillRect(Math.floor(w * 0.68), Math.floor(h * 0.24), Math.floor(w * 0.16), Math.floor(h * 0.22))
-        break
-      case 'airfield':
-        g.fillStyle(shadow, 1)
-        g.fillRect(4, Math.floor(h * 0.52), w - 8, Math.floor(h * 0.2))
-        g.lineStyle(1, 0xe2e2e2, 1)
-        g.lineBetween(8, Math.floor(h * 0.62), w - 8, Math.floor(h * 0.62))
-        g.lineBetween(8, Math.floor(h * 0.58), 14, Math.floor(h * 0.58))
-        g.fillStyle(this.lighten(color, 16), 1)
-        g.fillRect(Math.floor(w * 0.72), Math.floor(h * 0.28), Math.floor(w * 0.2), Math.floor(h * 0.2))
-        break
-      case 'naval_yard':
-        g.fillStyle(0x234864, 1)
-        g.fillRect(0, Math.floor(h * 0.62), w, Math.floor(h * 0.3))
-        g.fillStyle(shadow, 1)
-        g.fillRect(8, Math.floor(h * 0.34), Math.floor(w * 0.55), Math.floor(h * 0.24))
-        g.lineStyle(2, 0xffcc66, 1)
-        g.lineBetween(Math.floor(w * 0.7), 10, Math.floor(w * 0.9), 10)
-        g.lineBetween(Math.floor(w * 0.9), 10, Math.floor(w * 0.9), Math.floor(h * 0.45))
+        g.fillStyle(0x212830, 1)
+        g.fillRect(midX - 26, baseY - 2, 52, 18)
+        g.lineStyle(1, 0x5d6770, 1)
+        for (let y = 0; y < 16; y += 4) g.lineBetween(midX - 24, baseY + y, midX + 24, baseY + y)
         break
       case 'ore_refinery':
       case 'ore_purifier':
-        g.fillStyle(shadow, 1)
-        g.fillRect(6, Math.floor(h * 0.4), Math.floor(w * 0.58), Math.floor(h * 0.38))
-        g.fillStyle(0xd8ad2f, 1)
-        g.fillTriangle(Math.floor(w * 0.7), Math.floor(h * 0.74), Math.floor(w * 0.84), Math.floor(h * 0.45), Math.floor(w * 0.95), Math.floor(h * 0.74))
+        g.fillStyle(0xc8a44a, 1)
+        g.fillEllipse(midX + 24, roofTopY + 6, 20, 12)
+        g.fillRect(midX + 15, roofTopY + 6, 18, 22)
+        g.fillStyle(0xa67f2e, 1)
+        g.fillRect(midX - 8, roofTopY + 16, 30, 6)
         if (kind === 'ore_purifier') {
-          g.fillStyle(0x92ca62, 1)
-          g.fillRect(Math.floor(w * 0.72), Math.floor(h * 0.26), Math.floor(w * 0.16), Math.floor(h * 0.1))
+          g.fillStyle(0x8fd56f, 1)
+          g.fillRect(midX - 22, roofTopY + 8, 14, 6)
         }
         break
-      case 'service_depot':
-        g.fillStyle(shadow, 1)
-        g.fillRect(6, Math.floor(h * 0.35), w - 12, Math.floor(h * 0.44))
-        g.fillStyle(0x202831, 1)
-        g.fillRect(Math.floor(w * 0.2), Math.floor(h * 0.57), Math.floor(w * 0.6), Math.floor(h * 0.18))
-        g.lineStyle(2, 0xd2d8df, 1)
-        g.lineBetween(Math.floor(w * 0.45), Math.floor(h * 0.33), Math.floor(w * 0.55), Math.floor(h * 0.33))
-        g.lineBetween(Math.floor(w * 0.5), Math.floor(h * 0.28), Math.floor(w * 0.5), Math.floor(h * 0.38))
+      case 'radar_tower':
+      case 'spy_satellite':
+        g.fillStyle(0x3a4f60, 1)
+        g.fillRect(midX + 20, roofTopY - 16, 6, wallH + 16)
+        g.lineStyle(2, 0x9fe6ff, 1)
+        g.strokeEllipse(midX + 23, roofTopY - 16, 26, 12)
+        if (kind === 'spy_satellite') g.strokeEllipse(midX + 23, roofTopY - 16, 38, 18)
+        break
+      case 'airfield':
+        g.fillStyle(0x394652, 1)
+        g.fillRect(midX - 46, baseY + 2, 92, 10)
+        g.lineStyle(1, 0xd7dfe8, 0.9)
+        g.lineBetween(midX - 36, baseY + 7, midX + 36, baseY + 7)
+        g.lineBetween(midX - 28, baseY + 5, midX - 20, baseY + 5)
         break
       case 'tech_center':
-      case 'spy_satellite':
-      case 'radar_tower':
-        g.fillStyle(shadow, 1)
-        g.fillRect(8, Math.floor(h * 0.42), w - 16, Math.floor(h * 0.36))
-        g.lineStyle(2, 0x9be0ff, 1)
-        g.lineBetween(Math.floor(w * 0.64), Math.floor(h * 0.2), Math.floor(w * 0.64), Math.floor(h * 0.45))
-        g.strokeEllipse(Math.floor(w * 0.64), Math.floor(h * 0.2), Math.floor(w * 0.22), Math.floor(h * 0.1))
-        if (kind === 'spy_satellite') {
-          g.lineStyle(1, 0x9be0ff, 0.85)
-          g.strokeEllipse(Math.floor(w * 0.64), Math.floor(h * 0.2), Math.floor(w * 0.36), Math.floor(h * 0.2))
-        }
+      case 'gap_generator':
+      case 'psychic_sensor':
+        g.fillStyle(kind === 'psychic_sensor' ? 0x6e4f8a : 0x6f83a0, 1)
+        g.fillEllipse(midX, roofTopY + 8, 34, 18)
+        g.lineStyle(2, kind === 'psychic_sensor' ? 0xe483ff : 0x9fe4ff, 1)
+        g.strokeCircle(midX, roofTopY + 8, 10)
         break
-      case 'wall':
-        g.fillStyle(shadow, 1)
-        g.fillRect(2, 14, w - 4, 10)
-        g.fillStyle(this.lighten(color, 12), 1)
-        g.fillRect(4, 12, 6, 4)
-        g.fillRect(13, 12, 6, 4)
-        g.fillRect(22, 12, 6, 4)
+      case 'naval_yard':
+        g.fillStyle(0x31485e, 1)
+        g.fillRect(midX - 52, baseY - 8, 58, 12)
+        g.lineStyle(2, 0xffcc66, 1)
+        g.lineBetween(midX + 20, roofTopY + 4, midX + 52, roofTopY - 8)
+        g.lineBetween(midX + 52, roofTopY - 8, midX + 52, roofTopY + 26)
         break
       case 'turret':
       case 'aa_gun':
       case 'prism_tower':
-      case 'tesla_coil':
       case 'grand_cannon':
-        g.fillStyle(shadow, 1)
-        g.fillRect(4, 16, w - 8, 10)
-        g.fillStyle(this.lighten(color, 10), 1)
-        g.fillCircle(Math.floor(w * 0.5), 14, kind === 'grand_cannon' ? 7 : 6)
-        if (kind === 'aa_gun') {
-          g.lineStyle(2, 0xb0b0b0, 1)
-          g.lineBetween(Math.floor(w * 0.5) - 2, 12, Math.floor(w * 0.5) - 5, 4)
-          g.lineBetween(Math.floor(w * 0.5) + 2, 12, Math.floor(w * 0.5) + 5, 4)
-        } else if (kind === 'tesla_coil') {
-          g.lineStyle(2, 0x67e2ff, 1)
-          g.lineBetween(Math.floor(w * 0.5), 11, Math.floor(w * 0.5), 3)
-          g.lineBetween(Math.floor(w * 0.5) - 4, 5, Math.floor(w * 0.5) + 4, 5)
-        } else if (kind === 'prism_tower') {
-          g.fillStyle(0x9fffff, 1)
-          g.fillTriangle(Math.floor(w * 0.5), 2, Math.floor(w * 0.5) - 4, 8, Math.floor(w * 0.5) + 4, 8)
-        } else {
-          g.lineStyle(2, 0xdddddd, 1)
-          g.lineBetween(Math.floor(w * 0.5), 13, Math.floor(w * 0.5), 4)
-        }
+        g.fillStyle(0x3e4348, 1)
+        g.fillCircle(midX, roofTopY + 24, 9)
+        g.lineStyle(3, kind === 'prism_tower' ? 0x9fefff : kind === 'aa_gun' ? 0xb7c0c7 : 0xd6d6d6, 1)
+        g.lineBetween(midX, roofTopY + 20, midX + (kind === 'grand_cannon' ? 18 : 8), roofTopY + (kind === 'aa_gun' ? 4 : 12))
+        if (kind === 'aa_gun') g.lineBetween(midX - 2, roofTopY + 20, midX + 4, roofTopY + 2)
         break
-      case 'gap_generator':
-      case 'psychic_sensor':
-        g.fillStyle(shadow, 1)
-        g.fillRect(8, Math.floor(h * 0.44), w - 16, Math.floor(h * 0.3))
-        g.lineStyle(2, kind === 'psychic_sensor' ? 0xe483ff : 0x9fe4ff, 1)
-        g.strokeCircle(Math.floor(w * 0.52), Math.floor(h * 0.36), Math.floor(w * 0.15))
-        g.strokeCircle(Math.floor(w * 0.52), Math.floor(h * 0.36), Math.floor(w * 0.24))
+      case 'wall':
+        g.fillStyle(0x6a6a6a, 1)
+        fillPoly(
+          [
+            { x: midX, y: baseY - 16 },
+            { x: midX + 22, y: baseY - 8 },
+            { x: midX, y: baseY },
+            { x: midX - 22, y: baseY - 8 },
+          ],
+          this.lighten(color, 16),
+        )
+        g.fillRect(midX - 22, baseY - 8, 44, 10)
         break
       case 'superweapon':
       case 'chronosphere':
       case 'iron_curtain':
-        g.fillStyle(shadow, 1)
-        g.fillRect(8, Math.floor(h * 0.4), w - 16, Math.floor(h * 0.42))
-        g.lineStyle(2, kind === 'chronosphere' ? 0x81ecff : kind === 'iron_curtain' ? 0xff6a6a : 0xffcc66, 1)
-        g.strokeCircle(Math.floor(w * 0.5), Math.floor(h * 0.35), Math.floor(w * 0.18))
-        g.strokeCircle(Math.floor(w * 0.5), Math.floor(h * 0.35), Math.floor(w * 0.1))
+      case 'cloning_vats':
+        g.fillStyle(kind === 'iron_curtain' ? 0x693e47 : kind === 'chronosphere' ? 0x396d92 : 0x4d4d56, 1)
+        g.fillEllipse(midX, roofTopY + 10, 46, 24)
+        g.lineStyle(2, kind === 'iron_curtain' ? 0xff6666 : 0x74e8ff, 1)
+        g.strokeCircle(midX, roofTopY + 10, 12)
         if (kind === 'superweapon') {
-          g.lineBetween(Math.floor(w * 0.5), Math.floor(h * 0.17), Math.floor(w * 0.62), Math.floor(h * 0.05))
+          g.fillStyle(0xb2b7c0, 1)
+          g.fillRect(midX - 4, roofTopY - 22, 8, 22)
+          g.fillStyle(0xff5555, 1)
+          g.fillTriangle(midX - 4, roofTopY - 22, midX, roofTopY - 30, midX + 4, roofTopY - 22)
         }
         break
-      case 'cloning_vats':
-        g.fillStyle(shadow, 1)
-        g.fillRect(8, Math.floor(h * 0.36), w - 16, Math.floor(h * 0.42))
-        g.fillStyle(0x82e0cf, 0.6)
-        g.fillRect(Math.floor(w * 0.18), Math.floor(h * 0.42), Math.floor(w * 0.18), Math.floor(h * 0.24))
-        g.fillRect(Math.floor(w * 0.42), Math.floor(h * 0.42), Math.floor(w * 0.18), Math.floor(h * 0.24))
-        g.fillRect(Math.floor(w * 0.66), Math.floor(h * 0.42), Math.floor(w * 0.16), Math.floor(h * 0.24))
-        break
     }
 
-    const rowY = Math.floor(h * 0.52)
-    const gap = 8
-    g.fillStyle(0xd6dfef, 0.5)
-    for (let x = 10; x < w - 10; x += gap) {
-      g.fillRect(x, rowY, 2, 2)
-      if (h > 48) g.fillRect(x + 1, rowY + 8, 2, 2)
-    }
-
-    g.lineStyle(2, 0x000000, 0.7)
+    g.lineStyle(1, 0x000000, 0.35)
     g.strokeRect(1, 1, w - 2, h - 2)
-    g.generateTexture(key, w, h)
+
+    const keys = new Set<string>([key, `${key}_iso`])
+    const aliases: Record<string, string[]> = {
+      bld_airfield: ['bld_air_force_command_iso'],
+      bld_tech_center: ['bld_battle_lab_iso'],
+      bld_naval_yard: ['bld_naval_shipyard_iso'],
+      bld_wall: ['bld_fortress_wall_iso'],
+      bld_turret: ['bld_pillbox_iso', 'bld_sentry_gun_iso'],
+      bld_aa_gun: ['bld_patriot_missile_iso', 'bld_flak_cannon_iso'],
+      bld_superweapon: ['bld_nuclear_silo_iso', 'bld_weather_device_iso'],
+    }
+    for (const alias of aliases[key] ?? []) keys.add(alias)
+    for (const outKey of keys) g.generateTexture(outKey, w, h)
     g.destroy()
   }
 

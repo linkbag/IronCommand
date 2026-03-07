@@ -7,6 +7,7 @@
 import Phaser from 'phaser'
 import type { BuildingDef, BuildQueueItem, Position } from '../types'
 import { TILE_SIZE } from '../types'
+import { cartToIso } from '../engine/IsoUtils'
 
 export type BuildingState = 'constructing' | 'active' | 'low_power' | 'dying'
 
@@ -34,7 +35,10 @@ export class Building extends Phaser.GameObjects.Container {
   private constructionProgress: number
 
   // Visual components
+  private visualRoot: Phaser.GameObjects.Container
+  private dropShadow: Phaser.GameObjects.Graphics
   private bodyGraphic: Phaser.GameObjects.Graphics
+  private crackOverlay: Phaser.GameObjects.Graphics
   private healthBar: Phaser.GameObjects.Graphics
   private selectionOutline: Phaser.GameObjects.Graphics
   private constructionOverlay: Phaser.GameObjects.Graphics
@@ -77,9 +81,12 @@ export class Building extends Phaser.GameObjects.Container {
     }
 
     // Visuals
+    this.visualRoot = scene.add.container(0, 0)
+    this.dropShadow = scene.add.graphics()
     this.selectionOutline = scene.add.graphics()
     this.constructionOverlay = scene.add.graphics()
     this.bodyGraphic = scene.add.graphics()
+    this.crackOverlay = scene.add.graphics()
     this.healthBar = scene.add.graphics()
     this.statusText = scene.add.text(0, 0, def.name.slice(0, 4).toUpperCase(), {
       fontSize: '7px',
@@ -87,7 +94,16 @@ export class Building extends Phaser.GameObjects.Container {
       resolution: 2,
     }).setOrigin(0.5, 0.5)
 
-    this.add([this.selectionOutline, this.constructionOverlay, this.bodyGraphic, this.healthBar, this.statusText])
+    this.visualRoot.add([
+      this.dropShadow,
+      this.selectionOutline,
+      this.constructionOverlay,
+      this.bodyGraphic,
+      this.crackOverlay,
+      this.healthBar,
+      this.statusText,
+    ])
+    this.add(this.visualRoot)
 
     this.drawBody()
     this.drawHealthBar()
@@ -95,7 +111,7 @@ export class Building extends Phaser.GameObjects.Container {
     ;(this.bodyGraphic as Phaser.GameObjects.Graphics & { setTint?: (value: number) => unknown }).setTint?.(this.factionColor)
 
     scene.add.existing(this)
-    this.setDepth(5)
+    this.updateRenderTransform()
 
     // Start construction animation
     this.playConstructionAnimation()
@@ -174,6 +190,7 @@ export class Building extends Phaser.GameObjects.Container {
 
   update(delta: number): void {
     if (this.state === 'dying') return
+    this.updateRenderTransform()
 
     if (this.state === 'constructing') {
       this.updateConstruction(delta)
@@ -206,14 +223,15 @@ export class Building extends Phaser.GameObjects.Container {
     const smoke = this.scene.add.graphics()
     const rx = this.x + Phaser.Math.Between(-w / 3, w / 3)
     const ry = this.y + Phaser.Math.Between(-h / 3, h / 3)
+    const iso = cartToIso(rx, ry)
     const size = Phaser.Math.Between(3, 7)
     smoke.fillStyle(0x444444, 0.6)
-    smoke.fillCircle(rx, ry, size)
+    smoke.fillCircle(iso.x, iso.y, size)
     smoke.setDepth(45)
     this.scene.tweens.add({
       targets: smoke,
       alpha: 0,
-      y: ry - 20,
+      y: iso.y - 20,
       scaleX: 1.5,
       scaleY: 1.5,
       duration: 600,
@@ -231,9 +249,10 @@ export class Building extends Phaser.GameObjects.Container {
     // Large explosion
     const w = this.def.footprint.w * TILE_SIZE
     const h = this.def.footprint.h * TILE_SIZE
+    const iso = cartToIso(this.x, this.y)
     const flash = this.scene.add.graphics()
     flash.fillStyle(0xff6600, 1)
-    flash.fillRect(this.x - w / 2, this.y - h / 2, w, h)
+    flash.fillEllipse(iso.x, iso.y + 8, w * 0.9, h * 0.5)
     flash.setDepth(50)
 
     this.scene.tweens.add({
@@ -250,13 +269,14 @@ export class Building extends Phaser.GameObjects.Container {
       const smoke = this.scene.add.graphics()
       const rx = this.x + Phaser.Math.Between(-w / 2, w / 2)
       const ry = this.y + Phaser.Math.Between(-h / 2, h / 2)
+      const isoP = cartToIso(rx, ry)
       smoke.fillStyle(0x888888, 0.8)
-      smoke.fillCircle(rx, ry, Phaser.Math.Between(4, 12))
+      smoke.fillCircle(isoP.x, isoP.y, Phaser.Math.Between(4, 12))
       smoke.setDepth(49)
       this.scene.tweens.add({
         targets: smoke,
         alpha: 0,
-        y: ry - 30,
+        y: isoP.y - 30,
         delay: i * 80,
         duration: 600,
         onComplete: () => smoke.destroy(),
@@ -316,44 +336,84 @@ export class Building extends Phaser.GameObjects.Container {
   private drawBody(): void {
     const g = this.bodyGraphic
     g.clear()
-    const w = this.def.footprint.w * TILE_SIZE
-    const h = this.def.footprint.h * TILE_SIZE
-    const color = this.state === 'low_power' ? 0x886644 : this.factionColor
-    const darker = adjustBrightness(color, -35)
-    const lighter = adjustBrightness(color, 25)
+    this.drawDropShadow()
+    const tileSpan = this.def.footprint.w + this.def.footprint.h
+    const halfW = Math.max(16, tileSpan * 16)
+    const wallH = Math.max(18, tileSpan * 8)
+    const baseY = 12
+    const pct = this.hp / this.def.stats.maxHp
+    let color = this.state === 'low_power' ? 0x886644 : this.factionColor
+    if (pct < 0.5) color = adjustBrightness(color, -45)
+    const roof = adjustBrightness(color, 30)
+    const left = adjustBrightness(color, 6)
+    const right = adjustBrightness(color, -24)
 
-    // Main body
-    g.fillStyle(color, 1)
-    g.fillRect(-w / 2, -h / 2, w, h)
-
-    // 3D bevel — top and left edges lighter
-    g.lineStyle(2, lighter, 0.5)
+    // Roof
+    g.fillStyle(roof, 1)
     g.beginPath()
-    g.moveTo(-w / 2, h / 2)
-    g.lineTo(-w / 2, -h / 2)
-    g.lineTo(w / 2, -h / 2)
-    g.strokePath()
+    g.moveTo(0, baseY - wallH)
+    g.lineTo(halfW, baseY - wallH / 2)
+    g.lineTo(0, baseY)
+    g.lineTo(-halfW, baseY - wallH / 2)
+    g.closePath()
+    g.fillPath()
 
-    // 3D bevel — bottom and right edges darker
-    g.lineStyle(2, darker, 0.5)
+    // Left wall
+    g.fillStyle(left, 1)
     g.beginPath()
-    g.moveTo(w / 2, -h / 2)
-    g.lineTo(w / 2, h / 2)
-    g.lineTo(-w / 2, h / 2)
-    g.strokePath()
+    g.moveTo(-halfW, baseY - wallH / 2)
+    g.lineTo(0, baseY)
+    g.lineTo(0, baseY + wallH * 0.45)
+    g.lineTo(-halfW, baseY + wallH * 0.45 - wallH / 2)
+    g.closePath()
+    g.fillPath()
 
-    // Dark outline
-    g.lineStyle(1, 0x000000, 0.4)
-    g.strokeRect(-w / 2, -h / 2, w, h)
+    // Right wall
+    g.fillStyle(right, 1)
+    g.beginPath()
+    g.moveTo(0, baseY)
+    g.lineTo(halfW, baseY - wallH / 2)
+    g.lineTo(halfW, baseY + wallH * 0.45 - wallH / 2)
+    g.lineTo(0, baseY + wallH * 0.45)
+    g.closePath()
+    g.fillPath()
 
-    // Category icon
-    this.drawCategoryIcon(w, h)
+    this.drawCategoryIcon(halfW * 2, wallH * 2)
+    this.drawDamageOverlay(pct)
 
     // Low power indicator
     if (this.state === 'low_power') {
       g.lineStyle(2, 0xff4400, 0.8)
-      g.strokeRect(-w / 2 + 2, -h / 2 + 2, w - 4, h - 4)
+      g.strokeEllipse(0, baseY - wallH * 0.15, halfW * 1.4, wallH * 0.9)
     }
+  }
+
+  private drawDropShadow(): void {
+    const s = this.dropShadow
+    s.clear()
+    const tileSpan = this.def.footprint.w + this.def.footprint.h
+    s.fillStyle(0x000000, 0.35)
+    s.fillEllipse(0, 22, tileSpan * 18, Math.max(12, tileSpan * 7))
+  }
+
+  private drawDamageOverlay(pct: number): void {
+    this.crackOverlay.clear()
+    if (pct >= 0.5 || this.state === 'constructing' || this.state === 'dying') return
+    const tileSpan = this.def.footprint.w + this.def.footprint.h
+    const halfW = Math.max(16, tileSpan * 16)
+    const wallH = Math.max(18, tileSpan * 8)
+    const y = 12 - wallH * 0.35
+    this.crackOverlay.lineStyle(1.5, 0x1a1a1a, 0.8)
+    this.crackOverlay.lineBetween(-halfW * 0.15, y - 10, -halfW * 0.02, y - 1)
+    this.crackOverlay.lineBetween(-halfW * 0.02, y - 1, halfW * 0.12, y + 8)
+    this.crackOverlay.lineBetween(halfW * 0.12, y + 8, halfW * 0.05, y + 14)
+    this.crackOverlay.lineBetween(-halfW * 0.02, y - 1, -halfW * 0.1, y + 7)
+  }
+
+  private updateRenderTransform(): void {
+    const isoPos = cartToIso(this.x, this.y)
+    this.visualRoot.setPosition(isoPos.x - this.x, isoPos.y - this.y)
+    this.setDepth(isoPos.y + 5)
   }
 
   private drawCategoryIcon(w: number, h: number): void {
@@ -572,26 +632,18 @@ export class Building extends Phaser.GameObjects.Container {
     const g = this.selectionOutline
     g.clear()
     if (!this.isSelected) return
-    const w = this.def.footprint.w * TILE_SIZE + 4
-    const h = this.def.footprint.h * TILE_SIZE + 4
-    // Bright cyan outline
+    const tileSpan = this.def.footprint.w + this.def.footprint.h
+    const halfW = Math.max(16, tileSpan * 16)
+    const halfH = Math.max(10, tileSpan * 8)
+    const cy = 20
     g.lineStyle(2, 0x00ffff, 0.9)
-    g.strokeRect(-w / 2, -h / 2, w, h)
-    // Corner accents
-    const c = 6
-    g.lineStyle(3, 0x00ffff, 1)
-    // Top-left
-    g.lineBetween(-w / 2, -h / 2 + c, -w / 2, -h / 2)
-    g.lineBetween(-w / 2, -h / 2, -w / 2 + c, -h / 2)
-    // Top-right
-    g.lineBetween(w / 2 - c, -h / 2, w / 2, -h / 2)
-    g.lineBetween(w / 2, -h / 2, w / 2, -h / 2 + c)
-    // Bottom-left
-    g.lineBetween(-w / 2, h / 2 - c, -w / 2, h / 2)
-    g.lineBetween(-w / 2, h / 2, -w / 2 + c, h / 2)
-    // Bottom-right
-    g.lineBetween(w / 2 - c, h / 2, w / 2, h / 2)
-    g.lineBetween(w / 2, h / 2, w / 2, h / 2 - c)
+    g.beginPath()
+    g.moveTo(0, cy - halfH)
+    g.lineTo(halfW, cy)
+    g.lineTo(0, cy + halfH)
+    g.lineTo(-halfW, cy)
+    g.closePath()
+    g.strokePath()
   }
 
   private updateProductionVisuals(): void {

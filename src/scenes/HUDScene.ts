@@ -690,6 +690,129 @@ export class HUDScene extends Phaser.Scene {
   /** Draw a recognizable icon for each build item */
   private drawBuildIcon(g: Phaser.GameObjects.Graphics, defId: string, tab: string): void {
     const s = 10 // icon half-size
+    const isBuildingIcon = tab === 'buildings' || tab === 'defenses'
+
+    if (isBuildingIcon) {
+      const roof = 0x8ea0b8
+      const left = 0x617289
+      const right = 0x435367
+      g.fillStyle(roof, 1)
+      g.beginPath()
+      g.moveTo(0, -8)
+      g.lineTo(8, -4)
+      g.lineTo(0, 0)
+      g.lineTo(-8, -4)
+      g.closePath()
+      g.fillPath()
+      g.fillStyle(left, 1)
+      g.beginPath()
+      g.moveTo(-8, -4)
+      g.lineTo(0, 0)
+      g.lineTo(0, 6)
+      g.lineTo(-8, 2)
+      g.closePath()
+      g.fillPath()
+      g.fillStyle(right, 1)
+      g.beginPath()
+      g.moveTo(0, 0)
+      g.lineTo(8, -4)
+      g.lineTo(8, 2)
+      g.lineTo(0, 6)
+      g.closePath()
+      g.fillPath()
+
+      switch (defId) {
+        case 'construction_yard':
+          g.lineStyle(2, 0xffcc66, 1)
+          g.lineBetween(4, -10, 8, -14)
+          g.lineBetween(8, -14, 8, -6)
+          break
+        case 'power_plant':
+        case 'tesla_reactor':
+          g.fillStyle(0xadb8c5, 1)
+          g.fillEllipse(-4, -7, 6, 4)
+          g.fillEllipse(4, -8, 7, 5)
+          if (defId === 'tesla_reactor') {
+            g.lineStyle(2, 0x66d8ff, 1)
+            g.lineBetween(4, -10, 8, -13)
+          }
+          break
+        case 'barracks':
+          g.fillStyle(0xd64b4b, 1)
+          g.fillTriangle(3, -10, 8, -8, 3, -6)
+          break
+        case 'war_factory':
+          g.fillStyle(0x1f2731, 1)
+          g.fillRect(-5, 2, 10, 3)
+          break
+        case 'ore_refinery':
+          g.fillStyle(0xd7b24f, 1)
+          g.fillCircle(5, -6, 2)
+          break
+        case 'radar_tower':
+          g.lineStyle(2, 0x92deff, 1)
+          g.lineBetween(5, -2, 5, -9)
+          g.strokeEllipse(5, -9, 7, 3)
+          break
+        case 'air_force_command':
+        case 'airfield':
+          g.lineStyle(1, 0xe0e6ee, 1)
+          g.lineBetween(-7, 5, 7, 5)
+          break
+        case 'battle_lab':
+        case 'tech_center':
+          g.lineStyle(1.5, 0x8ad9ff, 1)
+          g.strokeCircle(0, -4, 3)
+          break
+        case 'naval_shipyard':
+          g.fillStyle(0x2c6a8a, 0.8)
+          g.fillRect(-9, 4, 18, 3)
+          break
+        case 'fortress_wall':
+        case 'wall':
+          g.fillStyle(0x797979, 1)
+          g.fillRect(-8, 1, 16, 4)
+          break
+        case 'prism_tower':
+          g.fillStyle(0xa4f6ff, 1)
+          g.fillTriangle(0, -12, -3, -8, 3, -8)
+          break
+        case 'tesla_coil':
+          g.lineStyle(2, 0x66d8ff, 1)
+          g.lineBetween(0, -11, 0, -7)
+          break
+        case 'patriot_missile':
+        case 'flak_cannon':
+        case 'aa_gun':
+          g.lineStyle(2, 0xc8d2da, 1)
+          g.lineBetween(-2, -3, -4, -9)
+          g.lineBetween(2, -3, 4, -9)
+          break
+        case 'grand_cannon':
+          g.lineStyle(2, 0xe0e0e0, 1)
+          g.lineBetween(1, -2, 8, -8)
+          break
+        case 'nuclear_silo':
+        case 'superweapon':
+          g.fillStyle(0xff6666, 1)
+          g.fillTriangle(0, -12, -2, -8, 2, -8)
+          break
+        case 'weather_device':
+          g.lineStyle(2, 0x6fcfff, 1)
+          g.strokeCircle(0, -6, 4)
+          break
+        case 'chronosphere':
+          g.lineStyle(2, 0x6fe9ff, 1)
+          g.strokeCircle(0, -6, 4)
+          g.strokeCircle(0, -6, 2)
+          break
+        case 'iron_curtain':
+          g.lineStyle(2, 0xff7d7d, 1)
+          g.strokeCircle(0, -6, 4)
+          break
+      }
+      return
+    }
 
     switch (defId) {
       // ── Buildings ──
