@@ -2107,10 +2107,13 @@ export class HUDScene extends Phaser.Scene {
 
     // Building footprint ghost — green if valid, red if invalid
     const col = valid ? 0x44ff44 : 0xff4444
+    const def = this.placementDefId ? BUILDING_DEFS[this.placementDefId] : undefined
+    const fpW = def?.footprint.w ?? 2
+    const fpH = def?.footprint.h ?? 2
     g.fillStyle(col, 0.35)
     g.lineStyle(2, col, 0.85)
-    for (let r = 0; r < 2; r++) {
-      for (let c = 0; c < 2; c++) {
+    for (let r = 0; r < fpH; r++) {
+      for (let c = 0; c < fpW; c++) {
         const p = tileToScreen(tileCol + c, tileRow + r)
         drawIsoDiamond(g, p.x - ISO_TILE_W / 2, p.y, ISO_TILE_W, ISO_TILE_H)
         g.fillPath()
@@ -2118,6 +2121,25 @@ export class HUDScene extends Phaser.Scene {
         g.strokePath()
       }
     }
+    // Add a simple raised prism silhouette so this reads as a building, not just tiles.
+    const c0 = tileToScreen(tileCol, tileRow)
+    const c1 = tileToScreen(tileCol + fpW, tileRow)
+    const c2 = tileToScreen(tileCol + fpW, tileRow + fpH)
+    const c3 = tileToScreen(tileCol, tileRow + fpH)
+    const roofLift = Math.max(12, (fpW + fpH) * 2)
+    g.fillStyle(col, 0.18)
+    g.beginPath()
+    g.moveTo(c0.x, c0.y - roofLift)
+    g.lineTo(c1.x, c1.y - roofLift)
+    g.lineTo(c2.x, c2.y - roofLift)
+    g.lineTo(c3.x, c3.y - roofLift)
+    g.closePath()
+    g.fillPath()
+    g.lineStyle(1, col, 0.5)
+    g.lineBetween(c0.x, c0.y - roofLift, c0.x, c0.y)
+    g.lineBetween(c1.x, c1.y - roofLift, c1.x, c1.y)
+    g.lineBetween(c2.x, c2.y - roofLift, c2.x, c2.y)
+    g.lineBetween(c3.x, c3.y - roofLift, c3.x, c3.y)
 
     this.ghostLabel.setPosition(ptr.x + 14, ptr.y - 22)
     this.ghostLabel.setText(valid ? 'Click to place' : '✗ Out of range')

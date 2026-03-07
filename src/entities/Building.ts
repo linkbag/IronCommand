@@ -41,6 +41,7 @@ export class Building extends Phaser.GameObjects.Container {
   private crackOverlay: Phaser.GameObjects.Graphics
   private healthBar: Phaser.GameObjects.Graphics
   private selectionOutline: Phaser.GameObjects.Graphics
+  private rallyLine: Phaser.GameObjects.Graphics
   private constructionOverlay: Phaser.GameObjects.Graphics
   private statusText: Phaser.GameObjects.Text
   private isSelected: boolean
@@ -84,6 +85,7 @@ export class Building extends Phaser.GameObjects.Container {
     this.visualRoot = scene.add.container(0, 0)
     this.dropShadow = scene.add.graphics()
     this.selectionOutline = scene.add.graphics()
+    this.rallyLine = scene.add.graphics()
     this.constructionOverlay = scene.add.graphics()
     this.bodyGraphic = scene.add.graphics()
     this.crackOverlay = scene.add.graphics()
@@ -97,6 +99,7 @@ export class Building extends Phaser.GameObjects.Container {
     this.visualRoot.add([
       this.dropShadow,
       this.selectionOutline,
+      this.rallyLine,
       this.constructionOverlay,
       this.bodyGraphic,
       this.crackOverlay,
@@ -130,6 +133,7 @@ export class Building extends Phaser.GameObjects.Container {
 
   setRallyPoint(pos: Position): void {
     this.rallyPoint = pos
+    this.drawRallyLine()
     this.emit('rally_point_changed', this.id, pos)
   }
 
@@ -300,6 +304,7 @@ export class Building extends Phaser.GameObjects.Container {
     // Start with zero alpha, build up from bottom
     this.setAlpha(0.3)
     this.constructionProgress = 0
+    this.visualRoot.y = 24
     this.drawConstructionOverlay()
   }
 
@@ -307,10 +312,12 @@ export class Building extends Phaser.GameObjects.Container {
     const buildTime = this.def.stats.buildTime * 1000 || 100
     this.constructionProgress = Math.min(1, this.constructionProgress + delta / buildTime)
     this.setAlpha(0.3 + this.constructionProgress * 0.7)
+    this.visualRoot.y = (1 - this.constructionProgress) * 24
     this.drawConstructionOverlay()
 
     if (this.constructionProgress >= 1) {
       this.state = 'active'
+      this.visualRoot.y = 0
       this.constructionOverlay.clear()
       this.drawBody()
       this.emit('construction_complete', this)
@@ -414,6 +421,7 @@ export class Building extends Phaser.GameObjects.Container {
     const isoPos = cartToScreen(this.x, this.y)
     this.visualRoot.setPosition(isoPos.x - this.x, isoPos.y - this.y)
     this.setDepth(isoPos.y + 5)
+    this.drawRallyLine()
   }
 
   private drawCategoryIcon(w: number, h: number): void {
@@ -633,17 +641,37 @@ export class Building extends Phaser.GameObjects.Container {
     g.clear()
     if (!this.isSelected) return
     const tileSpan = this.def.footprint.w + this.def.footprint.h
-    const halfW = Math.max(16, tileSpan * 16)
-    const halfH = Math.max(10, tileSpan * 8)
-    const cy = 20
+    const width = Math.max(28, tileSpan * 28)
+    const height = Math.max(12, tileSpan * 12)
+    const cy = 22
     g.lineStyle(2, 0x00ffff, 0.9)
-    g.beginPath()
-    g.moveTo(0, cy - halfH)
-    g.lineTo(halfW, cy)
-    g.lineTo(0, cy + halfH)
-    g.lineTo(-halfW, cy)
-    g.closePath()
-    g.strokePath()
+    g.strokeEllipse(0, cy, width, height)
+  }
+
+  private drawRallyLine(): void {
+    const g = this.rallyLine
+    g.clear()
+    if (!this.isSelected || !this.rallyPoint) return
+    const fromIso = cartToScreen(this.x, this.y)
+    const toIso = cartToScreen(this.rallyPoint.x, this.rallyPoint.y)
+    const fromX = 0
+    const fromY = 8
+    const toX = toIso.x - fromIso.x
+    const toY = toIso.y - fromIso.y
+    const segments = 16
+    g.lineStyle(2, 0x8fdfff, 0.85)
+    for (let i = 0; i < segments; i += 2) {
+      const t0 = i / segments
+      const t1 = (i + 1) / segments
+      g.lineBetween(
+        Phaser.Math.Linear(fromX, toX, t0),
+        Phaser.Math.Linear(fromY, toY, t0),
+        Phaser.Math.Linear(fromX, toX, t1),
+        Phaser.Math.Linear(fromY, toY, t1),
+      )
+    }
+    g.fillStyle(0x8fdfff, 0.9)
+    g.fillCircle(toX, toY, 3)
   }
 
   private updateProductionVisuals(): void {

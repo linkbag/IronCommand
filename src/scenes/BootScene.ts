@@ -195,15 +195,15 @@ export class BootScene extends Phaser.Scene {
     for (const n of navalDefs) tasks.push(() => this.genNaval(n.key, n.color, n.accent, n.kind))
 
     const buildingDefs: Array<{ key: string; color: number; kind: BuildingKind; w: number; h: number }> = [
-      { key: 'bld_construction_yard', color: 0x6b6e74, kind: 'construction_yard', w: 192, h: 112 },
-      { key: 'bld_power_plant', color: 0x6a7280, kind: 'power_plant', w: 128, h: 80 },
+      { key: 'bld_construction_yard', color: 0x6b6e74, kind: 'construction_yard', w: 208, h: 124 },
+      { key: 'bld_power_plant', color: 0x6a7280, kind: 'power_plant', w: 118, h: 76 },
       { key: 'bld_tesla_reactor', color: 0x4f455f, kind: 'tesla_reactor', w: 128, h: 80 },
       { key: 'bld_nuclear_reactor', color: 0x4b4f5a, kind: 'nuclear_reactor', w: 128, h: 96 },
-      { key: 'bld_barracks', color: 0x4b6a4c, kind: 'barracks', w: 128, h: 80 },
-      { key: 'bld_war_factory', color: 0x4d555e, kind: 'war_factory', w: 128, h: 96 },
+      { key: 'bld_barracks', color: 0x4b6a4c, kind: 'barracks', w: 114, h: 72 },
+      { key: 'bld_war_factory', color: 0x4d555e, kind: 'war_factory', w: 156, h: 102 },
       { key: 'bld_airfield', color: 0x46586b, kind: 'airfield', w: 128, h: 80 },
       { key: 'bld_naval_yard', color: 0x2f6278, kind: 'naval_yard', w: 128, h: 96 },
-      { key: 'bld_ore_refinery', color: 0x715f3c, kind: 'ore_refinery', w: 128, h: 80 },
+      { key: 'bld_ore_refinery', color: 0x715f3c, kind: 'ore_refinery', w: 140, h: 88 },
       { key: 'bld_service_depot', color: 0x63604f, kind: 'service_depot', w: 128, h: 80 },
       { key: 'bld_tech_center', color: 0x4f5f88, kind: 'tech_center', w: 128, h: 80 },
       { key: 'bld_ore_purifier', color: 0x5d7046, kind: 'ore_purifier', w: 128, h: 80 },
@@ -229,6 +229,8 @@ export class BootScene extends Phaser.Scene {
     tasks.push(() => this.genProjectile('proj_bullet', 0xffff88, 4, 4))
     tasks.push(() => this.genProjectile('proj_missile', 0xff8844, 6, 3))
     tasks.push(() => this.genProjectile('proj_shell', 0xff4444, 5, 5))
+    tasks.push(() => this.genProjectile('proj_tesla', 0x88d6ff, 10, 10))
+    tasks.push(() => this.genProjectile('proj_prism', 0x9ff8ff, 16, 4))
 
     tasks.push(() => this.genExplosion())
     tasks.push(() => this.genTile('pixel_white', 0xffffff, 1, 1))
@@ -282,6 +284,21 @@ export class BootScene extends Phaser.Scene {
 
   private darken(color: number, amount: number): number {
     return Phaser.Display.Color.IntegerToColor(color).darken(amount).color
+  }
+
+  private vehicleHasTurret(kind: VehicleKind): boolean {
+    return [
+      'grizzly_tank',
+      'rhino_tank',
+      'apocalypse_tank',
+      'prism_tank',
+      'tesla_tank',
+      'tank_destroyer',
+      'mirage_tank',
+      'dragon_tank',
+      'ifv',
+      'flak_track',
+    ].includes(kind)
   }
 
   // ── Sprite Generators ──────────────────────────────────────────────
@@ -430,8 +447,9 @@ export class BootScene extends Phaser.Scene {
         g.fillStyle(color, 1)
         g.fillTriangle(torsoX + 4, torsoY, torsoX + 8, torsoY + 8, torsoX, torsoY + 8)
         g.fillStyle(body, 1)
-        g.fillRect(torsoX + 2, torsoY + 8, 2, 5)
-        g.fillRect(torsoX + 6, torsoY + 8, 2, 5)
+        const stride = dir === 'ne' || dir === 'sw' ? 1 : -1
+        g.fillRect(torsoX + 2, torsoY + 8 + stride, 2, 5)
+        g.fillRect(torsoX + 6, torsoY + 8 - stride, 2, 5)
       }
 
       switch (kind) {
@@ -530,6 +548,7 @@ export class BootScene extends Phaser.Scene {
       const top = this.lighten(color, 8)
       const cx = Math.floor(w / 2)
       const cy = Math.floor(h / 2)
+      const hasTurret = this.vehicleHasTurret(kind)
 
       if (kind === 'terror_drone') {
         g.fillStyle(0x000000, 0.25)
@@ -554,9 +573,10 @@ export class BootScene extends Phaser.Scene {
         g.lineStyle(2, accent, 1)
         g.lineBetween(cx + 3, cy, cx + 10, cy - 3)
       } else {
-        g.fillStyle(0x2b2b2b, 0.9)
+        g.fillStyle(0x000000, 0.28)
+        g.fillEllipse(cx, cy + 7, w * 0.72, 6)
+        g.fillStyle(0x2b2b2b, 0.85)
         g.fillRect(2, h - 5, w - 4, 3)
-        g.fillRect(2, 2, w - 4, 3)
         g.fillStyle(top, 1)
         g.beginPath()
         g.moveTo(cx, 4)
@@ -569,6 +589,10 @@ export class BootScene extends Phaser.Scene {
         g.fillRect(4, cy - 1, cx - 4, h - cy - 6)
         g.fillStyle(dark, 1)
         g.fillRect(cx, cy - 1, cx - 4, h - cy - 6)
+        g.lineStyle(1, this.lighten(color, 20), 0.7)
+        g.lineBetween(5, cy, cx - 1, cy - 3)
+        g.lineStyle(1, this.darken(color, 24), 0.7)
+        g.lineBetween(cx + 2, cy + 1, w - 5, cy + 4)
 
         if (kind === 'war_miner' || kind === 'chrono_miner') {
           g.fillStyle(accent, 1)
@@ -601,7 +625,7 @@ export class BootScene extends Phaser.Scene {
         } else if (kind === 'demo_truck') {
           g.fillStyle(0xff4422, 1)
           g.fillRect(cx - 6, cy - 1, 10, 4)
-        } else {
+        } else if (!hasTurret) {
           g.fillStyle(this.lighten(color, 12), 1)
           g.fillCircle(cx, cy - 1, kind === 'apocalypse_tank' ? 5 : 4)
           g.lineStyle(2, kind === 'tesla_tank' ? 0x67e2ff : 0xcfd4d8, 1)
@@ -631,6 +655,31 @@ export class BootScene extends Phaser.Scene {
         g.generateTexture(key, w, h)
       }
       g.destroy()
+
+      if (hasTurret) {
+        const tg = this.make.graphics({ x: 0, y: 0 }, false)
+        tg.fillStyle(this.lighten(color, 12), 1)
+        tg.fillCircle(cx, cy - 1, kind === 'apocalypse_tank' ? 5 : 4)
+        tg.lineStyle(2, kind === 'tesla_tank' ? 0x67e2ff : 0xcfd4d8, 1)
+        tg.lineBetween(cx, cy - 1, cx + barrelDir[dir].x, cy + barrelDir[dir].y)
+        if (kind === 'apocalypse_tank') {
+          tg.lineBetween(cx - 2, cy, cx - 2 + barrelDir[dir].x, cy + barrelDir[dir].y + 2)
+        }
+        if (kind === 'prism_tank') {
+          tg.fillStyle(accent, 1)
+          tg.fillTriangle(cx, cy - 8, cx - 3, cy - 2, cx + 3, cy - 2)
+        }
+        if (kind === 'dragon_tank') {
+          tg.fillStyle(0xff8f42, 0.8)
+          tg.fillTriangle(cx + barrelDir[dir].x, cy + barrelDir[dir].y, cx + barrelDir[dir].x + 4, cy + barrelDir[dir].y - 1, cx + barrelDir[dir].x + 1, cy + barrelDir[dir].y + 3)
+        }
+        if (kind === 'mirage_tank') {
+          tg.fillStyle(accent, 0.35)
+          tg.fillEllipse(cx, cy - 2, 14, 8)
+        }
+        tg.generateTexture(`${key}_turret_iso_${dir}`, w, h)
+        tg.destroy()
+      }
     }
   }
 
@@ -778,9 +827,9 @@ export class BootScene extends Phaser.Scene {
 
   private genBuilding(key: string, color: number, kind: BuildingKind, w: number, h: number) {
     const g = this.make.graphics({ x: 0, y: 0 }, false)
-    const roofColor = this.lighten(color, 18)
-    const leftColor = this.lighten(color, 4)
-    const rightColor = this.darken(color, 18)
+    const roofColor = this.lighten(color, 22)
+    const leftColor = this.darken(color, 24)
+    const rightColor = this.darken(color, 8)
     const midX = Math.floor(w / 2)
     const baseY = h - 18
     const halfW = Math.floor(w * 0.38)
@@ -841,6 +890,10 @@ export class BootScene extends Phaser.Scene {
         g.fillStyle(0xd0d6de, 0.5)
         g.fillEllipse(midX - 20, roofTopY - 4, 14, 6)
         g.fillEllipse(midX + 20, roofTopY - 8, 16, 7)
+        // Satellite dish silhouette
+        g.lineStyle(2, 0xbfc8d1, 0.9)
+        g.lineBetween(midX + 36, roofTopY + 8, midX + 36, roofTopY - 10)
+        g.strokeEllipse(midX + 36, roofTopY - 12, 16, 8)
         break
       case 'tesla_reactor':
       case 'tesla_coil':
@@ -873,6 +926,13 @@ export class BootScene extends Phaser.Scene {
         g.fillRect(midX + 15, roofTopY + 6, 18, 22)
         g.fillStyle(0xa67f2e, 1)
         g.fillRect(midX - 8, roofTopY + 16, 30, 6)
+        // Smokestacks
+        g.fillStyle(0x565656, 1)
+        g.fillRect(midX - 28, roofTopY - 8, 6, 26)
+        g.fillRect(midX - 18, roofTopY - 12, 6, 30)
+        g.fillStyle(0xa3a3a3, 0.5)
+        g.fillCircle(midX - 24, roofTopY - 12, 4)
+        g.fillCircle(midX - 14, roofTopY - 16, 4)
         if (kind === 'ore_purifier') {
           g.fillStyle(0x8fd56f, 1)
           g.fillRect(midX - 22, roofTopY + 8, 14, 6)
@@ -884,6 +944,8 @@ export class BootScene extends Phaser.Scene {
         g.fillRect(midX + 20, roofTopY - 16, 6, wallH + 16)
         g.lineStyle(2, 0x9fe6ff, 1)
         g.strokeEllipse(midX + 23, roofTopY - 16, 26, 12)
+        g.lineStyle(1.5, 0x9fe6ff, 0.7)
+        g.lineBetween(midX + 23, roofTopY - 16, midX + 33, roofTopY - 23)
         if (kind === 'spy_satellite') g.strokeEllipse(midX + 23, roofTopY - 16, 38, 18)
         break
       case 'airfield':
@@ -968,24 +1030,53 @@ export class BootScene extends Phaser.Scene {
 
   private genProjectile(key: string, color: number, w: number, h: number) {
     const g = this.make.graphics({ x: 0, y: 0 }, false)
-    g.fillStyle(color, 1)
-    g.fillRect(0, 0, w, h)
+    if (key === 'proj_missile') {
+      g.fillStyle(0x222222, 0.22)
+      g.fillEllipse(w / 2 + 1, h / 2 + 1, w + 2, h + 1)
+      g.fillStyle(color, 1)
+      g.fillTriangle(0, h / 2, w - 2, 0, w - 2, h)
+      g.fillRect(w - 2, 1, 2, Math.max(1, h - 2))
+      g.fillStyle(0xffffcc, 0.8)
+      g.fillRect(1, Math.max(0, h / 2 - 1), 2, 2)
+    } else if (key === 'proj_tesla') {
+      g.lineStyle(2, color, 1)
+      g.lineBetween(1, h - 2, 4, 3)
+      g.lineBetween(4, 3, 6, 7)
+      g.lineBetween(6, 7, w - 2, 2)
+      g.fillStyle(0xffffff, 0.8)
+      g.fillCircle(4, 3, 1.5)
+      g.fillCircle(w - 2, 2, 1.5)
+    } else if (key === 'proj_prism') {
+      g.fillStyle(0x66d6ff, 0.4)
+      g.fillRect(0, 1, w, 2)
+      g.fillStyle(color, 0.9)
+      g.fillRect(0, 1, w, 1)
+      g.fillStyle(0xffffff, 0.8)
+      g.fillRect(0, 2, w, 1)
+    } else {
+      g.fillStyle(color, 1)
+      g.fillRect(0, 0, w, h)
+    }
     g.generateTexture(key, w, h)
     g.destroy()
   }
 
   private genExplosion() {
     const frames = [
-      { key: 'explosion_0', r: 8, color: 0xff8800 },
-      { key: 'explosion_1', r: 16, color: 0xff4400 },
-      { key: 'explosion_2', r: 12, color: 0xff2200 },
+      { key: 'explosion_flash', r: 10, color: 0xffffcc, core: 0xffffff },
+      { key: 'explosion_fireball', r: 18, color: 0xff6600, core: 0xffe2a0 },
+      { key: 'explosion_smoke', r: 20, color: 0x4f4f4f, core: 0x7a7a7a },
+      // Legacy keys kept for compatibility
+      { key: 'explosion_0', r: 8, color: 0xff8800, core: 0xffff88 },
+      { key: 'explosion_1', r: 16, color: 0xff4400, core: 0xffff88 },
+      { key: 'explosion_2', r: 12, color: 0xff2200, core: 0xffff88 },
     ]
     for (const f of frames) {
       const size = f.r * 2 + 2
       const g = this.make.graphics({ x: 0, y: 0 }, false)
-      g.fillStyle(f.color, 1)
+      g.fillStyle(f.color, f.key === 'explosion_smoke' ? 0.75 : 1)
       g.fillCircle(f.r + 1, f.r + 1, f.r)
-      g.fillStyle(0xffff88, 0.6)
+      g.fillStyle(f.core, f.key === 'explosion_smoke' ? 0.45 : 0.65)
       g.fillCircle(f.r + 1, f.r + 1, Math.floor(f.r * 0.5))
       g.generateTexture(f.key, size, size)
       g.destroy()
