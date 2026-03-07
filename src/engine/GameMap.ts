@@ -576,7 +576,10 @@ export class GameMap {
   private tileColor(tile: TileData, col: number, row: number): number {
     const colors = TERRAIN_COLORS[tile.terrain]
     if (!colors) return 0x4a7c3f // fallback grass
-    const base = colors[(col + row) % colors.length]
+    let base = colors[(col + row) % colors.length]
+    // Sun from top-left: subtly brighten NW tiles, darken SE tiles.
+    const sun = Phaser.Math.Clamp(((col - row) * -0.02), -0.12, 0.12)
+    base = scaleColor(base, 1 + sun)
     if (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS) return base
     const maxAmt = tile.terrain === TerrainType.GEMS ? GEMS_TILE_MAX : ORE_TILE_MAX
     const ratio = Phaser.Math.Clamp(tile.oreAmount / maxAmt, 0, 1)
@@ -595,21 +598,27 @@ export class GameMap {
   }
 
   private drawGrassDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
-    // Pebbles: 2-3 small darker spots
-    const pebbleCount = 2 + Math.floor(this.tileHash(col, row, 1) * 2)
-    for (let i = 0; i < pebbleCount; i++) {
+    // Broad tonal patch to break up flat grass.
+    const patchA = this.tileHash(col, row, 1)
+    const patchX = this.tileHash(col, row, 2) * 18 + 18
+    const patchY = this.tileHash(col, row, 3) * 6 + 11
+    const patchW = 10 + Math.floor(this.tileHash(col, row, 4) * 8)
+    const patchH = 4 + Math.floor(this.tileHash(col, row, 5) * 4)
+    g.fillStyle(patchA > 0.5 ? 0x5e914f : 0x315f29, 0.18)
+    g.fillEllipse(px + patchX, py + patchY, patchW, patchH)
+
+    // Tufts + pebbles.
+    const detailCount = 2 + Math.floor(this.tileHash(col, row, 6) * 3)
+    for (let i = 0; i < detailCount; i++) {
       const dx = this.tileHash(col, row, 10 + i) * 40 + 12
       const dy = this.tileHash(col, row, 20 + i) * 14 + 9
-      g.fillStyle(0x2d5a25, 0.5)
+      g.fillStyle(0x2d5a25, 0.38)
       g.fillRect(px + dx, py + dy, 2, 2)
-    }
-    // Occasional grass tuft
-    if (this.tileHash(col, row, 30) > 0.5) {
-      const tx = this.tileHash(col, row, 31) * 36 + 14
-      const ty = this.tileHash(col, row, 32) * 10 + 12
-      g.lineStyle(1, 0x2d5a25, 0.6)
-      g.lineBetween(px + tx, py + ty, px + tx - 1, py + ty - 4)
-      g.lineBetween(px + tx + 3, py + ty, px + tx + 4, py + ty - 3)
+      if (this.tileHash(col, row, 30 + i) > 0.45) {
+        g.lineStyle(1, 0x2a5822, 0.55)
+        g.lineBetween(px + dx + 1, py + dy, px + dx, py + dy - 4)
+        g.lineBetween(px + dx + 3, py + dy + 1, px + dx + 4, py + dy - 2)
+      }
     }
   }
 
@@ -671,6 +680,9 @@ export class GameMap {
       // Shadow underneath
       g.fillStyle(0x0a1a08, 0.35)
       g.fillEllipse(px + tx, py + ty + 5, 8, 4)
+      // Canopy shadow spill to ground
+      g.fillStyle(0x0a1a08, 0.22)
+      g.fillEllipse(px + tx + 3, py + ty + 8, 13, 6)
       // Tree canopy
       g.fillStyle(0x1a4a16, 1)
       g.fillCircle(px + tx, py + ty, 5)
@@ -693,11 +705,18 @@ export class GameMap {
   }
 
   private drawSandDetail(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number): void {
-    const dotCount = 4 + Math.floor(this.tileHash(col, row, 70) * 4)
+    const rippleCount = 2 + Math.floor(this.tileHash(col, row, 70) * 2)
+    for (let i = 0; i < rippleCount; i++) {
+      const rx = this.tileHash(col, row, 80 + i) * 24 + 18
+      const ry = this.tileHash(col, row, 90 + i) * 8 + 10
+      g.lineStyle(1, 0xb99762, 0.35)
+      g.lineBetween(px + rx - 7, py + ry, px + rx + 7, py + ry + 2)
+    }
+    const dotCount = 2 + Math.floor(this.tileHash(col, row, 96) * 3)
     for (let i = 0; i < dotCount; i++) {
-      const dx = this.tileHash(col, row, 80 + i) * 40 + 12
-      const dy = this.tileHash(col, row, 90 + i) * 12 + 8
-      g.fillStyle(0xb8986a, 0.35)
+      const dx = this.tileHash(col, row, 100 + i) * 38 + 13
+      const dy = this.tileHash(col, row, 110 + i) * 11 + 8
+      g.fillStyle(0xb8986a, 0.3)
       g.fillRect(px + dx, py + dy, 1, 1)
     }
   }
@@ -713,6 +732,36 @@ export class GameMap {
     const hx = this.tileHash(col, row, 102) * 30 + 12
     const hy = this.tileHash(col, row, 103) * 10 + 10
     g.fillRect(px + hx, py + hy, 3, 3)
+    // Layered cliff bands (gives rock tiles more vertical weight).
+    g.lineStyle(1, 0x5a5a5a, 0.4)
+    g.lineBetween(px + 14, py + 20, px + ISO_TILE_W - 14, py + 23)
+    g.lineStyle(1, 0x3a3a3a, 0.35)
+    g.lineBetween(px + 16, py + 24, px + ISO_TILE_W - 16, py + 27)
+  }
+
+  private drawTerrainTransition(g: Phaser.GameObjects.Graphics, px: number, py: number, col: number, row: number, tile: TileData): void {
+    const above = this.getTile(col, row - 1)
+    const left = this.getTile(col - 1, row)
+    const below = this.getTile(col, row + 1)
+    const right = this.getTile(col + 1, row)
+    const blendToWater = tile.terrain === TerrainType.GRASS || tile.terrain === TerrainType.SAND
+    if (blendToWater) {
+      if (above?.terrain === TerrainType.WATER) {
+        g.lineStyle(2, 0x63bfe8, 0.23)
+        g.lineBetween(px + ISO_TILE_W / 2, py + 2, px + 3, py + ISO_TILE_H / 2)
+      }
+      if (left?.terrain === TerrainType.WATER) {
+        g.lineStyle(2, 0x63bfe8, 0.23)
+        g.lineBetween(px + ISO_TILE_W / 2, py + 2, px + ISO_TILE_W - 3, py + ISO_TILE_H / 2)
+      }
+    }
+    if (tile.terrain === TerrainType.GRASS) {
+      const sandEdge = above?.terrain === TerrainType.SAND || left?.terrain === TerrainType.SAND || below?.terrain === TerrainType.SAND || right?.terrain === TerrainType.SAND
+      if (sandEdge) {
+        g.lineStyle(1, 0xd1bb8f, 0.22)
+        g.lineBetween(px + 10, py + 15, px + ISO_TILE_W - 10, py + 18)
+      }
+    }
   }
 
   // ── Terrain Animation ──────────────────────────────────────────
@@ -1085,6 +1134,7 @@ export class GameMap {
         }
 
         this.drawTerrainDiamond(g, px, py, this.tileColor(tile, col, row))
+        this.drawTerrainTransition(g, px, py, col, row, tile)
 
         switch (tile.terrain) {
           case TerrainType.GRASS:

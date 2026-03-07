@@ -83,12 +83,14 @@ export class Unit extends Phaser.GameObjects.Container {
   facing = 0 // 0: NE, 1: SE, 2: SW, 3: NW
   private visualRoot: Phaser.GameObjects.Container
   private bodySprite: Phaser.GameObjects.Image
+  private turretSprite: Phaser.GameObjects.Image | null
   private shadowEllipse: Phaser.GameObjects.Ellipse
   private healthBar: Phaser.GameObjects.Graphics
   private selectionCircle: Phaser.GameObjects.Graphics
   private isSelected: boolean
   private factionColor: number
   private labelText: Phaser.GameObjects.Text
+  private turretFacing = 1 // 0: NE, 1: SE, 2: SW, 3: NW
 
   constructor(
     scene: Phaser.Scene,
@@ -133,6 +135,10 @@ export class Unit extends Phaser.GameObjects.Container {
     const shadowH = this.def.category === 'infantry' ? 8 : this.def.category === 'aircraft' ? 6 : 10
     this.shadowEllipse = scene.add.ellipse(0, this.def.category === 'aircraft' ? 9 : 5, shadowW, shadowH, 0x000000, 0.3)
     this.bodySprite = scene.add.image(0, this.def.category === 'aircraft' ? -8 : 0, this.def.spriteKey).setOrigin(0.5, 0.75)
+    this.turretSprite = null
+    if (this.scene.textures.exists(`${this.def.spriteKey}_turret_iso_se`)) {
+      this.turretSprite = scene.add.image(0, this.def.category === 'aircraft' ? -8 : 0, `${this.def.spriteKey}_turret_iso_se`).setOrigin(0.5, 0.75)
+    }
     this.healthBar = scene.add.graphics()
     this.labelText = scene.add.text(0, 0, this.getLabel(), {
       fontSize: '6px',
@@ -141,13 +147,19 @@ export class Unit extends Phaser.GameObjects.Container {
     }).setOrigin(0.5, 0.5)
     this.labelText.y = -22
 
-    this.visualRoot.add([this.selectionCircle, this.shadowEllipse, this.bodySprite, this.healthBar, this.labelText])
+    if (this.turretSprite) {
+      this.visualRoot.add([this.selectionCircle, this.shadowEllipse, this.bodySprite, this.turretSprite, this.healthBar, this.labelText])
+    } else {
+      this.visualRoot.add([this.selectionCircle, this.shadowEllipse, this.bodySprite, this.healthBar, this.labelText])
+    }
     this.add(this.visualRoot)
 
     this.drawBody()
+    this.drawTurret()
     this.drawHealthBar()
     this.drawSelectionCircle()
     this.bodySprite.setTint(this.factionColor)
+    this.turretSprite?.setTint(this.factionColor)
     this.syncRenderTransform()
 
     scene.add.existing(this)
@@ -541,6 +553,7 @@ export class Unit extends Phaser.GameObjects.Container {
       }
       if (nearest && nearestDist <= rangePixels) {
         this.emit('fire_at_target', this, nearest)
+        this.updateTurretFacingFromVector(nearest.x - this.x, nearest.y - this.y)
         this.attackCooldown = 1 / this.def.attack!.fireRate
       }
     })
@@ -638,6 +651,7 @@ export class Unit extends Phaser.GameObjects.Container {
     const dist = Phaser.Math.Distance.Between(this.x, this.y, this.target.x, this.target.y)
     const rangePixels = this.def.attack.range * TILE_SIZE
     this.updateFacingFromVector(this.target.x - this.x, this.target.y - this.y)
+    this.updateTurretFacingFromVector(this.target.x - this.x, this.target.y - this.y)
 
     if (dist > rangePixels) {
       // Move toward target
@@ -898,6 +912,20 @@ export class Unit extends Phaser.GameObjects.Container {
     this.bodySprite.setTint(this.factionColor)
   }
 
+  private drawTurret(): void {
+    if (!this.turretSprite) return
+    const dirs: Array<'ne' | 'se' | 'sw' | 'nw'> = ['ne', 'se', 'sw', 'nw']
+    const suffix = dirs[this.turretFacing] ?? 'se'
+    const key = `${this.def.spriteKey}_turret_iso_${suffix}`
+    if (this.scene.textures.exists(key)) {
+      this.turretSprite.setTexture(key)
+      this.turretSprite.setVisible(true)
+    } else {
+      this.turretSprite.setVisible(false)
+    }
+    this.turretSprite.setTint(this.factionColor)
+  }
+
   private getFacingSuffix(): 'ne' | 'se' | 'sw' | 'nw' {
     const dirs: Array<'ne' | 'se' | 'sw' | 'nw'> = ['ne', 'se', 'sw', 'nw']
     return dirs[this.facing] ?? 'se'
@@ -908,7 +936,20 @@ export class Unit extends Phaser.GameObjects.Container {
     const angle = Math.atan2(dy, dx)
     const normalized = (angle + Math.PI * 2) % (Math.PI * 2)
     this.facing = Math.round(normalized / (Math.PI / 2)) % 4
+    if (!this.turretSprite) {
+      this.turretFacing = this.facing
+    }
     this.drawBody()
+    this.drawTurret()
+  }
+
+  private updateTurretFacingFromVector(dx: number, dy: number): void {
+    if (!this.turretSprite) return
+    if (Math.abs(dx) < 0.0001 && Math.abs(dy) < 0.0001) return
+    const angle = Math.atan2(dy, dx)
+    const normalized = (angle + Math.PI * 2) % (Math.PI * 2)
+    this.turretFacing = Math.round(normalized / (Math.PI / 2)) % 4
+    this.drawTurret()
   }
 
   private syncRenderTransform(): void {
@@ -959,8 +1000,18 @@ export class Unit extends Phaser.GameObjects.Container {
     const g = this.selectionCircle
     g.clear()
     if (!this.isSelected) return
-    // Cyan dashed ellipse for 3/4 perspective
-    g.lineStyle(2, 0x00ffff, 0.85)
-    g.strokeEllipse(0, 2, 24, 12)
+    const w = this.def.category === 'infantry' ? 22 : this.def.category === 'aircraft' ? 20 : 30
+    const h = this.def.category === 'infantry' ? 10 : this.def.category === 'aircraft' ? 8 : 14
+    g.lineStyle(2, 0x00ffff, 0.9)
+    // Segmented ellipse to mimic RA2 dashed selection ring.
+    for (let i = 0; i < 10; i++) {
+      if (i % 2 === 1) continue
+      const a0 = (i / 10) * Math.PI * 2
+      const a1 = ((i + 1) / 10) * Math.PI * 2
+      g.beginPath()
+      g.moveTo(Math.cos(a0) * (w / 2), 2 + Math.sin(a0) * (h / 2))
+      g.lineTo(Math.cos(a1) * (w / 2), 2 + Math.sin(a1) * (h / 2))
+      g.strokePath()
+    }
   }
 }

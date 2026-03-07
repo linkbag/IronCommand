@@ -85,7 +85,7 @@ const TYPE_MULTIPLIERS: Record<DamageType, Record<string, number>> = {
 }
 
 interface Projectile {
-  graphic: Phaser.GameObjects.Graphics
+  sprite: Phaser.GameObjects.Image
   fromX: number
   fromY: number
   toX: number
@@ -95,6 +95,7 @@ interface Projectile {
   attack: AttackStats
   sourcePlayerId: number
   onHit: () => void
+  lastTrailAt: number
 }
 
 interface TimedBomb {
@@ -293,7 +294,17 @@ export class Combat extends Phaser.Events.EventEmitter {
       return
     }
 
+    this.createMuzzleFlash(attacker.x, attacker.y, attack.damageType)
+
     if (attack.projectileSpeed <= 0) {
+      if (attacker instanceof Unit && attacker.def.id === 'prism_tank') {
+        this.createPrismBeam(attacker.x, attacker.y, target.x, target.y)
+      } else if (attack.damageType === DamageType.ELECTRIC) {
+        this.createTeslaArc(attacker.x, attacker.y, target.x, target.y)
+      }
+      if (attacker instanceof Unit && attacker.def.id === 'chrono_legionnaire') {
+        this.createChronoShimmer(target.x, target.y)
+      }
       // Hitscan — instant damage
       const baseDmg = this.calculateDamage(
         attack,
@@ -330,10 +341,15 @@ export class Combat extends Phaser.Events.EventEmitter {
       if (attacker instanceof Unit && attacker.def.id === 'desolator') {
         this.createRadiationZone(target.x, target.y, attacker.playerId)
       }
+      if (attacker instanceof Unit && attacker.def.id === 'prism_tank') {
+        this.applyUnitSpecialOnHit(attacker, target)
+      }
+      this.createExplosion(
+        target.x,
+        target.y,
+        attack.damageType === DamageType.BULLET ? 'small' : this.getExplosionSize(target),
+      )
     } else {
-      // Muzzle flash at attacker position
-      this.createMuzzleFlash(attacker.x, attacker.y, attack.damageType)
-
       // Spawn projectile
       this.spawnProjectile(
         attacker.x, attacker.y,
@@ -431,54 +447,47 @@ export class Combat extends Phaser.Events.EventEmitter {
    * Size: 'small' = infantry, 'medium' = vehicle, 'large' = building
    */
   createExplosion(x: number, y: number, size: 'small' | 'medium' | 'large'): void {
-    const radii = { small: 10, medium: 22, large: 40 }
-    const radius = radii[size]
-    const duration = { small: 300, medium: 500, large: 700 }[size]
-
+    const scales = { small: 0.55, medium: 1.0, large: 1.5 }
     const iso = cartToScreen(x, y)
+    const s = scales[size]
 
-    // Fireball
-    const fireball = this.scene.add.graphics()
-    fireball.fillStyle(0xff6600, 1)
-    fireball.fillCircle(iso.x, iso.y, radius)
-    fireball.setDepth(45)
-
-    // Inner bright core
-    const core = this.scene.add.graphics()
-    core.fillStyle(0xffff88, 1)
-    core.fillCircle(iso.x, iso.y, radius * 0.5)
-    core.setDepth(46)
-
+    const flash = this.scene.add.image(iso.x, iso.y, 'explosion_flash').setDepth(46).setScale(s * 0.55)
     this.scene.tweens.add({
-      targets: [fireball, core],
+      targets: flash,
       alpha: 0,
-      scaleX: 1.8,
-      scaleY: 1.8,
-      duration,
-      ease: 'Quad.easeOut',
-      onComplete: () => {
-        fireball.destroy()
-        core.destroy()
-      },
+      scaleX: s * 1.1,
+      scaleY: s * 1.1,
+      duration: 90,
+      onComplete: () => flash.destroy(),
     })
 
-    // Smoke particles
-    const smokeCount = size === 'large' ? 8 : size === 'medium' ? 4 : 2
-    for (let i = 0; i < smokeCount; i++) {
-      const smoke = this.scene.add.graphics()
-      const angle = Math.random() * Math.PI * 2
-      const dist = Math.random() * radius * 0.8
-      const sx = iso.x + Math.cos(angle) * dist
-      const sy = iso.y + Math.sin(angle) * dist
-      smoke.fillStyle(0x555555, 0.7)
-      smoke.fillCircle(sx, sy, Math.random() * radius * 0.4 + 3)
-      smoke.setDepth(44)
+    const fireball = this.scene.add.image(iso.x, iso.y, 'explosion_fireball').setDepth(45).setScale(s * 0.6).setAlpha(0)
+    this.scene.tweens.add({
+      targets: fireball,
+      alpha: 1,
+      scaleX: s * 1.45,
+      scaleY: s * 1.45,
+      duration: 180,
+      yoyo: true,
+      onComplete: () => fireball.destroy(),
+    })
+
+    const smokeBursts = size === 'large' ? 6 : size === 'medium' ? 4 : 2
+    for (let i = 0; i < smokeBursts; i++) {
+      const ang = Phaser.Math.FloatBetween(0, Math.PI * 2)
+      const drift = Phaser.Math.Between(14, 28) * s
+      const smoke = this.scene.add.image(iso.x + Math.cos(ang) * 6, iso.y + Math.sin(ang) * 4, 'explosion_smoke')
+        .setDepth(44)
+        .setScale(0.4 * s)
+        .setAlpha(0.75)
       this.scene.tweens.add({
         targets: smoke,
+        x: smoke.x + Math.cos(ang) * drift,
+        y: smoke.y - Phaser.Math.Between(14, 30),
         alpha: 0,
-        y: sy - 20 - Math.random() * 20,
-        delay: Math.random() * 150,
-        duration: duration * 1.5,
+        scaleX: 0.95 * s,
+        scaleY: 0.95 * s,
+        duration: 620 + i * 70,
         onComplete: () => smoke.destroy(),
       })
     }
@@ -510,6 +519,7 @@ export class Combat extends Phaser.Events.EventEmitter {
       const totalDist = Phaser.Math.Distance.Between(p.fromX, p.fromY, p.toX, p.toY)
       if (totalDist === 0) {
         p.onHit()
+        p.sprite.destroy()
         toRemove.push(i)
         continue
       }
@@ -518,16 +528,32 @@ export class Combat extends Phaser.Events.EventEmitter {
       if (p.progress >= 1) {
         p.progress = 1
         p.onHit()
-        p.graphic.destroy()
+        p.sprite.destroy()
         toRemove.push(i)
       } else {
         const px = Phaser.Math.Linear(p.fromX, p.toX, p.progress)
         const py = Phaser.Math.Linear(p.fromY, p.toY, p.progress)
         const isoPos = cartToScreen(px, py)
-        const isoFrom = cartToScreen(p.fromX, p.fromY)
-        p.graphic.clear()
-        p.graphic.setDepth(30 + isoPos.y * 0.01)
-        this.drawProjectileGraphic(p.graphic, isoPos.x, isoPos.y, p.attack.damageType, isoFrom.x, isoFrom.y)
+        p.sprite.setPosition(isoPos.x, isoPos.y)
+        p.sprite.setDepth(30 + isoPos.y * 0.01)
+
+        // Missile smoke trail
+        if (p.attack.damageType === DamageType.MISSILE && p.progress > p.lastTrailAt + 0.08) {
+          p.lastTrailAt = p.progress
+          const smoke = this.scene.add.image(isoPos.x, isoPos.y + 1, 'explosion_smoke')
+            .setDepth(29 + isoPos.y * 0.01)
+            .setScale(0.18)
+            .setAlpha(0.45)
+          this.scene.tweens.add({
+            targets: smoke,
+            y: smoke.y - 8,
+            alpha: 0,
+            scaleX: 0.34,
+            scaleY: 0.34,
+            duration: 260,
+            onComplete: () => smoke.destroy(),
+          })
+        }
       }
     }
 
@@ -701,92 +727,30 @@ export class Combat extends Phaser.Events.EventEmitter {
     sourcePlayerId: number,
     onHit: () => void,
   ): void {
-    const g = this.scene.add.graphics()
     const fromIso = cartToScreen(fromX, fromY)
-    g.setDepth(30 + fromIso.y * 0.01)
-    this.drawProjectileGraphic(g, fromIso.x, fromIso.y, attack.damageType)
+    const texture = this.getProjectileTexture(attack)
+    const sprite = this.scene.add.image(fromIso.x, fromIso.y, texture).setDepth(30 + fromIso.y * 0.01)
+    if (attack.damageType === DamageType.BULLET) sprite.setScale(0.9)
+    if (attack.damageType === DamageType.MISSILE) sprite.setScale(1.0)
 
     this.projectiles.push({
-      graphic: g,
+      sprite,
       fromX, fromY, toX, toY,
       progress: 0,
       speed: attack.projectileSpeed,
       attack,
       sourcePlayerId,
       onHit,
+      lastTrailAt: 0,
     })
   }
 
-  private drawProjectileGraphic(
-    g: Phaser.GameObjects.Graphics,
-    x: number,
-    y: number,
-    dmgType: DamageType,
-    fromX?: number,
-    fromY?: number,
-  ): void {
-    const colors: Record<DamageType, number> = {
-      [DamageType.BULLET]: 0xffee00,
-      [DamageType.EXPLOSIVE]: 0xff8800,
-      [DamageType.MISSILE]: 0x88ccff,
-      [DamageType.FIRE]: 0xff4400,
-      [DamageType.ELECTRIC]: 0xaaddff,
-    }
-    const sizes: Record<DamageType, number> = {
-      [DamageType.BULLET]: 2,
-      [DamageType.EXPLOSIVE]: 4,
-      [DamageType.MISSILE]: 4,
-      [DamageType.FIRE]: 5,
-      [DamageType.ELECTRIC]: 3,
-    }
-    const color = colors[dmgType] ?? 0xffffff
-    const size = sizes[dmgType] ?? 3
-
-    // Trail from movement direction
-    if (fromX !== undefined && fromY !== undefined) {
-      const dx = x - fromX
-      const dy = y - fromY
-      const dist = Math.sqrt(dx * dx + dy * dy)
-      if (dist > 1) {
-        const nx = -dx / dist
-        const ny = -dy / dist
-        const trailLen = Math.min(10, dist * 0.3)
-
-        if (dmgType === DamageType.ELECTRIC) {
-          // Tesla bolt — jagged line segments
-          g.lineStyle(2, color, 0.8)
-          const segs = 4
-          let sx = x, sy = y
-          for (let i = 0; i < segs; i++) {
-            const t = (i + 1) / segs
-            const ex = x + nx * trailLen * t + (Math.random() - 0.5) * 6
-            const ey = y + ny * trailLen * t + (Math.random() - 0.5) * 6
-            g.lineBetween(sx, sy, ex, ey)
-            sx = ex
-            sy = ey
-          }
-        } else {
-          // Standard trail line
-          g.lineStyle(size * 0.7, color, 0.4)
-          g.lineBetween(x, y, x + nx * trailLen, y + ny * trailLen)
-        }
-      }
-    }
-
-    // Main projectile body
-    if (dmgType === DamageType.FIRE) {
-      // Fire: wider shape with red edges
-      g.fillStyle(0xff6600, 0.7)
-      g.fillCircle(x, y, size + 1)
-      g.fillStyle(color, 1)
-      g.fillCircle(x, y, size - 1)
-    } else {
-      g.fillStyle(color, 1)
-      g.fillCircle(x, y, size)
-      // Bright core
-      g.fillStyle(0xffffff, 0.5)
-      g.fillCircle(x, y, size * 0.4)
-    }
+  private getProjectileTexture(attack: AttackStats): string {
+    if (attack.damageType === DamageType.MISSILE) return 'proj_missile'
+    if (attack.damageType === DamageType.BULLET) return 'proj_bullet'
+    if (attack.damageType === DamageType.EXPLOSIVE) return 'proj_shell'
+    if (attack.damageType === DamageType.FIRE) return 'proj_shell'
+    return 'proj_bullet'
   }
 
   private createMuzzleFlash(x: number, y: number, dmgType: DamageType): void {
@@ -809,6 +773,66 @@ export class Combat extends Phaser.Events.EventEmitter {
       scaleY: 2,
       duration: 100,
       onComplete: () => flash.destroy(),
+    })
+  }
+
+  private createTeslaArc(fromX: number, fromY: number, toX: number, toY: number): void {
+    const fromIso = cartToScreen(fromX, fromY)
+    const toIso = cartToScreen(toX, toY)
+    const g = this.scene.add.graphics().setDepth(36)
+    g.lineStyle(2, 0x88d8ff, 0.95)
+    const segs = 7
+    let px = fromIso.x
+    let py = fromIso.y
+    for (let i = 1; i <= segs; i++) {
+      const t = i / segs
+      const nx = Phaser.Math.Linear(fromIso.x, toIso.x, t) + Phaser.Math.Between(-5, 5)
+      const ny = Phaser.Math.Linear(fromIso.y, toIso.y, t) + Phaser.Math.Between(-5, 5)
+      g.lineBetween(px, py, nx, ny)
+      px = nx
+      py = ny
+    }
+    this.scene.tweens.add({
+      targets: g,
+      alpha: 0,
+      duration: 110,
+      onComplete: () => g.destroy(),
+    })
+  }
+
+  private createPrismBeam(fromX: number, fromY: number, toX: number, toY: number): void {
+    const fromIso = cartToScreen(fromX, fromY)
+    const toIso = cartToScreen(toX, toY)
+    const core = this.scene.add.graphics().setDepth(37)
+    core.lineStyle(2, 0xc6f8ff, 0.95)
+    core.lineBetween(fromIso.x, fromIso.y, toIso.x, toIso.y)
+    const glow = this.scene.add.graphics().setDepth(36)
+    glow.lineStyle(5, 0x66d6ff, 0.35)
+    glow.lineBetween(fromIso.x, fromIso.y, toIso.x, toIso.y)
+    this.scene.tweens.add({
+      targets: [core, glow],
+      alpha: 0,
+      duration: 90,
+      onComplete: () => {
+        core.destroy()
+        glow.destroy()
+      },
+    })
+  }
+
+  private createChronoShimmer(x: number, y: number): void {
+    const iso = cartToScreen(x, y)
+    const shimmer = this.scene.add.graphics().setDepth(41)
+    shimmer.lineStyle(2, 0x78d7ff, 0.8)
+    shimmer.strokeEllipse(iso.x, iso.y, 26, 16)
+    shimmer.strokeEllipse(iso.x, iso.y, 34, 22)
+    this.scene.tweens.add({
+      targets: shimmer,
+      alpha: 0,
+      scaleX: 1.2,
+      scaleY: 1.2,
+      duration: 200,
+      onComplete: () => shimmer.destroy(),
     })
   }
 
