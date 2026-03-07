@@ -184,6 +184,7 @@ export class Combat extends Phaser.Events.EventEmitter {
    */
   resolveAttack(attacker: Unit | Building, target: Unit | Building): void {
     if (!attacker.def.attack) return
+    if (!this.em.isEnemy(attacker.playerId, target.playerId)) return
     if (!this.canAttackTarget(attacker.def.attack, target)) return
 
     const attack = attacker.def.attack
@@ -474,6 +475,7 @@ export class Combat extends Phaser.Events.EventEmitter {
 
     for (const u of nearUnits) {
       if (u.id === excludeId || u.state === 'dying') continue
+      if (!this.em.isEnemy(sourcePlayerId, u.playerId)) continue
       const dist = Phaser.Math.Distance.Between(center.x, center.y, u.x, u.y)
       const falloff = 1 - dist / radiusPixels
       const dmg = Math.ceil(this.calculateDamage(fakeAttack, u.def.category, this.getEffectiveArmor(u), this.getArmorType(u)) * falloff)
@@ -482,6 +484,7 @@ export class Combat extends Phaser.Events.EventEmitter {
 
     for (const b of nearBuildings) {
       if (b.id === excludeId || b.state === 'dying') continue
+      if (!this.em.isEnemy(sourcePlayerId, b.playerId)) continue
       const dist = Phaser.Math.Distance.Between(center.x, center.y, b.x, b.y)
       const falloff = 1 - dist / radiusPixels
       const dmg = Math.ceil(this.calculateDamage(fakeAttack, b.def.category, this.getEffectiveArmor(b), this.getArmorType(b)) * falloff)
@@ -747,7 +750,7 @@ export class Combat extends Phaser.Events.EventEmitter {
         const units = this.em.getUnitsInRange(zone.x, zone.y, zone.radiusPixels)
         for (const unit of units) {
           if (!this.isEntityAlive(unit)) continue
-          if (unit.playerId === zone.sourcePlayerId) continue
+          if (!this.em.isEnemy(zone.sourcePlayerId, unit.playerId)) continue
           if (unit.def.category !== 'infantry') continue
           unit.takeDamage(12, zone.sourcePlayerId)
         }
@@ -979,7 +982,7 @@ export class Combat extends Phaser.Events.EventEmitter {
       ]
       const nextTarget = candidates.find(e =>
         !visited.has(e.id) &&
-        e.playerId !== attacker.playerId &&
+        this.em.isEnemy(attacker.playerId, e.playerId) &&
         e.hp > 0 &&
         (('state' in e && e.state !== 'dying') || !('state' in e)) &&
         this.canAttackTarget(baseAttack, e)
