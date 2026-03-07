@@ -363,58 +363,351 @@ export class Building extends Phaser.GameObjects.Container {
   private drawBody(): void {
     const g = this.bodyGraphic
     g.clear()
-    this.drawDropShadow()
-    const tileSpan = this.def.footprint.w + this.def.footprint.h
-    const halfW = Math.max(16, tileSpan * 16)
-    const wallH = Math.max(18, tileSpan * 8)
-    const baseY = 12
+    const dims = this.getIsoDims()
+    this.drawDropShadow(dims)
     const pct = this.hp / this.def.stats.maxHp
-    let color = this.state === 'low_power' ? 0x886644 : this.factionColor
-    if (pct < 0.5) color = adjustBrightness(color, -45)
-    const roof = adjustBrightness(color, 30)
-    const left = adjustBrightness(color, 6)
-    const right = adjustBrightness(color, -24)
+    const palette = this.getBuildingPalette(pct)
 
-    // Base walls (front-facing prism) with lighter roof strip.
-    g.fillStyle(left, 1)
-    g.fillRect(-halfW, baseY - wallH * 0.7, halfW * 2, wallH * 1.15)
-    g.fillStyle(right, 0.35)
-    g.fillRect(0, baseY - wallH * 0.7, halfW, wallH * 1.15)
-    g.fillStyle(roof, 1)
-    g.fillRect(-halfW, baseY - wallH * 0.85, halfW * 2, wallH * 0.22)
-    g.lineStyle(1, adjustBrightness(roof, 25), 0.7)
-    g.lineBetween(-halfW + 2, baseY - wallH * 0.82, halfW - 2, baseY - wallH * 0.82)
-
-    this.drawCategoryIcon(halfW * 2, wallH * 2)
+    this.drawIsoBox(g, dims, palette)
+    this.drawBuildingDetails(g, dims)
     this.drawDamageOverlay(pct)
 
-    // Low power indicator
     if (this.state === 'low_power') {
       g.lineStyle(2, 0xff4400, 0.8)
-      g.strokeEllipse(0, baseY - wallH * 0.15, halfW * 1.4, wallH * 0.9)
+      g.strokeEllipse(0, dims.baseY - dims.wallH * 0.08, dims.halfW * 1.35, dims.halfH * 1.35)
     }
   }
 
-  private drawDropShadow(): void {
+  private getIsoDims(): { halfW: number; halfH: number; wallH: number; baseY: number; topY: number } {
+    const maxFootprint = Math.max(this.def.footprint.w, this.def.footprint.h)
+    const halfW = Math.max(16, maxFootprint * 16)
+    const halfH = Math.max(8, Math.round(halfW / 2))
+    const baseY = 14
+
+    let wallH = 24 + Math.max(0, maxFootprint - 2) * 4
+    switch (this.def.id) {
+      case 'construction_yard':
+      case 'war_factory':
+      case 'air_force_command':
+      case 'radar_tower':
+      case 'oil_derrick':
+      case 'nuclear_silo':
+        wallH += 12
+        break
+      case 'tesla_coil':
+      case 'prism_tower':
+        wallH += 10
+        break
+      case 'power_plant':
+      case 'ore_refinery':
+      case 'battle_lab':
+      case 'tech_center':
+      case 'barracks':
+      case 'tesla_reactor':
+        wallH += 3
+        break
+      case 'pillbox':
+      case 'sentry_gun':
+      case 'fortress_wall':
+      case 'patriot_missile':
+      case 'flak_cannon':
+        wallH = 12
+        break
+    }
+
+    return { halfW, halfH, wallH, baseY, topY: baseY - wallH }
+  }
+
+  private getBuildingPalette(pct: number): { top: number; left: number; right: number; line: number } {
+    const lowPower = this.state === 'low_power'
+    let main = lowPower ? 0x7a6a4e : this.factionColor
+    if (pct < 0.5) main = adjustBrightness(main, -45)
+    if (this.def.id === 'tesla_reactor' || this.def.id === 'tesla_coil') {
+      main = this.blendColors(main, 0x7b1d1d, 0.45)
+    } else if (this.def.id === 'power_plant' || this.def.id === 'battle_lab') {
+      main = this.blendColors(main, 0x90b8c8, 0.3)
+    } else if (this.def.id === 'war_factory' || this.def.id === 'ore_refinery' || this.def.id === 'construction_yard') {
+      main = this.blendColors(main, 0x6f6f6f, 0.4)
+    }
+
+    return {
+      top: adjustBrightness(main, 32),
+      left: adjustBrightness(main, 10),
+      right: adjustBrightness(main, -22),
+      line: adjustBrightness(main, -44),
+    }
+  }
+
+  private blendColors(a: number, b: number, t: number): number {
+    const ar = (a >> 16) & 0xff
+    const ag = (a >> 8) & 0xff
+    const ab = a & 0xff
+    const br = (b >> 16) & 0xff
+    const bg = (b >> 8) & 0xff
+    const bb = b & 0xff
+    const r = Math.round(ar + (br - ar) * t)
+    const g = Math.round(ag + (bg - ag) * t)
+    const c = Math.round(ab + (bb - ab) * t)
+    return (r << 16) | (g << 8) | c
+  }
+
+  private fillPolygon(g: Phaser.GameObjects.Graphics, points: Array<{ x: number; y: number }>): void {
+    if (points.length === 0) return
+    g.beginPath()
+    g.moveTo(points[0].x, points[0].y)
+    for (let i = 1; i < points.length; i++) g.lineTo(points[i].x, points[i].y)
+    g.closePath()
+    g.fillPath()
+  }
+
+  private drawIsoBox(
+    g: Phaser.GameObjects.Graphics,
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    palette: { top: number; left: number; right: number; line: number },
+  ): void {
+    const top = { x: 0, y: dims.topY - dims.halfH }
+    const right = { x: dims.halfW, y: dims.topY }
+    const bottom = { x: 0, y: dims.topY + dims.halfH }
+    const left = { x: -dims.halfW, y: dims.topY }
+    const leftBottom = { x: -dims.halfW, y: dims.baseY }
+    const rightBottom = { x: dims.halfW, y: dims.baseY }
+    const centerBottom = { x: 0, y: dims.baseY + dims.halfH }
+
+    g.fillStyle(palette.left, 1)
+    this.fillPolygon(g, [left, bottom, centerBottom, leftBottom])
+    g.fillStyle(palette.right, 1)
+    this.fillPolygon(g, [right, bottom, centerBottom, rightBottom])
+    g.fillStyle(palette.top, 1)
+    this.fillPolygon(g, [top, right, bottom, left])
+
+    g.lineStyle(1, palette.line, 0.75)
+    g.strokeLineShape(new Phaser.Geom.Line(top.x, top.y, right.x, right.y))
+    g.strokeLineShape(new Phaser.Geom.Line(right.x, right.y, bottom.x, bottom.y))
+    g.strokeLineShape(new Phaser.Geom.Line(bottom.x, bottom.y, left.x, left.y))
+    g.strokeLineShape(new Phaser.Geom.Line(left.x, left.y, top.x, top.y))
+    g.strokeLineShape(new Phaser.Geom.Line(left.x, left.y, leftBottom.x, leftBottom.y))
+    g.strokeLineShape(new Phaser.Geom.Line(right.x, right.y, rightBottom.x, rightBottom.y))
+    g.strokeLineShape(new Phaser.Geom.Line(bottom.x, bottom.y, centerBottom.x, centerBottom.y))
+  }
+
+  private drawDropShadow(dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number }): void {
     const s = this.dropShadow
     s.clear()
-    const tileSpan = this.def.footprint.w + this.def.footprint.h
     s.fillStyle(0x000000, 0.35)
-    s.fillEllipse(0, 22, tileSpan * 18, Math.max(12, tileSpan * 7))
+    s.fillEllipse(0, dims.baseY + 10, dims.halfW * 2.1, Math.max(12, dims.halfH * 1.5))
+  }
+
+  private drawBuildingDetails(
+    g: Phaser.GameObjects.Graphics,
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+  ): void {
+    const hw = dims.halfW
+    const hh = dims.halfH
+    const roofY = dims.topY
+    const wallTop = dims.topY + 2
+    const wallBottom = dims.baseY + hh - 2
+
+    switch (this.def.id) {
+      case 'construction_yard':
+        g.fillStyle(0xd8bf57, 0.95)
+        g.fillRect(hw * 0.35, roofY - hh * 1.1, 5, hh * 1.8)
+        g.fillTriangle(hw * 0.37, roofY - hh * 1.05, -hw * 0.2, roofY - hh * 1.15, hw * 0.85, roofY - hh * 1.3)
+        g.lineStyle(1, 0xd9d9d9, 0.6)
+        for (let i = 0; i < 4; i++) {
+          const y = Phaser.Math.Linear(wallTop, wallBottom, i / 3)
+          g.lineBetween(-hw * 0.75, y, -hw * 0.15, y + hh * 0.25)
+        }
+        return
+      case 'barracks':
+        g.fillStyle(0x1d2a1f, 0.82)
+        g.fillRect(-hw * 0.16, wallBottom - hh * 0.85, hw * 0.32, hh * 0.82)
+        g.lineStyle(2, 0xc4c4c4, 0.9)
+        g.lineBetween(hw * 0.52, roofY - hh * 0.75, hw * 0.52, roofY - hh * 1.3)
+        g.fillStyle(0x6e7d2d, 0.95)
+        g.fillTriangle(hw * 0.52, roofY - hh * 1.28, hw * 0.95, roofY - hh * 1.18, hw * 0.52, roofY - hh * 1.08)
+        return
+      case 'war_factory':
+        g.fillStyle(0x343434, 0.85)
+        g.fillRect(-hw * 0.5, wallBottom - hh * 1.0, hw * 1.0, hh * 0.95)
+        g.lineStyle(1.5, 0x7b7b7b, 0.9)
+        for (let y = wallBottom - hh * 0.95; y <= wallBottom - hh * 0.1; y += 4) {
+          g.lineBetween(-hw * 0.48, y, hw * 0.48, y)
+        }
+        g.fillStyle(0x4b4b4b, 1)
+        g.fillRect(hw * 0.56, roofY - hh * 0.95, 7, hh * 1.3)
+        g.fillStyle(0x909090, 0.45)
+        g.fillCircle(hw * 0.6, roofY - hh * 1.1, 5)
+        g.fillStyle(0x605949, 0.8)
+        g.fillRect(-hw * 0.8, wallBottom - hh * 0.35, hw * 0.42, 4)
+        return
+      case 'ore_refinery':
+        g.fillStyle(0x8f6f2c, 0.88)
+        g.fillTriangle(-hw * 0.28, roofY - hh * 0.25, hw * 0.3, roofY - hh * 0.25, 0, roofY - hh * 0.95)
+        g.fillStyle(0x6d5a3b, 0.9)
+        g.fillTriangle(-hw * 0.82, wallBottom - hh * 0.25, -hw * 0.1, wallBottom - hh * 0.25, -hw * 0.62, wallBottom - hh * 0.8)
+        g.fillStyle(0xd6a645, 0.9)
+        g.fillCircle(-hw * 0.72, wallBottom - hh * 0.2, 2)
+        g.fillCircle(-hw * 0.61, wallBottom - hh * 0.15, 2)
+        g.fillStyle(0x2f2f2f, 0.85)
+        g.fillRect(hw * 0.1, wallBottom - hh * 0.9, hw * 0.5, hh * 0.82)
+        return
+      case 'power_plant':
+        g.fillStyle(0x86b8a2, 0.95)
+        g.fillEllipse(0, roofY - hh * 0.3, hw * 1.1, hh * 0.9)
+        g.fillStyle(0x3b5450, 0.95)
+        g.fillRect(hw * 0.42, roofY - hh * 0.9, 5, hh * 0.95)
+        g.fillRect(hw * 0.6, roofY - hh * 0.8, 4, hh * 0.8)
+        return
+      case 'tesla_reactor':
+        g.fillStyle(0x3d4248, 1)
+        g.fillEllipse(0, roofY - hh * 0.25, hw * 1.08, hh * 0.86)
+        g.fillStyle(0x8f2020, 0.95)
+        g.fillRect(0, roofY - hh * 1.0, 4, hh * 0.7)
+        g.lineStyle(1.2, 0x6ab4ff, 0.9)
+        g.lineBetween(2, roofY - hh * 1.0, -8, roofY - hh * 1.2)
+        g.lineBetween(-8, roofY - hh * 1.2, 7, roofY - hh * 1.27)
+        return
+      case 'air_force_command':
+        g.fillStyle(0x4c5b6f, 0.95)
+        g.fillRect(-hw * 0.14, roofY - hh * 1.25, hw * 0.28, hh * 1.2)
+        g.fillStyle(0xa5b6c9, 0.95)
+        g.fillCircle(0, roofY - hh * 1.35, 7)
+        g.lineStyle(1.3, 0x7fb3ff, 0.65)
+        g.strokeCircle(0, roofY - hh * 1.35, 10)
+        g.lineStyle(1.2, 0xe5e5e5, 0.6)
+        g.lineBetween(-hw * 0.55, roofY - hh * 0.7, hw * 0.55, roofY - hh * 0.32)
+        g.lineBetween(-hw * 0.45, roofY - hh * 0.42, hw * 0.45, roofY - hh * 0.06)
+        return
+      case 'radar_tower':
+        g.fillStyle(0x464646, 0.95)
+        g.fillRect(-4, roofY - hh * 1.4, 8, hh * 1.45)
+        g.fillStyle(0x93a9bd, 0.95)
+        g.fillEllipse(0, roofY - hh * 1.48, hw * 0.7, hh * 0.45)
+        g.lineStyle(1, 0xdceeff, 0.65)
+        g.lineBetween(-hw * 0.2, roofY - hh * 1.5, hw * 0.35, roofY - hh * 1.42)
+        g.lineBetween(hw * 0.26, roofY - hh * 1.2, hw * 0.45, roofY - hh * 1.6)
+        return
+      case 'battle_lab':
+        g.fillStyle(0xcedeef, 0.95)
+        g.fillEllipse(0, roofY - hh * 0.3, hw * 1.05, hh * 0.78)
+        g.fillStyle(0x6cc9ff, 0.85)
+        g.fillCircle(-hw * 0.3, roofY - hh * 0.75, 3)
+        g.fillCircle(hw * 0.2, roofY - hh * 0.7, 3)
+        g.lineStyle(1.2, 0x84d8ff, 0.8)
+        g.lineBetween(-hw * 0.3, roofY - hh * 0.75, hw * 0.2, roofY - hh * 0.7)
+        return
+      case 'tech_center':
+        g.fillStyle(0x7b8794, 0.88)
+        for (let i = 0; i < 4; i++) {
+          const y = Phaser.Math.Linear(wallTop + hh * 0.2, wallBottom - hh * 0.12, i / 3)
+          g.lineStyle(1.2, 0x4e5861, 0.85)
+          g.lineBetween(-hw * 0.64, y, -hw * 0.14, y + hh * 0.2)
+        }
+        g.lineStyle(1.4, 0xbec8cf, 0.9)
+        g.lineBetween(hw * 0.38, roofY - hh * 0.2, hw * 0.38, roofY - hh * 0.95)
+        g.lineBetween(hw * 0.26, roofY - hh * 0.7, hw * 0.5, roofY - hh * 0.7)
+        return
+      case 'tesla_coil':
+        g.fillStyle(0x3f4752, 1)
+        g.fillRect(-5, roofY - hh * 1.5, 10, hh * 1.52)
+        g.fillStyle(0x9fb6cc, 0.95)
+        g.fillCircle(0, roofY - hh * 1.55, 4)
+        g.lineStyle(1.6, 0x77beff, 1)
+        g.lineBetween(0, roofY - hh * 1.55, -9, roofY - hh * 1.9)
+        g.lineBetween(-9, roofY - hh * 1.9, 8, roofY - hh * 1.97)
+        g.lineBetween(8, roofY - hh * 1.97, -4, roofY - hh * 1.72)
+        return
+      case 'prism_tower':
+        g.fillStyle(0x46505b, 0.98)
+        g.fillRect(-4, roofY - hh * 1.45, 8, hh * 1.45)
+        g.fillStyle(0xa8e6ff, 0.96)
+        g.fillTriangle(0, roofY - hh * 1.9, -9, roofY - hh * 1.45, 9, roofY - hh * 1.45)
+        g.lineStyle(1.2, 0xe5fbff, 0.85)
+        g.lineBetween(0, roofY - hh * 1.88, -2, roofY - hh * 1.62)
+        g.lineBetween(0, roofY - hh * 1.88, 2, roofY - hh * 1.62)
+        g.lineStyle(1.1, 0x9bd6ff, 0.7)
+        g.lineBetween(0, roofY - hh * 1.6, hw * 0.48, roofY - hh * 1.15)
+        return
+      case 'pillbox':
+      case 'sentry_gun':
+        g.fillStyle(0x6d6d6d, 0.92)
+        g.fillEllipse(0, roofY - hh * 0.22, hw * 0.92, hh * 0.72)
+        g.fillStyle(0x303030, 1)
+        g.fillRect(hw * 0.2, roofY - hh * 0.38, hw * 0.42, 4)
+        g.lineStyle(1, 0xa59172, 0.6)
+        g.lineBetween(-hw * 0.5, dims.baseY + hh * 0.2, hw * 0.5, dims.baseY + hh * 0.2)
+        return
+      case 'fortress_wall':
+        g.fillStyle(0x8a8a8a, 0.9)
+        g.fillRect(-hw * 0.75, wallBottom - hh * 0.55, hw * 1.5, hh * 0.42)
+        g.lineStyle(1, 0x676767, 0.8)
+        g.lineBetween(-hw * 0.55, wallBottom - hh * 0.2, -hw * 0.3, wallBottom - hh * 0.35)
+        g.lineBetween(hw * 0.3, wallBottom - hh * 0.35, hw * 0.55, wallBottom - hh * 0.2)
+        return
+      case 'oil_derrick':
+        g.lineStyle(2, 0x9e9e9e, 0.9)
+        g.lineBetween(-hw * 0.3, wallBottom - hh * 0.2, 0, roofY - hh * 1.3)
+        g.lineBetween(hw * 0.3, wallBottom - hh * 0.2, 0, roofY - hh * 1.3)
+        g.lineBetween(-hw * 0.15, wallBottom - hh * 0.55, hw * 0.15, wallBottom - hh * 0.55)
+        g.lineBetween(-hw * 0.08, wallBottom - hh * 0.9, hw * 0.08, wallBottom - hh * 0.9)
+        g.lineStyle(2, 0x666666, 0.8)
+        g.lineBetween(hw * 0.08, roofY - hh * 1.1, hw * 0.58, roofY - hh * 0.82)
+        g.fillStyle(0x7b7b7b, 0.95)
+        g.fillCircle(hw * 0.6, roofY - hh * 0.82, 3)
+        return
+      case 'nuclear_silo':
+        g.fillStyle(0x3d3d3d, 0.9)
+        g.fillRect(-hw * 0.36, roofY - hh * 0.2, hw * 0.72, hh * 0.26)
+        g.lineStyle(1.4, 0xcfa34a, 0.9)
+        g.lineBetween(-hw * 0.32, roofY - hh * 0.08, hw * 0.32, roofY - hh * 0.08)
+        g.fillStyle(0x5a5a5a, 0.92)
+        g.fillRect(-hw * 0.08, roofY - hh * 1.15, hw * 0.16, hh * 1.05)
+        g.lineStyle(1.2, 0xd94747, 0.8)
+        g.lineBetween(-hw * 0.58, wallBottom - hh * 0.14, -hw * 0.2, wallBottom - hh * 0.26)
+        g.lineBetween(hw * 0.2, wallBottom - hh * 0.26, hw * 0.58, wallBottom - hh * 0.14)
+        return
+    }
+
+    switch (this.def.category) {
+      case 'power':
+        g.fillStyle(0xf0e84c, 0.9)
+        g.fillTriangle(-4, roofY - hh * 0.85, 2, roofY - hh * 0.42, -2, roofY - hh * 0.42)
+        g.fillTriangle(-2, roofY - hh * 0.42, 4, roofY - hh * 0.05, 0, roofY - hh * 0.05)
+        break
+      case 'production':
+        g.lineStyle(1.6, 0xd9d9d9, 0.75)
+        g.strokeCircle(0, roofY - hh * 0.3, Math.max(6, hw * 0.2))
+        break
+      case 'defense':
+        g.fillStyle(0x393939, 0.95)
+        g.fillRect(-2, roofY - hh * 0.75, 4, hh * 0.72)
+        break
+      case 'tech':
+        g.lineStyle(1.2, 0x8dc6ff, 0.8)
+        g.strokeCircle(0, roofY - hh * 0.45, Math.max(7, hw * 0.25))
+        break
+      case 'superweapon':
+        g.lineStyle(1.5, 0xffa34f, 0.85)
+        g.strokeCircle(0, roofY - hh * 0.4, Math.max(8, hw * 0.28))
+        break
+      case 'base':
+        g.lineStyle(1.5, 0xd0d0d0, 0.75)
+        g.lineBetween(0, roofY - hh * 0.95, 0, roofY - hh * 0.2)
+        g.lineBetween(0, roofY - hh * 0.9, hw * 0.35, roofY - hh * 0.9)
+        break
+    }
   }
 
   private drawDamageOverlay(pct: number): void {
     this.crackOverlay.clear()
     if (pct >= 0.5 || this.state === 'constructing' || this.state === 'dying') return
-    const tileSpan = this.def.footprint.w + this.def.footprint.h
-    const halfW = Math.max(16, tileSpan * 16)
-    const wallH = Math.max(18, tileSpan * 8)
-    const y = 12 - wallH * 0.35
+    const dims = this.getIsoDims()
+    const y = dims.topY + dims.halfH * 0.35
     this.crackOverlay.lineStyle(1.5, 0x1a1a1a, 0.8)
-    this.crackOverlay.lineBetween(-halfW * 0.15, y - 10, -halfW * 0.02, y - 1)
-    this.crackOverlay.lineBetween(-halfW * 0.02, y - 1, halfW * 0.12, y + 8)
-    this.crackOverlay.lineBetween(halfW * 0.12, y + 8, halfW * 0.05, y + 14)
-    this.crackOverlay.lineBetween(-halfW * 0.02, y - 1, -halfW * 0.1, y + 7)
+    this.crackOverlay.lineBetween(-dims.halfW * 0.2, y - 10, -dims.halfW * 0.04, y - 1)
+    this.crackOverlay.lineBetween(-dims.halfW * 0.04, y - 1, dims.halfW * 0.16, y + 8)
+    this.crackOverlay.lineBetween(dims.halfW * 0.16, y + 8, dims.halfW * 0.07, y + 14)
+    this.crackOverlay.lineBetween(-dims.halfW * 0.04, y - 1, -dims.halfW * 0.14, y + 7)
   }
 
   private updateRenderTransform(): void {
@@ -422,202 +715,6 @@ export class Building extends Phaser.GameObjects.Container {
     this.visualRoot?.setPosition(isoPos.x - this.x, isoPos.y - this.y)
     this.setDepth(isoPos.y + 5)
     this.drawRallyLine()
-  }
-
-  private drawCategoryIcon(w: number, h: number): void {
-    const g = this.bodyGraphic
-    const hw = w / 2
-    const hh = h / 2
-    const r = Math.min(w, h) * 0.2
-
-    // Per-building-id specifics first
-    switch (this.def.id) {
-      case 'construction_yard':
-        // Crane tower + triangle jib
-        g.fillStyle(0xdddddd, 0.85)
-        g.fillRect(-hw * 0.35, -hh * 0.6, 6, hh * 1.0)
-        g.fillTriangle(-hw * 0.2, -hh * 0.55, hw * 0.38, -hh * 0.55, hw * 0.1, -hh * 0.75)
-        g.lineStyle(1.5, 0xdddddd, 0.8)
-        g.lineBetween(hw * 0.2, -hh * 0.55, hw * 0.2, -hh * 0.12)
-        g.fillCircle(hw * 0.2, -hh * 0.08, 2)
-        return
-      case 'barracks':
-        // Door arch + flag pole
-        g.fillStyle(0x000000, 0.4)
-        g.fillRect(-hw * 0.15, hh * 0.05, hw * 0.3, hh * 0.45)    // door
-        g.beginPath()
-        g.arc(0, hh * 0.05, hw * 0.15, Math.PI, 0)
-        g.fillPath()
-        // Flag pole
-        g.lineStyle(2, 0xaaaaaa, 0.9)
-        g.lineBetween(hw * 0.35, hh * 0.45, hw * 0.35, -hh * 0.5)
-        g.fillStyle(0xff3333, 0.9)
-        g.fillRect(hw * 0.35, -hh * 0.5, hw * 0.3, hh * 0.2)      // flag
-        return
-      case 'war_factory':
-        // Roll-up door (horizontal stripes) + smokestack
-        g.lineStyle(1.5, 0x000000, 0.5)
-        for (let dy = hh * 0.0; dy < hh * 0.55; dy += hh * 0.15) {
-          g.lineBetween(-hw * 0.6, dy, hw * 0.6, dy)
-        }
-        // Smokestack
-        g.fillStyle(0x444444, 0.8)
-        g.fillRect(hw * 0.5, -hh * 0.65, 6, hh * 0.5)
-        g.fillStyle(0x888888, 0.4)
-        g.fillCircle(hw * 0.53, -hh * 0.7, 5)
-        return
-      case 'ore_refinery':
-        // Hopper/funnel shape on top
-        g.fillStyle(0x885522, 0.7)
-        g.fillTriangle(-hw * 0.4, -hh * 0.1, hw * 0.4, -hh * 0.1, hw * 0.15, -hh * 0.65)
-        g.fillTriangle(-hw * 0.4, -hh * 0.1, -hw * 0.15, -hh * 0.65, hw * 0.4, -hh * 0.1)
-        // Ore spill dots
-        g.fillStyle(0xd4a017, 0.8)
-        g.fillRect(-5, hh * 0.15, 4, 3)
-        g.fillRect(2, hh * 0.25, 3, 3)
-        return
-      case 'power_plant':
-      case 'tesla_reactor':
-      case 'nuclear_reactor':
-        // Cooling tower circle + stack
-        g.fillStyle(0x9aabbc, 0.9)
-        g.fillEllipse(0, -hh * 0.2, hw * 0.85, hh * 0.55)
-        g.fillStyle(0x667788, 0.9)
-        g.fillRect(hw * 0.35, -hh * 0.55, 6, hh * 0.5)
-        g.fillStyle(0x99aabb, 0.5)
-        g.fillCircle(hw * 0.4, -hh * 0.62, 5)
-        return
-      case 'tesla_coil':
-        // Tall spike with electric arc at top
-        g.fillStyle(0x444466, 1)
-        g.fillRect(-4, -hh * 0.75, 8, hh * 0.9)
-        g.lineStyle(2, 0x66aaff, 1)
-        g.lineBetween(0, -hh * 0.75, -6, -hh * 0.95)
-        g.lineBetween(-6, -hh * 0.95, 0, -hh * 0.85)
-        g.lineBetween(0, -hh * 0.85, 6, -hh * 0.95)
-        g.fillStyle(0xaaddff, 0.9)
-        g.fillCircle(0, -hh * 0.75, 3)
-        return
-      case 'prism_tower':
-        // Narrow mast + crystal prism at top
-        g.fillStyle(0x444455, 1)
-        g.fillRect(-3, -hh * 0.6, 6, hh * 0.75)
-        g.fillStyle(0xaaddff, 0.85)
-        g.fillTriangle(0, -hh * 0.95, -8, -hh * 0.6, 8, -hh * 0.6)
-        g.lineStyle(1, 0xffffff, 0.5)
-        g.lineBetween(0, -hh * 0.95, -2, -hh * 0.75)
-        g.lineBetween(0, -hh * 0.95, 2, -hh * 0.75)
-        return
-      case 'pillbox':
-      case 'sentry_gun':
-        // Small bunker + barrel
-        g.fillStyle(0x666666, 0.8)
-        g.fillCircle(0, 0, r * 1.2)
-        g.fillStyle(0x333333, 1)
-        g.fillRect(-1.5, -r * 1.2 - 8, 3, 9)
-        g.lineStyle(1.5, 0xff4444, 0.7)
-        g.strokeCircle(0, 0, r * 0.7)
-        return
-      case 'flak_cannon':
-      case 'patriot_system':
-      case 'flak_cannon_rd':
-        // AA gun: two upward barrels
-        g.fillStyle(0x666666, 0.8)
-        g.fillCircle(0, hh * 0.1, r)
-        g.fillStyle(0x333333, 1)
-        g.fillRect(-5, -hh * 0.7, 3, hh * 0.75)
-        g.fillRect(2, -hh * 0.7, 3, hh * 0.75)
-        return
-      case 'iron_curtain':
-      case 'chronosphere':
-        // Superweapon: large dome with beam
-        g.fillStyle(0x334455, 0.7)
-        g.fillCircle(0, hh * 0.1, r * 1.6)
-        g.lineStyle(2, 0xff8800, 0.9)
-        g.strokeCircle(0, hh * 0.1, r * 1.6)
-        g.lineStyle(3, 0xff8800, 0.7)
-        g.lineBetween(0, hh * 0.1, 0, -hh * 0.8)
-        g.fillStyle(0xffaa44, 0.9)
-        g.fillCircle(0, -hh * 0.8, 5)
-        return
-    }
-
-    // Category fallback icons
-    switch (this.def.category) {
-      case 'power':
-        // Lightning bolt ⚡
-        g.fillStyle(0xffff00, 0.85)
-        g.beginPath()
-        g.moveTo(hw * 0.15, -hh * 0.6)
-        g.lineTo(-hw * 0.2, -hh * 0.05)
-        g.lineTo(hw * 0.05, -hh * 0.05)
-        g.lineTo(-hw * 0.15, hh * 0.6)
-        g.lineTo(hw * 0.2, hh * 0.05)
-        g.lineTo(-hw * 0.05, hh * 0.05)
-        g.closePath()
-        g.fillPath()
-        break
-
-      case 'production':
-        // Gear circle with teeth
-        g.lineStyle(2, 0xffffff, 0.5)
-        g.strokeCircle(0, 0, r)
-        for (let a = 0; a < 6; a++) {
-          const angle = (a / 6) * Math.PI * 2
-          const ox = Math.cos(angle) * (r + 3)
-          const oy = Math.sin(angle) * (r + 3)
-          g.fillStyle(0xffffff, 0.4)
-          g.fillRect(ox - 2, oy - 2, 4, 4)
-        }
-        break
-
-      case 'defense':
-        // Small gunbox + barrel
-        g.fillStyle(0x666666, 0.9)
-        g.fillRect(-8, -8, 16, 16)
-        g.fillStyle(0x333333, 1)
-        g.fillRect(2, -2, 11, 4)
-        g.lineStyle(1, 0xff5555, 0.7)
-        g.strokeRect(-8, -8, 16, 16)
-        break
-
-      case 'tech':
-        // Radar dish
-        g.lineStyle(2, 0x88aaff, 0.8)
-        g.lineBetween(0, hh * 0.1, 0, -hh * 0.5)
-        g.beginPath()
-        g.arc(-hw * 0.25, -hh * 0.3, r, -0.8, 0.8)
-        g.strokePath()
-        g.lineStyle(1, 0x88aaff, 0.4)
-        g.strokeCircle(hw * 0.15, -hh * 0.2, 3)
-        g.strokeCircle(hw * 0.15, -hh * 0.2, 6)
-        break
-
-      case 'superweapon':
-        // Radiation symbol
-        g.lineStyle(2, 0xff8800, 0.9)
-        g.strokeCircle(0, 0, r * 1.3)
-        g.fillStyle(0xff8800, 0.7)
-        g.fillCircle(0, 0, 3)
-        for (let a = 0; a < 3; a++) {
-          const angle = (a / 3) * Math.PI * 2 - Math.PI / 2
-          const sx = Math.cos(angle) * 5
-          const sy = Math.sin(angle) * 5
-          const ex = Math.cos(angle) * (r * 1.2)
-          const ey = Math.sin(angle) * (r * 1.2)
-          g.lineStyle(3, 0xff8800, 0.7)
-          g.lineBetween(sx, sy, ex, ey)
-        }
-        break
-
-      case 'base':
-        // Crane/gear icon
-        g.lineStyle(2, 0xffffff, 0.5)
-        g.lineBetween(-hw * 0.2, hh * 0.2, -hw * 0.2, -hh * 0.4)
-        g.lineBetween(-hw * 0.2, -hh * 0.4, hw * 0.2, -hh * 0.4)
-        g.lineBetween(hw * 0.2, -hh * 0.4, hw * 0.2, -hh * 0.1)
-        break
-    }
   }
 
   private drawHealthBar(): void {
