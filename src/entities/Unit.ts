@@ -21,7 +21,7 @@ function adjustBrightness(color: number, amount: number): number {
 
 // Minimal scene interface — Agent 1 will provide the concrete implementation
 export interface IRTSScene extends Phaser.Scene {
-  findPath?: (from: TileCoord, to: TileCoord, playerId?: number) => TileCoord[]
+  findPath?: (from: TileCoord, to: TileCoord, playerId?: number, unitId?: string) => TileCoord[]
   worldToTile?: (x: number, y: number) => TileCoord
   tileToWorld?: (col: number, row: number) => Position
   markTileOccupied?: (tile: TileCoord, entityId: string | null) => void
@@ -56,6 +56,9 @@ export class Unit extends Phaser.GameObjects.Container {
   private moveProgress: number  // 0–1 between tiles
   private sourceTile: TileCoord | null
   private destTile: TileCoord | null
+  private stuckTimerMs: number
+  private stuckAnchorPos: Position
+  private stuckRetryCount: number
 
   // Combat
   private attackCooldown: number
@@ -119,6 +122,9 @@ export class Unit extends Phaser.GameObjects.Container {
     this.moveProgress = 0
     this.sourceTile = null
     this.destTile = null
+    this.stuckTimerMs = 0
+    this.stuckAnchorPos = { x: worldX, y: worldY }
+    this.stuckRetryCount = 0
 
     this.attackCooldown = 0
     this.target = null
@@ -482,7 +488,7 @@ export class Unit extends Phaser.GameObjects.Container {
     }
 
     if (rts.findPath) {
-      this.path = rts.findPath(fromTile, toTile, this.playerId)
+      this.path = rts.findPath(fromTile, toTile, this.playerId, this.id)
     } else {
       // Fallback: straight-line path of 1 waypoint
       this.path = [toTile]
@@ -492,6 +498,9 @@ export class Unit extends Phaser.GameObjects.Container {
     this.moveProgress = 0
     this.sourceTile = fromTile
     this.destTile = this.path[0] ?? toTile
+    this.stuckTimerMs = 0
+    this.stuckAnchorPos = { x: this.x, y: this.y }
+    this.stuckRetryCount = 0
     this.updateFacingFromVector(this.destTile.col - this.sourceTile.col, this.destTile.row - this.sourceTile.row)
     this.state = 'moving'
   }
@@ -503,6 +512,7 @@ export class Unit extends Phaser.GameObjects.Container {
       this.arriveAtDestination()
       return
     }
+    this.trackAndResolveStuck(delta)
 
     const speed = this.def.stats.speed  // tiles per second
     const dt = delta / 1000
@@ -530,6 +540,8 @@ export class Unit extends Phaser.GameObjects.Container {
         const nextDx = this.destTile.col - this.sourceTile.col
         const nextDy = this.destTile.row - this.sourceTile.row
         this.updateFacingFromVector(nextDx, nextDy)
+        this.stuckTimerMs = 0
+        this.stuckAnchorPos = { x: this.x, y: this.y }
       } else {
         this.arriveAtDestination()
         return
@@ -561,6 +573,82 @@ export class Unit extends Phaser.GameObjects.Container {
     }
   }
 
+  private trackAndResolveStuck(delta: number): void {
+    this.stuckTimerMs += delta
+    if (this.stuckTimerMs < 3000) return
+
+    const moved = Phaser.Math.Distance.Between(
+      this.stuckAnchorPos.x, this.stuckAnchorPos.y,
+      this.x, this.y,
+    )
+    this.stuckTimerMs = 0
+    this.stuckAnchorPos = { x: this.x, y: this.y }
+    if (moved >= TILE_SIZE * 0.5) {
+      this.stuckRetryCount = 0
+      return
+    }
+
+    if (this.stuckRetryCount < 2 && this.recalculatePathWithOffset()) {
+      this.stuckRetryCount++
+      return
+    }
+
+    if (this.currentPathIndex + 1 < this.path.length) {
+      this.currentPathIndex++
+      this.moveProgress = 0
+      this.sourceTile = this.path[Math.max(0, this.currentPathIndex - 1)] ?? this.sourceTile
+      this.destTile = this.path[this.currentPathIndex] ?? this.destTile
+      if (this.sourceTile && this.destTile) {
+        this.updateFacingFromVector(this.destTile.col - this.sourceTile.col, this.destTile.row - this.sourceTile.row)
+      }
+      this.stuckRetryCount = 0
+      return
+    }
+
+    this.orders = []
+    this.currentOrder = null
+    this.path = []
+    this.target = null
+    this.state = 'idle'
+    this.stuckRetryCount = 0
+  }
+
+  private recalculatePathWithOffset(): boolean {
+    if (!this.currentOrder?.target) return false
+    const rts = this.scene as IRTSScene
+    if (!rts.findPath) return false
+
+    const fromTile = rts.worldToTile
+      ? rts.worldToTile(this.x, this.y)
+      : { col: Math.floor(this.x / TILE_SIZE), row: Math.floor(this.y / TILE_SIZE) }
+    const baseTarget = {
+      col: Math.floor(this.currentOrder.target.x / TILE_SIZE),
+      row: Math.floor(this.currentOrder.target.y / TILE_SIZE),
+    }
+
+    const offsets: TileCoord[] = [
+      { col: 0, row: 0 },
+      { col: Phaser.Math.Between(-1, 1), row: Phaser.Math.Between(-1, 1) },
+      { col: Phaser.Math.Between(-1, 1), row: Phaser.Math.Between(-1, 1) },
+      { col: Phaser.Math.Between(-2, 2), row: Phaser.Math.Between(-2, 2) },
+    ]
+
+    for (const off of offsets) {
+      const toTile = { col: baseTarget.col + off.col, row: baseTarget.row + off.row }
+      const newPath = rts.findPath(fromTile, toTile, this.playerId, this.id)
+      if (!newPath || newPath.length === 0) continue
+      this.path = newPath
+      this.currentPathIndex = 0
+      this.moveProgress = 0
+      this.sourceTile = fromTile
+      this.destTile = this.path[0] ?? toTile
+      this.stuckAnchorPos = { x: this.x, y: this.y }
+      return true
+    }
+
+    return false
+  }
+
   /** Fire at nearby enemies while moving — doesn't stop movement */
   private tryFireWhileMoving(): void {
     if (!this.def.attack) return
@@ -587,6 +675,8 @@ export class Unit extends Phaser.GameObjects.Container {
   private arriveAtDestination(): void {
     this.path = []
     this.moveProgress = 0
+    this.stuckTimerMs = 0
+    this.stuckRetryCount = 0
 
     if (this.currentOrder?.type === 'harvest') {
       this.state = 'harvesting'
