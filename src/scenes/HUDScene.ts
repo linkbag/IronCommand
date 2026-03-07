@@ -16,6 +16,7 @@ const SIDEBAR_W       = 220
 const MINIMAP_H       = 130
 const PLAYER_INFO_H   = 50
 const POWER_BAR_H     = 22
+const POWER_BAR_W     = 12
 const TAB_H           = 28
 const BTN_W           = 96
 const BTN_H           = 56
@@ -63,6 +64,7 @@ interface BuildableItem {
 interface AlertEntry {
   container: Phaser.GameObjects.Container
   tween?: Phaser.Tweens.Tween
+  createdAt: number
 }
 
 // Extended container reference
@@ -72,6 +74,8 @@ interface BuildBtn extends Phaser.GameObjects.Container {
   _progressBar: Phaser.GameObjects.Graphics
   _queueTxt: Phaser.GameObjects.Text
   _readyTxt: Phaser.GameObjects.Text
+  _hotkeyTxt: Phaser.GameObjects.Text
+  _hotkey: string
 }
 
 // ── Dynamic build catalogue based on faction side ──────────────────────
@@ -139,6 +143,7 @@ export class HUDScene extends Phaser.Scene {
   private creditsText!:     Phaser.GameObjects.Text
   private powerText!:       Phaser.GameObjects.Text
   private powerBarFill!:    Phaser.GameObjects.Graphics
+  private powerBarFrame!:   Phaser.GameObjects.Graphics
   private selectedNameTxt!: Phaser.GameObjects.Text
   private selectedInfoTxt!: Phaser.GameObjects.Text
   private selectedHPFill!:  Phaser.GameObjects.Graphics
@@ -147,6 +152,7 @@ export class HUDScene extends Phaser.Scene {
   // ── Build panel ───────────────────────────────────────────────────
   private activeTab: BuildTab = 'buildings'
   private tabBgs:   Map<BuildTab, Phaser.GameObjects.Graphics> = new Map()
+  private tabHighlight?: Phaser.GameObjects.Graphics
   private buildBtns: BuildBtn[] = []
   private buildZones: Phaser.GameObjects.Zone[] = []
 
@@ -167,6 +173,7 @@ export class HUDScene extends Phaser.Scene {
 
   // ── EVA alerts ────────────────────────────────────────────────────
   private alertEntries: AlertEntry[] = []
+  private alertCooldownUntil: Map<string, number> = new Map()
 
   // ── Minimap ───────────────────────────────────────────────────────
   private mmGfx!: Phaser.GameObjects.Graphics
@@ -186,6 +193,7 @@ export class HUDScene extends Phaser.Scene {
 
   // ── Selection groups ──────────────────────────────────────────────
   private selGroups: Map<number, string[]> = new Map()
+  private tabHotkeys: string[] = ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O']
 
   constructor() {
     super({ key: 'HUDScene' })
@@ -328,7 +336,8 @@ export class HUDScene extends Phaser.Scene {
       }
 
       const screenCenter = cartToScreen(wx, wy)
-      this.registry.set('camTargetX', screenCenter.x - this.sidebarX / 2)
+      const viewportW = this.scale.width - SIDEBAR_W
+      this.registry.set('camTargetX', screenCenter.x - viewportW / 2)
       this.registry.set('camTargetY', screenCenter.y - this.scale.height / 2)
     })
   }
@@ -373,49 +382,42 @@ export class HUDScene extends Phaser.Scene {
 
   // ── Power bar ────────────────────────────────────────────────────────
   private buildPowerBar() {
-    const x = this.sidebarX
+    const x = 8
     const y = this.powerBarY
-    const h = POWER_BAR_H
+    const h = Math.max(40, this.selectedY - y - 8)
 
-    const bg = this.add.graphics()
-    bg.fillStyle(0x0e0e1c, 1)
-    bg.fillRect(x, y, SIDEBAR_W, h)
-    bg.lineStyle(1, HUD_BORDER, 0.4)
-    bg.lineBetween(x, y + h, x + SIDEBAR_W, y + h)
+    this.powerBarFrame = this.add.graphics().setDepth(120)
+    this.powerBarFrame.fillStyle(0x0b111d, 0.95)
+    this.powerBarFrame.fillRect(x - 4, y - 2, POWER_BAR_W + 8, h + 4)
+    this.powerBarFrame.lineStyle(1, HUD_BORDER, 0.8)
+    this.powerBarFrame.strokeRect(x - 4, y - 2, POWER_BAR_W + 8, h + 4)
 
-    // "PWR" label
-    this.add.text(x + 6, y + 4, 'PWR', {
-      fontFamily: 'monospace', fontSize: '8px', color: '#445566',
-    })
+    this.add.text(x + POWER_BAR_W / 2, y - 10, 'PWR', {
+      fontFamily: 'monospace', fontSize: '8px', color: '#667c99',
+    }).setOrigin(0.5, 0).setDepth(121)
 
-    // Power number (right-aligned)
-    this.powerText = this.add.text(x + SIDEBAR_W - 6, y + 4, '0/0', {
+    this.powerText = this.add.text(x + POWER_BAR_W + 10, y + h + 6, '0/0', {
       fontFamily: 'monospace', fontSize: '8px', color: '#44cc44',
-    }).setOrigin(1, 0)
+    }).setOrigin(0, 0).setDepth(121)
 
-    // Bar track
-    const track = this.add.graphics()
-    track.fillStyle(0x111828, 1)
-    track.fillRect(x + 26, y + 4, SIDEBAR_W - 82, h - 8)
-
-    this.powerBarFill = this.add.graphics()
+    this.powerBarFill = this.add.graphics().setDepth(121)
   }
 
   private drawPowerFill(gen: number, con: number) {
-    const x  = this.sidebarX + 26
-    const y  = this.powerBarY + 4
-    const w  = SIDEBAR_W - 82
-    const h  = POWER_BAR_H - 8
+    const x  = 8
+    const y  = this.powerBarY
+    const h  = Math.max(40, this.selectedY - y - 8)
     const g  = this.powerBarFill
     g.clear()
-    if (gen <= 0) return
-    const pct = Math.min(1, con / gen)
+    const pct = gen > 0 ? Math.min(1, con / gen) : 1
     const col = pct < 0.8 ? POWER_GREEN : pct < 1.0 ? POWER_YELLOW : POWER_RED
+    const fillH = Math.max(2, Math.floor(h * pct))
+    g.fillStyle(0x081018, 1)
+    g.fillRect(x, y, POWER_BAR_W, h)
     g.fillStyle(col, 0.9)
-    g.fillRect(x, y, Math.max(2, Math.floor(w * pct)), h)
-    // Shimmer
-    g.fillStyle(0xffffff, 0.15)
-    g.fillRect(x, y, Math.max(2, Math.floor(w * pct)), 2)
+    g.fillRect(x, y + h - fillH, POWER_BAR_W, fillH)
+    g.fillStyle(0xffffff, 0.2)
+    g.fillRect(x, y + h - fillH, POWER_BAR_W, 2)
   }
 
   // ── Build tabs ───────────────────────────────────────────────────────
@@ -430,6 +432,8 @@ export class HUDScene extends Phaser.Scene {
     const line = this.add.graphics()
     line.lineStyle(1, HUD_ACCENT, 0.25)
     line.lineBetween(x, y, x + SIDEBAR_W, y)
+
+    this.tabHighlight = this.add.graphics().setDepth(20)
 
     tabs.forEach((tab, i) => {
       const tx  = x + i * tabW
@@ -468,11 +472,27 @@ export class HUDScene extends Phaser.Scene {
       const i      = tabs.indexOf(t)
       const tx     = this.sidebarX + i * tabW
       const active = t === tab
-      bg.fillStyle(active ? HUD_ACCENT : HUD_PANEL, 1)
+      bg.fillStyle(active ? 0x2a1320 : HUD_PANEL, 1)
       bg.fillRect(tx, y, tabW, TAB_H)
       bg.lineStyle(1, active ? HUD_ACCENT : HUD_BORDER, 0.5)
       bg.strokeRect(tx, y, tabW, TAB_H)
     })
+    const tabIdx = tabs.indexOf(tab)
+    if (this.tabHighlight && tabIdx >= 0) {
+      const targetX = this.sidebarX + tabIdx * tabW
+      this.tweens.killTweensOf(this.tabHighlight)
+      this.tweens.addCounter({
+        from: 0,
+        to: 1,
+        duration: 140,
+        onUpdate: (tw) => {
+          const t = tw.getValue() ?? 0
+          this.tabHighlight!.clear()
+          this.tabHighlight!.fillStyle(HUD_ACCENT, 0.18 + 0.14 * t)
+          this.tabHighlight!.fillRect(targetX + 1, y + TAB_H - 4, tabW - 2, 3)
+        },
+      })
+    }
 
     this.rebuildGrid()
   }
@@ -522,17 +542,24 @@ export class HUDScene extends Phaser.Scene {
         fontFamily: 'monospace', fontSize: '8px', color: '#ffffff',
         backgroundColor: '#e94560', padding: { x: 2, y: 1 },
       }).setOrigin(1, 0)
+      const hotkey = this.tabHotkeys[idx] ?? ''
+      const hotkeyTxt = this.add.text(-BTN_W / 2 + 4, -BTN_H / 2 + 2, hotkey, {
+        fontFamily: 'monospace', fontSize: '8px', color: '#ccd8ff',
+        backgroundColor: '#1a2848', padding: { x: 2, y: 1 },
+      }).setOrigin(0, 0)
 
       const readyTxt = this.add.text(0, 20, '', {
         fontFamily: 'monospace', fontSize: '8px', color: '#4ade80',
       }).setOrigin(0.5)
 
-      ctr.add([bg, progressBar, iconGfx, abbTxt, costTxt, queueTxt, readyTxt])
+      ctr.add([bg, progressBar, iconGfx, abbTxt, costTxt, queueTxt, hotkeyTxt, readyTxt])
       ctr._item        = item
       ctr._bg          = bg
       ctr._progressBar = progressBar
       ctr._queueTxt    = queueTxt
       ctr._readyTxt    = readyTxt
+      ctr._hotkeyTxt   = hotkeyTxt
+      ctr._hotkey      = hotkey
 
       this.drawItemBg(ctr)
       this.buildBtns.push(ctr)
@@ -1192,7 +1219,7 @@ export class HUDScene extends Phaser.Scene {
 
     // RA2: Credits deducted gradually — just need enough to start (any credits > 0)
     if (player.credits <= 0) {
-      this.showAlert('Insufficient credits', 'danger')
+      this.showAlert('Insufficient funds', 'danger')
       // Flash credits red
       this.creditsText.setColor('#ff4444')
       this.time.delayedCall(400, () => this.creditsText.setColor('#ffd700'))
@@ -1326,12 +1353,24 @@ export class HUDScene extends Phaser.Scene {
   }
 
   showAlert(msg: string, type: AlertType = 'info') {
-    const centerX = this.sidebarX / 2
+    const now = this.time.now
+    const dedupeKey = `${type}:${msg.toLowerCase()}`
+    const until = this.alertCooldownUntil.get(dedupeKey) ?? 0
+    if (now < until) return
+    this.alertCooldownUntil.set(dedupeKey, now + 2500)
+
+    const cornerX = 16
     const palette: Record<AlertType, { bg: number; text: string; border: number }> = {
       success: { bg: 0x0a1a0a, text: '#4ade80', border: 0x4ade80 },
       warning: { bg: 0x1a1800, text: '#ffdd44', border: 0xddbb00 },
       danger:  { bg: 0x1a0808, text: '#e94560', border: 0xe94560 },
       info:    { bg: 0x0a0e1a, text: '#88aacc', border: 0x4466aa },
+    }
+    const iconByType: Record<AlertType, string> = {
+      success: 'OK',
+      warning: '!',
+      danger: 'X',
+      info: 'i',
     }
     const pal = palette[type]
 
@@ -1353,26 +1392,33 @@ export class HUDScene extends Phaser.Scene {
     })
 
     const alertY = 12 + this.alertEntries.length * ALERT_SPACING
-    const ctr    = this.add.container(centerX, alertY)
+    const ctr    = this.add.container(cornerX, alertY)
     ctr.setDepth(200)
 
-    const txt = this.add.text(0, 0, msg.toUpperCase(), {
+    const iconTxt = this.add.text(0, 0, iconByType[type], {
+      fontFamily: 'monospace', fontSize: '10px', color: pal.text,
+      backgroundColor: '#000000aa',
+      padding: { x: 4, y: 2 },
+      stroke: '#000000', strokeThickness: 2,
+    }).setOrigin(0, 0.5)
+
+    const txt = this.add.text(18, 0, msg.toUpperCase(), {
       fontFamily: 'monospace', fontSize: '11px', color: pal.text,
       stroke: '#000000', strokeThickness: 2,
-    }).setOrigin(0.5)
+    }).setOrigin(0, 0.5)
 
-    const pw = txt.width  + 14
+    const pw = txt.width  + 28
     const ph = txt.height + 8
     const bgGfx = this.add.graphics()
     bgGfx.fillStyle(pal.bg, 0.93)
-    bgGfx.fillRect(-pw / 2, -ph / 2, pw, ph)
+    bgGfx.fillRect(0, -ph / 2, pw, ph)
     bgGfx.lineStyle(1, pal.border, 0.8)
-    bgGfx.strokeRect(-pw / 2, -ph / 2, pw, ph)
+    bgGfx.strokeRect(0, -ph / 2, pw, ph)
 
-    ctr.add([bgGfx, txt])
+    ctr.add([bgGfx, iconTxt, txt])
     ctr.setAlpha(0).setScale(0.85)
 
-    const entry: AlertEntry = { container: ctr }
+    const entry: AlertEntry = { container: ctr, createdAt: now }
     this.alertEntries.push(entry)
 
     this.tweens.add({ targets: ctr, alpha: 1, scale: 1, duration: 180, ease: 'Back.Out' })
@@ -1380,7 +1426,7 @@ export class HUDScene extends Phaser.Scene {
     entry.tween = this.tweens.add({
       targets: ctr,
       alpha: 0,
-      delay: 3000,
+      delay: 3500,
       duration: 500,
       onComplete: () => {
         ctr.destroy()
@@ -1626,6 +1672,14 @@ export class HUDScene extends Phaser.Scene {
         }
       })
     })
+
+    // Build hotkeys per active tab slot (Q,W,E,R,T,Y,U,I,O,P)
+    this.tabHotkeys.forEach((letter) => {
+      kb.on(`keydown-${letter}`, () => {
+        const btn = this.buildBtns.find(b => b._hotkey === letter)
+        if (btn) this.onBuildClick(btn._item)
+      })
+    })
   }
 
   // ════════════════════════════════════════════════════════════════════
@@ -1656,9 +1710,22 @@ export class HUDScene extends Phaser.Scene {
     this.powerText.setText(`${con}/${gen}`).setColor(color)
     this.drawPowerFill(gen, con)
 
+    if (this.powerBarFrame) {
+      const low = pct >= 1
+      const flashOn = Math.floor(this.time.now / 220) % 2 === 0
+      this.powerBarFrame.clear()
+      this.powerBarFrame.fillStyle(low && flashOn ? 0x3a1111 : 0x0b111d, 0.95)
+      const x = 8
+      const y = this.powerBarY
+      const h = Math.max(40, this.selectedY - y - 8)
+      this.powerBarFrame.fillRect(x - 4, y - 2, POWER_BAR_W + 8, h + 4)
+      this.powerBarFrame.lineStyle(1, low ? 0xcc4444 : HUD_BORDER, 0.85)
+      this.powerBarFrame.strokeRect(x - 4, y - 2, POWER_BAR_W + 8, h + 4)
+    }
+
     // Low power warning every ~10 s
     if (pct >= 1 && this.gameState.tick % 600 === 0) {
-      this.showAlert('Warning: Low power!', 'warning')
+      this.showAlert('Low power', 'warning')
     }
   }
 
@@ -1716,8 +1783,11 @@ export class HUDScene extends Phaser.Scene {
       }
     }
 
-    type E = { id: string; playerId: number; type: string; x: number; y: number; isAlive: boolean }
-    const em = this.registry.get('entityMgr') as { getAllEntities(): E[] } | undefined
+    type E = { id: string; playerId: number; type: string; x: number; y: number; isAlive: boolean; def?: { footprint?: { w: number; h: number } } }
+    const em = this.registry.get('entityMgr') as {
+      getAllEntities(): E[]
+      getAllBuildings(): E[]
+    } | undefined
     if (em) {
       const localId = this.gameState?.localPlayerId ?? 0
       em.getAllEntities().forEach(e => {
@@ -1732,21 +1802,47 @@ export class HUDScene extends Phaser.Scene {
           if (fog !== FogState.VISIBLE) return
         }
 
-        // Friendly = green, enemy = red for clear minimap contrast.
-        const color = isOwn ? 0x4ade80 : 0xe94560
+        // RA2 minimap colors: own blue, enemy red.
+        const color = isOwn ? 0x4488ff : 0xe94560
         const screen = cartToScreen(e.x, e.y)
         const mx = ox + screen.x * scaleX
         const my = oy + screen.y * scaleY
-        const sz = e.type === 'building' ? 3 : 2
+        const sz = e.type === 'building' ? 2.8 : 2
         g.fillStyle(color, 1)
-        g.fillRect(mx - sz / 2, my - sz / 2, sz, sz)
+        if (e.type === 'building') {
+          const fw = (e.def?.footprint?.w ?? 2) * ISO_TILE_W * scaleX
+          const fh = (e.def?.footprint?.h ?? 2) * ISO_TILE_H * scaleY
+          g.fillRect(mx - fw / 2, my - fh * 0.2, Math.max(2, fw), Math.max(2, fh))
+        } else {
+          g.fillRect(mx - sz / 2, my - sz / 2, sz, sz)
+        }
       })
+
+      // Explicitly render building footprints as tinted rectangles for readability.
+      for (const b of em.getAllBuildings()) {
+        if (!b.isAlive) continue
+        const isOwn = b.playerId === localId
+        if (!isOwn && map.tiles) {
+          const tc = Math.floor(b.x / TILE_SIZE)
+          const tr = Math.floor(b.y / TILE_SIZE)
+          const fog = map.tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
+          if (fog !== FogState.VISIBLE) continue
+        }
+        const screen = cartToScreen(b.x, b.y)
+        const mx = ox + screen.x * scaleX
+        const my = oy + screen.y * scaleY
+        const fw = Math.max(2, (b.def?.footprint?.w ?? 2) * ISO_TILE_W * scaleX)
+        const fh = Math.max(2, (b.def?.footprint?.h ?? 2) * ISO_TILE_H * scaleY)
+        g.lineStyle(1, isOwn ? 0x77aaff : 0xff8899, 0.9)
+        g.strokeRect(mx - fw / 2, my - fh * 0.2, fw, fh)
+      }
     }
 
     // Camera viewport rectangle (white)
     const camX = (this.registry.get('camX') as number) ?? 0
     const camY = (this.registry.get('camY') as number) ?? 0
-    const vw   = this.sidebarX * scaleX
+    const viewportW = this.scale.width - SIDEBAR_W
+    const vw   = viewportW * scaleX
     const vh   = this.scale.height * scaleY
     const vx   = ox + camX * scaleX
     const vy   = oy + camY * scaleY
@@ -1825,17 +1921,26 @@ export class HUDScene extends Phaser.Scene {
       bar.clear()
 
       if (prog > 0) {
-        const fillW = Math.max(2, (BTN_W - 2) * prog)
-        bar.fillStyle(0x4ade80, 0.9)
-        bar.fillRect(-BTN_W / 2 + 1, BTN_H / 2 - 7, fillW, 6)
-        bar.fillStyle(0xffffff, 0.25)
-        bar.fillRect(-BTN_W / 2 + 1, BTN_H / 2 - 7, fillW, 2)
+        // Clock-style radial progress around icon center.
+        const radius = 14
+        const start = -Math.PI / 2
+        const end = start + Math.PI * 2 * prog
+        bar.fillStyle(0x4ade80, 0.2)
+        bar.slice(0, 0, radius, start, end, false)
+        bar.lineTo(0, 0)
+        bar.closePath()
+        bar.fillPath()
+        bar.lineStyle(2, 0x4ade80, 0.95)
+        bar.beginPath()
+        bar.arc(0, 0, radius, start, end, false)
+        bar.strokePath()
       }
 
       btn._readyTxt?.setText(pending ? 'PLACE' : '')
 
       const q = this.buildQueueCnt.get(item.id) ?? 0
       btn._queueTxt?.setText(q > 0 ? `+${q}` : '')
+      btn._hotkeyTxt?.setAlpha(this.checkPrerequisites(item.id) ? 1 : 0.35)
 
       this.drawItemBg(btn)
     })

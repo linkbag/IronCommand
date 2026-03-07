@@ -64,13 +64,16 @@ export class GameScene extends Phaser.Scene {
   private isLeftPointerActive = false
   private dragAnchorScreen = { x: 0, y: 0 }
   private cursorMode: string = 'normal'
+  private patrolAnchorByUnit: Map<string, Position> = new Map()
 
   // ── Selection ───────────────────────────────────────────────
   private selectionRect!: Phaser.GameObjects.Graphics
   private selectedIds: Set<string> = new Set()
+  private selectionPulseTweens: Map<string, Phaser.Tweens.Tween> = new Map()
 
   // ── Last alert position (for Space key) ────────────────────
   private lastAlertPos: Position | null = null
+  private lastUnderAttackAlertMs = 0
   private fogAnchorSources: Array<{ pos: TileCoord; range: number }> = []
   private waypointMode = false
   private paratrooperCooldownMs: Map<number, number> = new Map()
@@ -98,7 +101,11 @@ export class GameScene extends Phaser.Scene {
     this.camX = 0
     this.camY = 0
     this.cursorMode = 'normal'
+    this.patrolAnchorByUnit = new Map()
+    this.selectionPulseTweens.forEach(tw => tw.stop())
+    this.selectionPulseTweens = new Map()
     this.lastAlertPos = null
+    this.lastUnderAttackAlertMs = 0
     this.fogAnchorSources = []
     this.waypointMode = false
     this.paratrooperCooldownMs = new Map()
@@ -522,14 +529,16 @@ export class GameScene extends Phaser.Scene {
       }
     })
 
-    // Building under attack — alert if player's building
-    this.entityMgr.on('building_died', (b: { playerId: number; x: number; y: number }) => {
-      if (b.playerId === 0) {
-        this.lastAlertPos = { x: b.x, y: b.y }
-        this.registry.set('lastAlertPos', this.lastAlertPos)
-        const hud = this.scene.get('HUDScene')
-        if (hud) hud.events.emit('underAttack')
-      }
+    // Building under attack — alert on damage with cooldown.
+    this.entityMgr.on('building_damaged', (payload: { building: { playerId: number; x: number; y: number }; sourcePlayerId: number; amount: number }) => {
+      const b = payload.building
+      if (b.playerId !== 0 || payload.amount <= 0) return
+      this.lastAlertPos = { x: b.x, y: b.y }
+      this.registry.set('lastAlertPos', this.lastAlertPos)
+      if (this.time.now - this.lastUnderAttackAlertMs < 3000) return
+      this.lastUnderAttackAlertMs = this.time.now
+      const hud = this.scene.get('HUDScene')
+      if (hud) hud.events.emit('underAttack')
     })
   }
 
@@ -1342,6 +1351,13 @@ export class GameScene extends Phaser.Scene {
       if (this.selectedIds.size > 0) this.showUnitAck('Guard position')
     })
 
+    // P — patrol mode: next click becomes patrol point.
+    this.input.keyboard!.on('keydown-P', () => {
+      if (this.selectedIds.size === 0) return
+      this.cursorMode = 'patrol'
+      this.showUnitAck('Patrol: click destination')
+    })
+
     // D — deploy (GI/Conscript toggle fortified, MCV deploy/undeploy)
     this.input.keyboard!.on('keydown-D', () => {
       this.selectedIds.forEach(id => {
@@ -1468,12 +1484,6 @@ export class GameScene extends Phaser.Scene {
   private handleRightClick(ptr: Phaser.Input.Pointer): void {
     ;(ptr.event as MouseEvent | undefined)?.preventDefault()
     this.cursorMode = 'normal'
-    // Right-click deselects all units
-    if (this.selectedIds.size > 0) {
-      this.selectedIds.clear()
-      this.registry.set('selectedIds', [])
-      return
-    }
     if (this.selectedIds.size === 0) return
 
     const { x: worldX, y: worldY } = this.ptrToCart(ptr)
@@ -1615,6 +1625,19 @@ export class GameScene extends Phaser.Scene {
       return
     }
 
+    if (this.cursorMode === 'patrol') {
+      this.selectedIds.forEach(id => {
+        const unit = this.entityMgr.getUnit(id)
+        if (!unit || unit.playerId !== 0) return
+        const anchor = this.patrolAnchorByUnit.get(id) ?? { x: unit.x, y: unit.y }
+        unit.giveOrder({ type: 'move', target: { x: worldX, y: worldY } })
+        unit.giveOrder({ type: 'move', target: anchor }, true)
+      })
+      this.cursorMode = 'normal'
+      this.showUnitAck('Patrolling')
+      return
+    }
+
     const ownUnit = this.getOwnUnitAt(worldX, worldY)
     if (ownUnit) {
       if (!shiftHeld) this.deselectAll()
@@ -1724,12 +1747,44 @@ export class GameScene extends Phaser.Scene {
   private syncSelectionState(): void {
     this.gameState.selectedEntityIds = Array.from(this.selectedIds)
     this.registry.set('selectedIds', this.gameState.selectedEntityIds)
+    this.updateSelectionPulse()
   }
 
   private deselectAll(): void {
     this.selectedIds.forEach(id => this.entityMgr.getUnit(id)?.setSelected(false))
     this.selectedIds.clear()
     this.syncSelectionState()
+  }
+
+  private updateSelectionPulse(): void {
+    // Stop pulse on units no longer selected.
+    for (const [id, tw] of this.selectionPulseTweens) {
+      if (!this.selectedIds.has(id)) {
+        tw.stop()
+        this.selectionPulseTweens.delete(id)
+        const unit = this.entityMgr.getUnit(id)
+        if (unit) unit.setAlpha(1)
+      }
+    }
+    // Start subtle pulse on newly selected units.
+    this.selectedIds.forEach(id => {
+      if (this.selectionPulseTweens.has(id)) return
+      const unit = this.entityMgr.getUnit(id)
+      if (!unit) return
+      this.patrolAnchorByUnit.set(id, { x: unit.x, y: unit.y })
+      const tw = this.tweens.add({
+        targets: unit,
+        alpha: { from: 1, to: 0.8 },
+        duration: 180,
+        yoyo: true,
+        repeat: 1,
+        onComplete: () => {
+          unit.setAlpha(1)
+          this.selectionPulseTweens.delete(id)
+        },
+      })
+      this.selectionPulseTweens.set(id, tw)
+    })
   }
 
   private handleCameraScroll(delta: number): void {

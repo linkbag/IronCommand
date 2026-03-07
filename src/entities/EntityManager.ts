@@ -482,6 +482,9 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     building.on('building_died', (b: Building) => {
       this.emit('building_died', b)
     })
+    building.on('building_damaged', (payload: { building: Building; sourcePlayerId: number; amount: number }) => {
+      this.emit('building_damaged', payload)
+    })
 
     building.on('find_enemy', (
       x: number, y: number, range: number, ownPlayerId: number,

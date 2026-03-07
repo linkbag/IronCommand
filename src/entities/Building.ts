@@ -162,10 +162,11 @@ export class Building extends Phaser.GameObjects.Container {
     return cost
   }
 
-  takeDamage(amount: number, _sourcePlayerId: number): void {
+  takeDamage(amount: number, sourcePlayerId: number): void {
     if (this.state === 'dying') return
     this.hp = Math.max(0, this.hp - amount)
     this.drawHealthBar()
+    this.emit('building_damaged', { building: this, sourcePlayerId, amount })
 
     // Flash red on hit
     this.scene.tweens.add({
