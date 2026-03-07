@@ -42,13 +42,20 @@ const INFANTRY_BEFORE_WAR_FACTORY: Record<AIDifficulty, number> = {
 const ATTACK_INTERVAL_MS: Record<AIDifficulty, { min: number; max: number }> = {
   easy: { min: 120000, max: 170000 },
   medium: { min: 75000, max: 120000 },
-  hard: { min: 55000, max: 90000 },
+  hard: { min: 40000, max: 70000 },     // faster attacks on hard (was 55-90s)
+}
+
+// Hard: first attack comes at 2 minutes
+const FIRST_ATTACK_MS: Record<AIDifficulty, number> = {
+  easy: 180000,
+  medium: 150000,
+  hard: 120000,
 }
 
 const ATTACK_WAVE_SIZE: Record<AIDifficulty, { min: number; max: number }> = {
   easy: { min: 3, max: 6 },
   medium: { min: 4, max: 10 },
-  hard: { min: 6, max: 16 },
+  hard: { min: 8, max: 20 },            // bigger waves on hard (was 6-16)
 }
 
 const STAGING_HOLD_MS = 5000
@@ -56,8 +63,12 @@ const STAGING_HOLD_MS = 5000
 const HARASS_INTERVAL_MS: Record<AIDifficulty, number> = {
   easy: 100000,
   medium: 60000,
-  hard: 35000,
+  hard: 25000,                           // more frequent harassment (was 35s)
 }
+
+// Hard mode bonuses
+const HARD_INCOME_BONUS = 0.25           // +25% income bonus
+const HARD_BUILD_SPEED_BONUS = 0.30      // +30% build speed bonus
 
 const DEFENSE_TARGET: Record<AIDifficulty, number> = {
   easy: 1,
@@ -68,7 +79,7 @@ const DEFENSE_TARGET: Record<AIDifficulty, number> = {
 const MAX_ARMY: Record<AIDifficulty, number> = {
   easy: 18,
   medium: 28,
-  hard: 40,
+  hard: 50,                              // bigger army cap (was 40)
 }
 
 const BASE_DEFENSE_RADIUS: Record<AIDifficulty, number> = {
@@ -160,7 +171,7 @@ export class AI {
     this.harassTimer = 0
     this.isAttacking = false
 
-    this.nextAttackWindowMs = this.nextAttackWindow()
+    this.nextAttackWindowMs = FIRST_ATTACK_MS[difficulty]
     this.pendingWave = null
     this.lastStandTriggered = false
     this.updateLogged = false
@@ -203,6 +214,11 @@ export class AI {
     this.assessEnemyComposition(gameState)
     this.ensureHarvesting(gameState)
 
+    // Hard mode: passive income bonus (+25% of current credits every ~30s)
+    if (this.difficulty === 'hard') {
+      this.applyHardModeBonus()
+    }
+
     if (this.handleLastStand(gameState)) return
 
     this.defendBase(gameState)
@@ -212,6 +228,7 @@ export class AI {
     this.buildArmy(gameState)
     this.considerHarassment(gameState)
     this.considerAttacking(gameState)
+    this.rebuildDestroyedBuildings(gameState)
 
     if (this.phase === 'mid' || this.phase === 'late') {
       this.considerScouting(gameState)
@@ -221,7 +238,7 @@ export class AI {
       this.considerMultiProng(gameState)
     }
 
-    // Superweapon management (medium/hard only)
+      // Superweapon management (medium/hard only)
     if (this.difficulty !== 'easy') {
       this.tickSuperweapons(gameState)
     }
@@ -364,6 +381,22 @@ export class AI {
     if (!this.hasBuildingPlacedOrConstructing('battle_lab')) {
       if (this.difficulty !== 'easy' || this.getCombatUnits().length >= 12) {
         this.tryBuildBuilding('battle_lab')
+      }
+    }
+
+    // 10. Hard mode: build superweapons aggressively once battle lab is up
+    if (this.difficulty === 'hard' && this.hasActiveBuilding('battle_lab')) {
+      for (const swId of AI.SW_IDS) {
+        const swDef = BUILDING_DEFS[swId]
+        if (!swDef) continue
+        const sideMatch = swDef.side === null || swDef.side === this.side
+        if (!sideMatch) continue
+        if (!this.hasBuildingPlacedOrConstructing(swId)) {
+          if (this.tryBuildBuilding(swId)) {
+            console.log(`[AI] Player ${this.playerId} building superweapon: ${swId}`)
+            break
+          }
+        }
       }
     }
   }
@@ -592,12 +625,14 @@ export class AI {
     if (this.harassTimer < HARASS_INTERVAL_MS[this.difficulty]) return
     this.harassTimer = 0
 
-    // Need enough army before diverting units
-    if (this.getCombatUnits().length < 5) return
+    // Need enough army before diverting units (lower threshold on hard)
+    const armyThreshold = this.difficulty === 'hard' ? 3 : 5
+    if (this.getCombatUnits().length < armyThreshold) return
 
-    // Find fast idle units for raiding
+    // Find fast idle units for raiding (lower speed threshold on hard)
+    const speedReq = this.difficulty === 'hard' ? 2.5 : 3
     const fastUnits = this.getCombatUnits().filter(
-      u => u.state === 'idle' && u.def.stats.speed >= 3,
+      u => u.state === 'idle' && u.def.stats.speed >= speedReq,
     )
     if (fastUnits.length < 2) return
 
@@ -605,7 +640,7 @@ export class AI {
     if (!target) return
 
     const raidSize = clamp(
-      this.difficulty === 'hard' ? 4 : this.difficulty === 'medium' ? 3 : 2,
+      this.difficulty === 'hard' ? 5 : this.difficulty === 'medium' ? 3 : 2,
       2,
       fastUnits.length,
     )
@@ -817,12 +852,16 @@ export class AI {
   // ── Scouting ─────────────────────────────────────────────────
 
   private considerScouting(gameState: GameState): void {
-    if (this.scoutTimer < 20000) return
+    const scoutInterval = this.difficulty === 'hard' ? 12000 : 20000
+    if (this.scoutTimer < scoutInterval) return
     this.scoutTimer = 0
 
     const units = this.em.getUnitsForPlayer(this.playerId)
+    // Hard: also use fast infantry for scouting
+    const speedReq = this.difficulty === 'hard' ? 2.5 : 3.5
     const fastUnit = units.find(
-      u => u.state === 'idle' && u.def.stats.speed >= 3.5 && u.def.category === 'vehicle',
+      u => u.state === 'idle' && u.def.stats.speed >= speedReq &&
+        (u.def.category === 'vehicle' || (this.difficulty === 'hard' && u.def.category === 'infantry')),
     )
     if (!fastUnit) return
 
@@ -844,22 +883,27 @@ export class AI {
   private considerMultiProng(gameState: GameState): void {
     if (this.difficulty !== 'hard') return
 
-    const units = this.getCombatUnits()
+    const units = this.getCombatUnits().filter(u => u.state === 'idle')
     if (units.length < ATTACK_WAVE_SIZE.hard.min) return
 
     const target = this.findAttackTarget(gameState)
     if (!target) return
 
-    const half = Math.floor(units.length / 2)
-    const group1 = units.slice(0, half)
-    const group2 = units.slice(half)
+    // Split into 3 groups for pincer attacks
+    const third = Math.floor(units.length / 3)
+    const group1 = units.slice(0, third)
+    const group2 = units.slice(third, third * 2)
+    const group3 = units.slice(third * 2)
 
-    const offset = 200
+    const offset = 250
     for (const u of group1) {
       u.giveOrder({ type: 'attackMove', target: { x: target.x + offset, y: target.y } })
     }
     for (const u of group2) {
       u.giveOrder({ type: 'attackMove', target: { x: target.x, y: target.y + offset } })
+    }
+    for (const u of group3) {
+      u.giveOrder({ type: 'attackMove', target: { x: target.x - offset, y: target.y } })
     }
   }
 
@@ -990,6 +1034,63 @@ export class AI {
     }
 
     return null
+  }
+
+  // ── Hard mode bonuses ──────────────────────────────────────
+
+  private hardBonusTimer = 0
+
+  private applyHardModeBonus(): void {
+    // Grant +25% income bonus every 10 ticks (~12s on hard)
+    this.hardBonusTimer++
+    if (this.hardBonusTimer >= 10) {
+      this.hardBonusTimer = 0
+      const currentCredits = this.economy.getCredits(this.playerId)
+      const bonus = Math.floor(currentCredits * HARD_INCOME_BONUS * 0.1)  // ~2.5% per grant
+      if (bonus > 0) {
+        this.economy.addCredits(this.playerId, bonus)
+      }
+      // Minimum drip: always grant at least 50 credits on hard
+      if (bonus < 50) {
+        this.economy.addCredits(this.playerId, 50)
+      }
+    }
+  }
+
+  // ── Rebuild destroyed buildings ────────────────────────────
+
+  private rebuildDestroyedBuildings(_gameState: GameState): void {
+    if (this.difficulty === 'easy') return
+    if (!this.hasActiveBuilding('construction_yard')) return
+
+    // Check for missing critical buildings and rebuild them
+    const critical = [
+      getPowerBuildingDefId(this.side),
+      'barracks',
+      'ore_refinery',
+      'war_factory',
+    ]
+
+    for (const defId of critical) {
+      if (!this.hasBuildingPlacedOrConstructing(defId)) {
+        if (this.tryBuildBuilding(defId)) {
+          console.log(`[AI] Player ${this.playerId} rebuilding destroyed ${defId}`)
+          return  // One rebuild per tick
+        }
+      }
+    }
+
+    // Hard mode: also rebuild mid-tech and battle lab
+    if (this.difficulty === 'hard') {
+      const midTechId = this.side === 'alliance' ? 'air_force_command' : 'radar_tower'
+      if (this.phase !== 'early' && !this.hasBuildingPlacedOrConstructing(midTechId)) {
+        this.tryBuildBuilding(midTechId)
+        return
+      }
+      if (this.phase === 'late' && !this.hasBuildingPlacedOrConstructing('battle_lab')) {
+        this.tryBuildBuilding('battle_lab')
+      }
+    }
   }
 
   // ── Helpers ──────────────────────────────────────────────────

@@ -12,10 +12,10 @@ import { Combat } from '../combat/Combat'
 import { Economy } from '../economy/Economy'
 import { Production } from '../economy/Production'
 import { AI } from '../combat/AI'
-import { BUILDING_DEFS, getPowerBuildingDefId } from '../entities/BuildingDefs'
+import { BUILDING_DEFS, getPowerBuildingDefId, NEUTRAL_BUILDING_IDS, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
 import { UNIT_DEFS, getHarvesterDefId, getBasicInfantryDefId } from '../entities/UnitDefs'
 import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, FactionSide } from '../types'
-import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType } from '../types'
+import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL_PLAYER_ID } from '../types'
 import { FACTIONS } from '../data/factions'
 import type { SkirmishConfig } from './SetupScene'
 
@@ -300,6 +300,7 @@ export class GameScene extends Phaser.Scene {
 
     // ── 11. Spawn starting entities ───────────────────────────
     this.spawnStartingEntities()
+    this.spawnNeutralBuildings()
 
     // ── 12. Input ─────────────────────────────────────────────
     this.setupInput()
@@ -401,6 +402,9 @@ export class GameScene extends Phaser.Scene {
 
     // Country passive abilities (e.g., USA paratroopers)
     this.updateParatroopers(delta)
+
+    // Neutral building effects (hospital heal, repair depot)
+    this.updateNeutralEffects(delta)
 
     // AI decision making
     for (const ai of this.aiCommanders) {
@@ -700,11 +704,12 @@ export class GameScene extends Phaser.Scene {
     const { tiles, width, height } = this.gameMap.data
 
     // Harvester asks: "how much ore is near me?" (called every harvest tick)
-    this.entityMgr.on('check_ore_at', (x: number, y: number, cb: (amount: number, pos: Position) => void) => {
+    this.entityMgr.on('check_ore_at', (x: number, y: number, cb: (amount: number, pos: Position, isGems?: boolean) => void) => {
       const origin = this.gameMap.worldToTile(x, y)
       const searchR = 2
       let bestOre = 0
       let bestPos: Position = { x, y }
+      let bestIsGems = false
 
       for (let dr = -searchR; dr <= searchR; dr++) {
         for (let dc = -searchR; dc <= searchR; dc++) {
@@ -715,17 +720,17 @@ export class GameScene extends Phaser.Scene {
           if (t && t.oreAmount > bestOre) {
             bestOre = t.oreAmount
             bestPos = this.gameMap.tileToWorld(tc, tr)
+            bestIsGems = t.terrain === TerrainType.GEMS
           }
         }
       }
-      cb(bestOre, bestPos)
+      cb(bestOre, bestPos, bestIsGems)
     })
 
     // Harvester depletes ore from the tile it harvested
     this.entityMgr.on('ore_harvested', (tilePos: Position, amount: number) => {
       const tc = this.gameMap.worldToTile(tilePos.x, tilePos.y)
-      void amount
-      this.gameMap.harvestOreAt(tc.col, tc.row)
+      this.gameMap.harvestOreAt(tc.col, tc.row, amount)
     })
 
     // Harvester asks: "where is the nearest ore field?"
@@ -924,6 +929,111 @@ export class GameScene extends Phaser.Scene {
           spawnWorld.y + TILE_SIZE)
       }
     })
+  }
+
+  // ── Neutral building spawning ───────────────────────────────
+
+  private spawnNeutralBuildings(): void {
+    const { width, height } = this.gameMap.data
+    const startPositions = this.gameMap.data.startPositions
+    const neutralDefs = ['oil_derrick', 'oil_derrick', 'tech_center', 'neutral_hospital', 'neutral_repair_depot']
+    const minDistFromBase = 20  // tiles
+
+    let placed = 0
+    for (const defId of neutralDefs) {
+      const def = BUILDING_DEFS[defId]
+      if (!def) continue
+
+      // Try random placement away from all player bases
+      for (let attempt = 0; attempt < 80; attempt++) {
+        const col = Math.floor(Math.random() * (width - def.footprint.w - 4)) + 2
+        const row = Math.floor(Math.random() * (height - def.footprint.h - 4)) + 2
+
+        // Check distance from all bases
+        let tooClose = false
+        for (const sp of startPositions) {
+          const spTile = this.gameMap.worldToTile(sp.x, sp.y)
+          const dc = Math.abs(col - spTile.col)
+          const dr = Math.abs(row - spTile.row)
+          if (dc < minDistFromBase && dr < minDistFromBase) {
+            tooClose = true
+            break
+          }
+        }
+        if (tooClose) continue
+
+        // Check tiles are passable and buildable
+        let canPlace = true
+        for (let r = 0; r < def.footprint.h && canPlace; r++) {
+          for (let c = 0; c < def.footprint.w && canPlace; c++) {
+            const tile = this.gameMap.data.tiles[row + r]?.[col + c]
+            if (!tile || !tile.passable || !tile.buildable) canPlace = false
+          }
+        }
+        if (!canPlace) continue
+
+        // Check not overlapping other buildings
+        let overlaps = false
+        for (const b of this.entityMgr.getAllBuildings()) {
+          for (const bt of b.occupiedTiles) {
+            for (let r = 0; r < def.footprint.h; r++) {
+              for (let c = 0; c < def.footprint.w; c++) {
+                if (bt.col === col + c && bt.row === row + r) overlaps = true
+              }
+            }
+          }
+        }
+        if (overlaps) continue
+
+        const building = this.entityMgr.createBuilding(NEUTRAL_PLAYER_ID, defId, col, row)
+        if (building) {
+          building.state = 'active'
+          placed++
+          console.log(`[Neutral] Placed ${defId} at (${col}, ${row})`)
+        }
+        break
+      }
+    }
+    console.log(`[Neutral] Placed ${placed} neutral buildings`)
+  }
+
+  // ── Neutral building effects (hospital heal, repair depot) ──
+
+  private neutralEffectTimer = 0
+  private static readonly NEUTRAL_EFFECT_INTERVAL = 2000  // 2 seconds
+
+  private updateNeutralEffects(delta: number): void {
+    this.neutralEffectTimer += delta
+    if (this.neutralEffectTimer < GameScene.NEUTRAL_EFFECT_INTERVAL) return
+    this.neutralEffectTimer = 0
+
+    for (const b of this.entityMgr.getAllBuildings()) {
+      if (b.state !== 'active' || b.playerId < 0) continue
+
+      if (b.def.id === 'neutral_hospital') {
+        // Heal infantry near hospital (+5 HP every 2s)
+        const units = this.entityMgr.getUnitsInRange(b.x, b.y, 4 * TILE_SIZE)
+        for (const u of units) {
+          if (u.playerId !== b.playerId || u.def.category !== 'infantry') continue
+          if (u.hp < u.def.stats.maxHp && u.state !== 'dying') {
+            u.heal(5)
+          }
+        }
+      }
+
+      if (b.def.id === 'neutral_repair_depot') {
+        // Repair vehicles near depot (+10 HP every 2s)
+        const units = this.entityMgr.getUnitsInRange(b.x, b.y, 4 * TILE_SIZE)
+        for (const u of units) {
+          if (u.playerId !== b.playerId) continue
+          if ((u.def.category === 'vehicle' || u.def.category === 'harvester') && u.state !== 'dying') {
+            if (u.hp < u.def.stats.maxHp) {
+              u.heal(10)
+            }
+          }
+        }
+      }
+    }
   }
 
   // ── Fog of War ────────────────────────────────────────────────

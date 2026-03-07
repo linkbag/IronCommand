@@ -844,7 +844,15 @@ export const TECH_TREE_ORDER = [
   'tesla_reactor', 'radar_tower', 'nuclear_reactor', 'cloning_vats',
   'sentry_gun', 'tesla_coil', 'flak_cannon', 'psychic_sensor',
   'nuclear_silo', 'iron_curtain',
+  // Neutral (not buildable by players)
+  'oil_derrick', 'tech_center', 'neutral_hospital', 'neutral_repair_depot',
 ]
+
+/** IDs of neutral capturable buildings */
+export const NEUTRAL_BUILDING_IDS = ['oil_derrick', 'tech_center', 'neutral_hospital', 'neutral_repair_depot']
+
+/** Superweapon building IDs (max 1 each) */
+export const SUPERWEAPON_BUILDING_IDS = ['nuclear_silo', 'weather_device', 'iron_curtain', 'chronosphere']
 
 /** Power cost map for quick lookup */
 export const BUILDING_POWER_COST: Record<string, number> = Object.fromEntries(

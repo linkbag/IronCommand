@@ -224,6 +224,12 @@ export class Unit extends Phaser.GameObjects.Container {
     this.invulnerableTimer = durationMs
   }
 
+  /** Heal unit by amount (capped at maxHp) */
+  heal(amount: number): void {
+    if (this.state === 'dying') return
+    this.hp = Math.min(this.hp + amount, this.def.stats.maxHp)
+  }
+
   /** Yuri mind control: switch unit to new owner, track original */
   setMindControlled(yuriId: string, newPlayerId: number): void {
     if (this.mindControlledBy) return  // already controlled
@@ -766,16 +772,18 @@ export class Unit extends Phaser.GameObjects.Container {
     }
 
     // Check if adjacent to an ore tile
-    this.emit('check_ore_at', this.x, this.y, (oreAmount: number, tilePos: Position) => {
+    this.emit('check_ore_at', this.x, this.y, (oreAmount: number, tilePos: Position, isGems?: boolean) => {
       if (oreAmount > 0 && this.cargoAmount < this.harvestCapacity) {
         this.harvestTimer += delta
         if (this.harvestTimer >= HARVEST_TIME) {
           this.harvestTimer = 0
-          const richnessRatio = Phaser.Math.Clamp(oreAmount / 5, 0, 1)
-          const creditValue = Math.max(1, Math.floor(100 * richnessRatio))
+          // New ore system: extract up to 100 ore units per tick
+          // Credit value: 100 for ore, 200 for gems
+          const extractRate = 100
+          const creditValue = isGems ? 200 : 100
           const harvested = Math.min(creditValue, this.harvestCapacity - this.cargoAmount)
           this.cargoAmount += harvested
-          this.emit('harvest_ore', tilePos, 1)
+          this.emit('harvest_ore', tilePos, extractRate)
         }
       } else if (oreAmount <= 0) {
         // No ore here — find next ore field

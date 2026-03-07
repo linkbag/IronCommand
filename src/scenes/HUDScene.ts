@@ -8,7 +8,7 @@ import type { Player, GameState, FactionSide } from '../types'
 import { FogState, TILE_SIZE } from '../types'
 import { FACTIONS } from '../data/factions'
 import { UNIT_DEFS, getAvailableUnitIds } from '../entities/UnitDefs'
-import { BUILDING_DEFS, getAvailableBuildingIds } from '../entities/BuildingDefs'
+import { BUILDING_DEFS, getAvailableBuildingIds, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
 
 // ── Layout constants ───────────────────────────────────────────────────
 const SIDEBAR_W       = 220
@@ -593,11 +593,23 @@ export class HUDScene extends Phaser.Scene {
     const hasCredits   = !this.humanPlayer || this.humanPlayer.credits >= item.cost
     const hasPrereqs   = this.checkPrerequisites(item.id)
 
+    // Check if superweapon already owned (max 1 each)
+    let swAlreadyOwned = false
+    if (SUPERWEAPON_BUILDING_IDS.includes(item.id)) {
+      type E = { getBuildingsForPlayer(playerId: number): Array<{ def: { id: string }; state: string }> }
+      const em = this.registry.get('entityMgr') as E | undefined
+      if (em) {
+        swAlreadyOwned = em.getBuildingsForPlayer(0).some(
+          b => b.def.id === item.id && b.state !== 'dying'
+        )
+      }
+    }
+
     let fill   = HUD_PANEL
     let border = HUD_BORDER
     let alpha  = 1.0
 
-    if (!hasPrereqs) {
+    if (!hasPrereqs || swAlreadyOwned) {
       // Locked — grey out completely
       fill = 0x0a0a0a; border = 0x222222; alpha = 0.4
     } else if (isPending)   { fill = 0x0a2a0a; border = HUD_GREEN }
@@ -607,7 +619,7 @@ export class HUDScene extends Phaser.Scene {
     g.fillStyle(fill, alpha)
     g.fillRect(-BTN_W / 2, -BTN_H / 2, BTN_W, BTN_H)
 
-    if (!hasPrereqs) {
+    if (!hasPrereqs || swAlreadyOwned) {
       // Draw lock icon (small padlock shape)
       g.fillStyle(0x555555, 0.8)
       g.fillRect(-4, -6, 8, 8)           // lock body
@@ -626,7 +638,7 @@ export class HUDScene extends Phaser.Scene {
     g.strokeRect(-BTN_W / 2, -BTN_H / 2, BTN_W, BTN_H)
 
     // Set container alpha for all children (text, etc.)
-    btn.setAlpha(hasPrereqs ? 1.0 : 0.35)
+    btn.setAlpha((hasPrereqs && !swAlreadyOwned) ? 1.0 : 0.35)
   }
 
   /** Get a short readable name for build buttons */
@@ -1025,6 +1037,21 @@ export class HUDScene extends Phaser.Scene {
       this.buildQueueCnt.set(item.id, q)
       this.showAlert(`${item.label} queued (+${q})`, 'info')
       return
+    }
+
+    // Superweapon limit: max 1 of each type
+    if (SUPERWEAPON_BUILDING_IDS.includes(item.id)) {
+      type E = { getBuildingsForPlayer(playerId: number): Array<{ def: { id: string }; state: string }> }
+      const em = this.registry.get('entityMgr') as E | undefined
+      if (em) {
+        const alreadyOwned = em.getBuildingsForPlayer(0).some(
+          b => b.def.id === item.id && b.state !== 'dying'
+        )
+        if (alreadyOwned) {
+          this.showAlert('Already have this superweapon', 'danger')
+          return
+        }
+      }
     }
 
     // RA2: Check tech prerequisites

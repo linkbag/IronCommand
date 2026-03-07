@@ -12,70 +12,73 @@ import { DamageType } from '../types'
 import { TILE_SIZE } from '../types'
 
 // Type multipliers: who's strong against what
+// RA2-authentic type multipliers — balanced for realistic counter-play:
+// Bullets: shred infantry, weak vs armor. Explosive: anti-structure/vehicle.
+// Missile: all-rounder AA/AT. Fire: anti-infantry/structure. Electric: anti-vehicle/naval.
 const TYPE_MULTIPLIERS: Record<DamageType, Record<string, number>> = {
   [DamageType.BULLET]: {
-    infantry: 1.6,
-    vehicle: 0.4,
-    aircraft: 0.6,
-    naval: 0.4,
-    harvester: 0.7,
-    base: 0.25,
-    power: 0.25,
-    production: 0.25,
-    defense: 0.4,
-    tech: 0.25,
-    superweapon: 0.2,
+    infantry: 1.75,
+    vehicle: 0.3,
+    aircraft: 0.5,
+    naval: 0.3,
+    harvester: 0.5,
+    base: 0.15,
+    power: 0.15,
+    production: 0.15,
+    defense: 0.3,
+    tech: 0.15,
+    superweapon: 0.1,
   },
   [DamageType.EXPLOSIVE]: {
-    infantry: 0.7,
-    vehicle: 1.4,
-    aircraft: 0.3,
-    naval: 1.0,
-    harvester: 1.0,
-    base: 1.6,
-    power: 1.6,
-    production: 1.6,
-    defense: 1.3,
-    tech: 1.5,
-    superweapon: 1.4,
-  },
-  [DamageType.MISSILE]: {
     infantry: 0.6,
     vehicle: 1.5,
-    aircraft: 1.5,
-    naval: 1.3,
+    aircraft: 0.2,
+    naval: 1.2,
     harvester: 1.2,
-    base: 1.2,
-    power: 1.2,
-    production: 1.2,
-    defense: 1.0,
-    tech: 1.2,
-    superweapon: 1.0,
+    base: 1.8,
+    power: 1.8,
+    production: 1.7,
+    defense: 1.4,
+    tech: 1.6,
+    superweapon: 1.5,
+  },
+  [DamageType.MISSILE]: {
+    infantry: 0.5,
+    vehicle: 1.6,
+    aircraft: 2.0,
+    naval: 1.4,
+    harvester: 1.3,
+    base: 1.0,
+    power: 1.0,
+    production: 1.0,
+    defense: 0.8,
+    tech: 1.0,
+    superweapon: 0.8,
   },
   [DamageType.FIRE]: {
-    infantry: 1.8,
-    vehicle: 0.8,
-    aircraft: 0.2,
-    naval: 0.5,
-    harvester: 1.0,
-    base: 1.3,
-    power: 1.3,
-    production: 1.3,
-    defense: 0.8,
-    tech: 1.3,
+    infantry: 2.0,
+    vehicle: 0.6,
+    aircraft: 0.1,
+    naval: 0.4,
+    harvester: 0.8,
+    base: 1.5,
+    power: 1.5,
+    production: 1.4,
+    defense: 0.7,
+    tech: 1.4,
     superweapon: 1.0,
   },
   [DamageType.ELECTRIC]: {
-    infantry: 1.2,
-    vehicle: 1.3,
-    aircraft: 0.8,
-    naval: 1.5,
-    harvester: 1.2,
+    infantry: 1.3,
+    vehicle: 1.4,
+    aircraft: 0.6,
+    naval: 1.8,
+    harvester: 1.3,
     base: 1.0,
-    power: 2.0,
+    power: 2.5,
     production: 1.0,
-    defense: 1.2,
-    tech: 1.5,
+    defense: 1.3,
+    tech: 1.6,
     superweapon: 1.0,
   },
 }
@@ -223,9 +226,18 @@ export class Combat extends Phaser.Events.EventEmitter {
         return
       }
 
-      // Yuri: mind control — permanently seize one enemy unit
+      // Yuri: mind control — seize one enemy unit (not buildings, not dogs)
       if (attacker.def.id === 'yuri' && target instanceof Unit && target.playerId !== attacker.playerId) {
-        // Release previous controlled unit if any
+        // Attack dogs are immune to mind control
+        if (target.def.id === 'attack_dog') {
+          console.log('[Yuri] Cannot mind-control attack dog', { yuriId: attacker.id, targetId: target.id })
+          return
+        }
+        // Cannot mind-control other Yuris
+        if (target.def.id === 'yuri') {
+          console.log('[Yuri] Cannot mind-control another Yuri', { yuriId: attacker.id, targetId: target.id })
+          return
+        }
         this.em.emit('yuri_mind_control', {
           yuriId: attacker.id,
           yuriPlayerId: attacker.playerId,

@@ -6,7 +6,7 @@
 import Phaser from 'phaser'
 import type { EntityManager } from '../entities/EntityManager'
 import type { GameState } from '../types'
-import { STARTING_CREDITS, POWER_LOW_THRESHOLD } from '../types'
+import { STARTING_CREDITS, POWER_LOW_THRESHOLD, NEUTRAL_PLAYER_ID } from '../types'
 
 interface PowerState {
   generated: number
@@ -75,11 +75,28 @@ export class Economy extends Phaser.Events.EventEmitter {
     return this.isPowerLow(playerId) ? 0.5 : 1.0
   }
 
+  // ── Oil derrick income ──────────────────────────────────────
+
+  private oilDerrickTimer = 0
+  private static readonly OIL_DERRICK_INTERVAL = 10000  // 10 seconds
+  private static readonly OIL_DERRICK_INCOME = 100      // credits per tick
+
   // ── Main update ──────────────────────────────────────────────
 
-  update(_delta: number, gameState: GameState): void {
+  update(delta: number, gameState: GameState): void {
     for (const player of gameState.players) {
       this.updatePower(player.id)
+    }
+
+    // Oil derrick passive income
+    this.oilDerrickTimer += delta
+    if (this.oilDerrickTimer >= Economy.OIL_DERRICK_INTERVAL) {
+      this.oilDerrickTimer = 0
+      for (const b of this.em.getAllBuildings()) {
+        if (b.def.id !== 'oil_derrick' || b.state !== 'active') continue
+        if (b.playerId < 0) continue  // neutral uncaptured
+        this.addCredits(b.playerId, Economy.OIL_DERRICK_INCOME)
+      }
     }
   }
 
