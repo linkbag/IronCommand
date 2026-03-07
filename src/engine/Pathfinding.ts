@@ -98,14 +98,31 @@ interface CacheEntry {
   tick: number  // game tick when cached
 }
 
+interface UnitTileOccupant {
+  id: string
+  col: number
+  row: number
+  state?: string
+}
+
 export class Pathfinder {
   private mapRef: GameMap
   private cache: Map<string, CacheEntry> = new Map()
   private cacheTTL = 300  // ticks before cache entry expires
   private currentTick = 0
+  private unitTileProvider: (() => UnitTileOccupant[]) | null = null
+  private idleUnitNudgeHandler: ((tile: TileCoord, excludeUnitId?: string) => boolean) | null = null
 
   constructor(map: GameMap) {
     this.mapRef = map
+  }
+
+  setUnitTileProvider(provider: () => UnitTileOccupant[]): void {
+    this.unitTileProvider = provider
+  }
+
+  setIdleUnitNudgeHandler(handler: (tile: TileCoord, excludeUnitId?: string) => boolean): void {
+    this.idleUnitNudgeHandler = handler
   }
 
   tick(): void {
@@ -134,7 +151,7 @@ export class Pathfinder {
    * @param isAir  true = ignore terrain passability (flying units)
    * @returns array of TileCoords, empty if no path found
    */
-  findPath(start: TileCoord, goal: TileCoord, isAir = false): TileCoord[] {
+  findPath(start: TileCoord, goal: TileCoord, isAir = false, movingUnitId?: string, _movingPlayerId?: number): TileCoord[] {
     const { width, height } = this.mapRef.data
     // Bounds check
     if (
@@ -146,7 +163,8 @@ export class Pathfinder {
     if (start.col === goal.col && start.row === goal.row) return [start]
 
     // Cache lookup
-    const cacheKey = `${start.col},${start.row}>${goal.col},${goal.row}:${isAir ? 1 : 0}`
+    const dynamicBucket = this.unitTileProvider ? Math.floor(this.currentTick / 20) : 0
+    const cacheKey = `${start.col},${start.row}>${goal.col},${goal.row}:${isAir ? 1 : 0}:${movingUnitId ?? '-'}:${dynamicBucket}`
     const cached = this.cache.get(cacheKey)
     if (cached && this.currentTick - cached.tick <= this.cacheTTL) {
       return cached.path
@@ -156,9 +174,10 @@ export class Pathfinder {
     if (!this.isWalkable(goal.col, goal.row, isAir)) {
       const fallback = this.nearestPassable(goal, 20)
       if (!fallback) return []
-      return this.findPath(start, fallback, isAir)
+      return this.findPath(start, fallback, isAir, movingUnitId, _movingPlayerId)
     }
 
+    const occupancy = this.buildOccupancyCostMap(movingUnitId)
     const openList = new MinHeap()
     const closedSet = new Set<number>()
     const nodeMap = new Map<number, AStarNode>()
@@ -184,7 +203,8 @@ export class Pathfinder {
       examined++
 
       if (current.col === goal.col && current.row === goal.row) {
-        const path = reconstructPath(current)
+        const path = this.smoothCorners(reconstructPath(current), isAir)
+        this.nudgeBlockingIdleUnits(path, movingUnitId)
         this.cache.set(cacheKey, { path, tick: this.currentTick })
         return path
       }
@@ -213,7 +233,7 @@ export class Pathfinder {
           if (!this.isWalkable(current.col, nr, false) || !this.isWalkable(nc, current.row, false)) continue
         }
 
-        const g = current.g + dir.cost
+        const g = current.g + dir.cost + this.getOccupancyPenalty(nc, nr, occupancy)
         const existing = nodeMap.get(nKey)
         if (existing && existing.g <= g) continue
 
@@ -226,7 +246,8 @@ export class Pathfinder {
 
     // No full path found — route to the closest reachable point to the goal
     if (closestNode !== startNode && closestH < startNode.h) {
-      const fallbackPath = reconstructPath(closestNode)
+      const fallbackPath = this.smoothCorners(reconstructPath(closestNode), isAir)
+      this.nudgeBlockingIdleUnits(fallbackPath, movingUnitId)
       this.cache.set(cacheKey, { path: fallbackPath, tick: this.currentTick })
       return fallbackPath
     }
@@ -256,6 +277,89 @@ export class Pathfinder {
       if (best) return best
     }
     return null
+  }
+
+  private buildOccupancyCostMap(movingUnitId?: string): Map<number, number> {
+    const map = new Map<number, number>()
+    if (!this.unitTileProvider) return map
+    const { width, height } = this.mapRef.data
+    for (const unit of this.unitTileProvider()) {
+      if (unit.id === movingUnitId) continue
+      if (unit.col < 0 || unit.col >= width || unit.row < 0 || unit.row >= height) continue
+      const key = encodeCoord(unit.col, unit.row, width)
+      map.set(key, (map.get(key) ?? 0) + 1)
+    }
+    return map
+  }
+
+  private getOccupancyPenalty(col: number, row: number, occupancy: Map<number, number>): number {
+    if (occupancy.size === 0) return 0
+    const { width } = this.mapRef.data
+    const direct = occupancy.get(encodeCoord(col, row, width)) ?? 0
+    let nearby = 0
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        if (dc === 0 && dr === 0) continue
+        nearby += occupancy.get(encodeCoord(col + dc, row + dr, width)) ?? 0
+      }
+    }
+    return direct * 2.5 + nearby * 0.35
+  }
+
+  private nudgeBlockingIdleUnits(path: TileCoord[], movingUnitId?: string): void {
+    if (!this.idleUnitNudgeHandler || path.length < 2) return
+    const lookahead = Math.min(path.length - 1, 6)
+    for (let i = 1; i <= lookahead; i++) {
+      if (this.isLikelyChokepoint(path[i])) {
+        this.idleUnitNudgeHandler(path[i], movingUnitId)
+      }
+    }
+  }
+
+  private isLikelyChokepoint(tile: TileCoord): boolean {
+    const cardinal = [
+      { col: tile.col, row: tile.row - 1 },
+      { col: tile.col, row: tile.row + 1 },
+      { col: tile.col - 1, row: tile.row },
+      { col: tile.col + 1, row: tile.row },
+    ]
+    let passableCount = 0
+    for (const c of cardinal) {
+      if (this.isWalkable(c.col, c.row, false)) passableCount++
+    }
+    return passableCount <= 2
+  }
+
+  private smoothCorners(path: TileCoord[], isAir: boolean): TileCoord[] {
+    if (path.length < 3 || isAir) return path
+    const smoothed: TileCoord[] = [path[0]]
+
+    for (let i = 1; i < path.length - 1; i++) {
+      const prev = path[i - 1]
+      const cur = path[i]
+      const next = path[i + 1]
+
+      const d1c = cur.col - prev.col
+      const d1r = cur.row - prev.row
+      const d2c = next.col - cur.col
+      const d2r = next.row - cur.row
+      const firstCardinal = Math.abs(d1c) + Math.abs(d1r) === 1
+      const secondCardinal = Math.abs(d2c) + Math.abs(d2r) === 1
+      const isNinetyTurn = firstCardinal && secondCardinal && (d1c !== d2c || d1r !== d2r)
+
+      if (isNinetyTurn) {
+        const diag = { col: prev.col + d2c, row: prev.row + d2r }
+        if (this.isWalkable(diag.col, diag.row, false)) {
+          smoothed.push(diag)
+          continue
+        }
+      }
+
+      smoothed.push(cur)
+    }
+
+    smoothed.push(path[path.length - 1])
+    return smoothed
   }
 
   // Pathing intentionally ignores fog of war; only terrain walkability blocks movement.

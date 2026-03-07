@@ -15,6 +15,7 @@ export type { MapTemplate }
 export interface SkirmishConfig {
   playerFaction: FactionId
   mapSize: 'small' | 'medium' | 'large'
+  revealMap: boolean
   mapTemplate: MapTemplate
   mapSeed: number
   playerSpawn: number           // -1 = random, 0-7 = specific spawn index
@@ -53,11 +54,16 @@ const DIFFICULTIES: Array<{ label: string; value: SkirmishConfig['aiDifficulty']
 ]
 
 const CREDIT_OPTIONS = [5000, 10000, 20000]
+const MAP_VISIBILITY_OPTIONS: Array<{ label: string; value: boolean }> = [
+  { label: 'FOG OF WAR', value: false },
+  { label: 'REVEALED', value: true },
+]
 
 export class SetupScene extends Phaser.Scene {
   private config: SkirmishConfig = {
     playerFaction: 'usa',
     mapSize: 'medium',
+    revealMap: false,
     mapTemplate: 'continental',
     mapSeed: Math.floor(Math.random() * 99999) + 1,
     playerSpawn: -1,
@@ -74,6 +80,7 @@ export class SetupScene extends Phaser.Scene {
   private factionSWText!: Phaser.GameObjects.Text
 
   private mapSizeBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
+  private mapVisibilityBtns: Map<boolean, Phaser.GameObjects.Graphics> = new Map()
   private templateBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private diffBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private creditBtns: Map<number, Phaser.GameObjects.Graphics> = new Map()
@@ -352,6 +359,18 @@ export class SetupScene extends Phaser.Scene {
 
     cy += 16
 
+    // Map Visibility
+    cy = this.createRadioGroup(
+      panelX + 10, cy, panelW - 20,
+      'MAP VISIBILITY',
+      MAP_VISIBILITY_OPTIONS.map(m => ({ label: m.label, value: m.value })),
+      this.config.revealMap,
+      (v) => { this.config.revealMap = Boolean(v) },
+      this.mapVisibilityBtns,
+    )
+
+    cy += 16
+
     // AI Difficulty
     cy = this.createRadioGroup(
       panelX + 10, cy, panelW - 20,
@@ -534,10 +553,10 @@ export class SetupScene extends Phaser.Scene {
   private createRadioGroup(
     x: number, y: number, w: number,
     title: string,
-    options: Array<{ label: string; value: string | number }>,
-    current: string | number,
-    onChange: (v: string | number) => void,
-    store: Map<string | number, Phaser.GameObjects.Graphics>,
+    options: Array<{ label: string; value: string | number | boolean }>,
+    current: string | number | boolean,
+    onChange: (v: string | number | boolean) => void,
+    store: Map<string | number | boolean, Phaser.GameObjects.Graphics>,
   ): number {
     this.add.text(x, y, title, {
       fontFamily: 'monospace',

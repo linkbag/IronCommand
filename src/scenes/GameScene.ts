@@ -33,7 +33,7 @@ const PRODUCER_BUILDING_IDS = ['barracks', 'war_factory', 'air_force_command', '
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
-  findPath: (from: TileCoord, to: TileCoord, playerId?: number) => TileCoord[] =
+  findPath: (from: TileCoord, to: TileCoord, playerId?: number, unitId?: string) => TileCoord[] =
     () => []
   worldToTile: (x: number, y: number) => TileCoord =
     (x, y) => ({ col: Math.floor(x / TILE_SIZE), row: Math.floor(y / TILE_SIZE) })
@@ -93,6 +93,8 @@ export class GameScene extends Phaser.Scene {
   private paused = false
   private pauseOverlay?: Phaser.GameObjects.Rectangle
   private pauseText?: Phaser.GameObjects.Text
+  private blockerNudgeCooldownMs: Map<string, number> = new Map()
+  private forceFullMapReveal = false
 
   constructor() {
     super({ key: 'GameScene' })
@@ -102,6 +104,7 @@ export class GameScene extends Phaser.Scene {
     this.skirmishCfg = data?.config ?? {
       playerFaction: 'usa',
       mapSize: 'small',
+      revealMap: false,
       mapTemplate: 'continental',
       mapSeed: Math.floor(Math.random() * 99999) + 1,
       playerSpawn: -1,
@@ -139,6 +142,8 @@ export class GameScene extends Phaser.Scene {
     this.pauseText?.destroy()
     this.pauseText = undefined
     this.rallyOverlay?.destroy()
+    this.blockerNudgeCooldownMs = new Map()
+    this.forceFullMapReveal = false
   }
 
   create() {
@@ -171,7 +176,8 @@ export class GameScene extends Phaser.Scene {
     this.pathfinder = new Pathfinder(this.gameMap)
 
     // Wire IRTSScene methods (Unit calls these via scene cast)
-    this.findPath  = (from, to) => this.pathfinder.findPath(from, to)
+    this.findPath = (from, to, playerId, unitId) =>
+      this.pathfinder.findPath(from, to, false, unitId, playerId)
     this.worldToTile = (x, y) => this.gameMap.worldToTile(x, y)
     this.tileToWorld = (col, row) => this.gameMap.tileToWorld(col, row)
     } catch (e) { console.error('[IC] CRASH in section 2 (pathfinder):', e); throw e }
@@ -179,6 +185,12 @@ export class GameScene extends Phaser.Scene {
     // ── 3. Entity manager ─────────────────────────────────────
     try {
     this.entityMgr = new EntityManager(this)
+    this.pathfinder.setUnitTileProvider(() =>
+      this.entityMgr.getAllUnits()
+        .filter(u => u.hp > 0 && u.state !== 'dying')
+        .map(u => ({ id: u.id, col: Math.floor(u.x / TILE_SIZE), row: Math.floor(u.y / TILE_SIZE), state: u.state }))
+    )
+    this.pathfinder.setIdleUnitNudgeHandler((tile, excludeUnitId) => this.nudgeIdleBlocker(tile, excludeUnitId))
     } catch (e) { console.error('[IC] CRASH in section 3 (entity manager):', e); throw e }
 
     // ── 4. Combat system ──────────────────────────────────────
@@ -489,15 +501,20 @@ export class GameScene extends Phaser.Scene {
       console.log('[IC] Fog anchor set:', this.fogAnchorSources[0])
     }
 
-    // Reveal fog around player entities
-    this.updateFogOfWar()
-
-    // DEBUG: If no tiles were revealed, force-reveal everything so the game is playable
-    const visibleCount = this.gameMap.data.tiles.flat().filter(t => t.fogState === 2).length
-    console.log('[IC] Fog updated. Visible tiles:', visibleCount)
-    if (visibleCount === 0) {
-      console.warn('[IC] WARNING: No tiles revealed! Force-revealing entire map.')
+    if (this.isMapRevealActive()) {
       this.gameMap.revealAll()
+      this.updateEntityVisibility()
+    } else {
+      // Reveal fog around player entities
+      this.updateFogOfWar()
+
+      // DEBUG: If no tiles were revealed, force-reveal everything so the game is playable
+      const visibleCount = this.gameMap.data.tiles.flat().filter(t => t.fogState === 2).length
+      console.log('[IC] Fog updated. Visible tiles:', visibleCount)
+      if (visibleCount === 0) {
+        console.warn('[IC] WARNING: No tiles revealed! Force-revealing entire map.')
+        this.gameMap.revealAll()
+      }
     }
     } catch (e) { console.error('[IC] CRASH in section 16 (fog):', e); throw e }
 
@@ -583,7 +600,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Fog of war (every 30 ticks ≈ 0.5s at 60fps)
-    if (this.gameState.tick % 30 === 0) {
+    if (!this.isMapRevealActive() && this.gameState.tick % 30 === 0) {
       this.updateFogOfWar()
     }
 
@@ -642,6 +659,9 @@ export class GameScene extends Phaser.Scene {
     this.entityMgr.on('building_placed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p && !p.entities.includes(entityId)) p.entities.push(entityId)
+    })
+    this.entityMgr.on('construction_complete', (building: import('../entities/Building').Building) => {
+      this.onBuildingActivated(building)
     })
 
     this.entityMgr.on('unit_destroyed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
@@ -757,6 +777,7 @@ export class GameScene extends Phaser.Scene {
         // HUD already handled the build timer — building is ready, set active immediately
         building.state = 'active'
         building.setAlpha(1)
+        this.onBuildingActivated(building)
 
         // Mark tiles as occupied
         for (const tile of building.occupiedTiles) {
@@ -1099,19 +1120,28 @@ export class GameScene extends Phaser.Scene {
       // Construction Yard — start active
       const cy = this.entityMgr.createBuilding(player.id, 'construction_yard',
         st.col - 1, st.row - 1)
-      if (cy) cy.state = 'active'
+      if (cy) {
+        cy.state = 'active'
+        this.onBuildingActivated(cy)
+      }
       else console.error(`[IC] FAILED to create Construction Yard for player ${player.id}`)
 
       // Side-appropriate Power Building — start active
       const powerDefId = getPowerBuildingDefId(side)
       const pp = this.entityMgr.createBuilding(player.id, powerDefId,
         st.col + 3, st.row - 1)
-      if (pp) pp.state = 'active'
+      if (pp) {
+        pp.state = 'active'
+        this.onBuildingActivated(pp)
+      }
 
       // Ore Refinery — start active
       const ref = this.entityMgr.createBuilding(player.id, 'ore_refinery',
         st.col - 1, st.row + 3)
-      if (ref) ref.state = 'active'
+      if (ref) {
+        ref.state = 'active'
+        this.onBuildingActivated(ref)
+      }
 
       // Side-appropriate Harvester — find nearest ore and auto-send
       const harvesterDefId = getHarvesterDefId(side)
@@ -1213,6 +1243,7 @@ export class GameScene extends Phaser.Scene {
         const building = this.entityMgr.createBuilding(NEUTRAL_PLAYER_ID, defId, col, row)
         if (building) {
           building.state = 'active'
+          this.onBuildingActivated(building)
           placed++
           console.log(`[Neutral] Placed ${defId} at (${col}, ${row})`)
         }
@@ -1285,6 +1316,7 @@ export class GameScene extends Phaser.Scene {
   // ── Fog of War ────────────────────────────────────────────────
 
   private updateFogOfWar(): void {
+    if (this.isMapRevealActive()) return
     const sources: Array<{ pos: TileCoord; range: number }> = []
     const localId = this.gameState.localPlayerId
 
@@ -1448,6 +1480,18 @@ export class GameScene extends Phaser.Scene {
   // ── Entity visibility based on fog ────────────────────────────
 
   private updateEntityVisibility(): void {
+    if (this.isMapRevealActive()) {
+      for (const u of this.entityMgr.getAllUnits()) {
+        u.setVisible(true)
+        if (!u.invulnerable && !u.mindControlledBy) u.setAlpha(1)
+      }
+      for (const b of this.entityMgr.getAllBuildings()) {
+        b.setVisible(true)
+        b.setAlpha(1)
+      }
+      return
+    }
+
     const localId = this.gameState.localPlayerId
     const { tiles, width, height } = this.gameMap.data
 
@@ -2343,6 +2387,7 @@ export class GameScene extends Phaser.Scene {
     if (!cy) return
     cy.state = 'active'
     cy.setAlpha(1)
+    this.onBuildingActivated(cy)
     for (const occ of cy.occupiedTiles) {
       this.gameMap.setOccupied(occ.col, occ.row, cy.id)
     }
@@ -2350,6 +2395,60 @@ export class GameScene extends Phaser.Scene {
     this.selectedIds.delete(unit.id)
     this.showUnitAck('Construction Yard deployed')
     console.log('[MCV] Deployed into Construction Yard', { playerId: unit.playerId, col, row })
+  }
+
+  private onBuildingActivated(building: import('../entities/Building').Building): void {
+    if (building.def.id !== 'spy_satellite') return
+    if (building.playerId !== this.gameState.localPlayerId) return
+    this.forceFullMapReveal = true
+    this.gameMap.revealAll()
+    this.updateEntityVisibility()
+  }
+
+  private isMapRevealActive(): boolean {
+    return this.skirmishCfg.revealMap || this.forceFullMapReveal
+  }
+
+  private nudgeIdleBlocker(tile: TileCoord, excludeUnitId?: string): boolean {
+    const blocker = this.entityMgr.getAllUnits().find(u => {
+      if (u.id === excludeUnitId || u.hp <= 0 || u.state !== 'idle') return false
+      const tc = Math.floor(u.x / TILE_SIZE)
+      const tr = Math.floor(u.y / TILE_SIZE)
+      return tc === tile.col && tr === tile.row
+    })
+    if (!blocker) return false
+
+    const nextAllowed = this.blockerNudgeCooldownMs.get(blocker.id) ?? 0
+    if (this.time.now < nextAllowed) return false
+
+    const candidates: TileCoord[] = []
+    for (const radius of [1, 2]) {
+      for (let dr = -radius; dr <= radius; dr++) {
+        for (let dc = -radius; dc <= radius; dc++) {
+          if (dc === 0 && dr === 0) continue
+          if (Math.abs(dc) + Math.abs(dr) !== radius) continue
+          candidates.push({ col: tile.col + dc, row: tile.row + dr })
+        }
+      }
+    }
+    Phaser.Utils.Array.Shuffle(candidates)
+
+    for (const dest of candidates) {
+      const mapTile = this.gameMap.getTile(dest.col, dest.row)
+      if (!mapTile || !mapTile.passable || mapTile.occupiedBy) continue
+      const occupiedByUnit = this.entityMgr.getAllUnits().some(other => {
+        if (other.id === blocker.id || other.hp <= 0 || other.state === 'dying') return false
+        const otc = Math.floor(other.x / TILE_SIZE)
+        const otr = Math.floor(other.y / TILE_SIZE)
+        return otc === dest.col && otr === dest.row
+      })
+      if (occupiedByUnit) continue
+      blocker.giveOrder({ type: 'move', target: this.gameMap.tileToWorld(dest.col, dest.row) })
+      this.blockerNudgeCooldownMs.set(blocker.id, this.time.now + 2000)
+      return true
+    }
+
+    return false
   }
 
   private updateParatroopers(delta: number): void {
