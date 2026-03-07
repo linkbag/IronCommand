@@ -5,6 +5,9 @@ import {
   TILE_SIZE,
   MAP_DEFAULT_WIDTH,
   MAP_DEFAULT_HEIGHT,
+  ORE_TILE_MAX,
+  GEMS_TILE_MAX,
+  ORE_REGEN_RATE,
 } from '../types'
 import type { TileData, GameMap as GameMapData, Position, TileCoord } from '../types'
 
@@ -19,6 +22,7 @@ const TERRAIN_COLORS: Record<TerrainType, number[]> = {
   [TerrainType.ROAD]:   [0x555555, 0x4a4a4a, 0x606060, 0x555555],
   [TerrainType.BRIDGE]: [0x8b6914, 0x7a5c10, 0x9c7a18, 0x8b6914],
   [TerrainType.FOREST]: [0x1e4d1a, 0x183d14, 0x265a20, 0x1e4d1a],
+  [TerrainType.GEMS]:   [0x2a8aff, 0x2070dd, 0x40a0ff, 0x2a8aff],
 }
 
 const FOG_ALPHA: Record<FogState, number> = {
@@ -27,9 +31,9 @@ const FOG_ALPHA: Record<FogState, number> = {
   [FogState.VISIBLE]:  0.0,
 }
 
-const ORE_MAX_AMOUNT = 5
+const ORE_MAX_AMOUNT = ORE_TILE_MAX
 const ORE_SPREAD_INTERVAL_MS = 30000
-const ORE_GROWTH_INTERVAL_MS = 45000
+const ORE_GROWTH_INTERVAL_MS = 6000  // regenerate every 6s (50 units/tick = ~500/min)
 
 function scaleColor(color: number, factor: number): number {
   const r = Math.max(0, Math.min(255, Math.round(((color >> 16) & 0xff) * factor)))
@@ -152,6 +156,8 @@ function generateMapData(
     const cx = Math.floor(rng() * (width - 20)) + 10
     const cy = Math.floor(rng() * (height - 20)) + 10
     const clusterSize = 5 + Math.floor(rng() * 6)
+    // ~20% chance this cluster is gems instead of ore
+    const isGems = rng() < 0.2
     for (let j = 0; j < clusterSize; j++) {
       const dx = Math.floor((rng() - 0.5) * 8)
       const dy = Math.floor((rng() - 0.5) * 8)
@@ -159,9 +165,9 @@ function generateMapData(
       if (tx >= 0 && tx < width && ty >= 0 && ty < height) {
         const tile = tiles[ty][tx]
         if (tile.terrain === TerrainType.GRASS || tile.terrain === TerrainType.SAND) {
-          tile.terrain = TerrainType.ORE
-          tile.oreAmount = ORE_MAX_AMOUNT
-          // Ore tiles stay passable so harvesters can reach them
+          tile.terrain = isGems ? TerrainType.GEMS : TerrainType.ORE
+          tile.oreAmount = isGems ? GEMS_TILE_MAX : ORE_TILE_MAX
+          // Ore/gem tiles stay passable so harvesters can reach them
           tile.buildable = false
         }
       }
@@ -244,7 +250,7 @@ function generateMapData(
 
         const t = tiles[tr][tc]
         t.terrain = TerrainType.ORE
-        t.oreAmount = ORE_MAX_AMOUNT
+        t.oreAmount = ORE_TILE_MAX
         t.passable = true
         t.buildable = false
       }
@@ -337,6 +343,7 @@ export class GameMap {
             this.drawWaterEdge(g, px, py, col, row)
             break
           case TerrainType.ORE:
+          case TerrainType.GEMS:
             this.oreTiles.push({ col, row })
             this.drawOreDetail(g, px, py, col, row, tile.oreAmount)
             break
@@ -384,9 +391,11 @@ export class GameMap {
 
   private tileColor(tile: TileData, col: number, row: number): number {
     const colors = TERRAIN_COLORS[tile.terrain]
+    if (!colors) return 0x4a7c3f // fallback grass
     const base = colors[(col + row) % colors.length]
-    if (tile.terrain !== TerrainType.ORE) return base
-    const ratio = Phaser.Math.Clamp(tile.oreAmount / ORE_MAX_AMOUNT, 0, 1)
+    if (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS) return base
+    const maxAmt = tile.terrain === TerrainType.GEMS ? GEMS_TILE_MAX : ORE_TILE_MAX
+    const ratio = Phaser.Math.Clamp(tile.oreAmount / maxAmt, 0, 1)
     return scaleColor(base, 0.55 + ratio * 0.45)
   }
 
@@ -447,7 +456,9 @@ export class GameMap {
     row: number,
     oreAmount: number,
   ): void {
-    const ratio = Phaser.Math.Clamp(oreAmount / ORE_MAX_AMOUNT, 0, 1)
+    const tile = this.getTile(col, row)
+    const maxAmt = (tile && tile.terrain === TerrainType.GEMS) ? GEMS_TILE_MAX : ORE_TILE_MAX
+    const ratio = Phaser.Math.Clamp(oreAmount / maxAmt, 0, 1)
     // Metallic veins
     g.lineStyle(1, 0xb8860b, 0.2 + ratio * 0.5)
     const vx = this.tileHash(col, row, 110) * 14 + 4
@@ -549,11 +560,12 @@ export class GameMap {
       }
     }
 
-    // Ore sparkle
+    // Ore/gem sparkle
     for (const { col, row } of this.oreTiles) {
       const tile = this.getTile(col, row)
-      if (!tile || tile.terrain !== TerrainType.ORE || tile.oreAmount <= 0) continue
-      const ratio = Phaser.Math.Clamp(tile.oreAmount / ORE_MAX_AMOUNT, 0, 1)
+      if (!tile || (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS) || tile.oreAmount <= 0) continue
+      const maxAmt = tile.terrain === TerrainType.GEMS ? GEMS_TILE_MAX : ORE_TILE_MAX
+      const ratio = Phaser.Math.Clamp(tile.oreAmount / maxAmt, 0, 1)
       const px = col * TILE_SIZE
       const py = row * TILE_SIZE
       const sx = ((this.animFrame * 9 + col * 13) % 24) + 4
@@ -682,28 +694,41 @@ export class GameMap {
     }
   }
 
-  harvestOreAt(col: number, row: number): void {
+  harvestOreAt(col: number, row: number, amount = 100): number {
     const tile = this.getTile(col, row)
-    if (!tile || tile.terrain !== TerrainType.ORE || tile.oreAmount <= 0) return
+    if (!tile || (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS) || tile.oreAmount <= 0) return 0
 
-    tile.oreAmount = Math.max(0, tile.oreAmount - 1)
+    const isGems = tile.terrain === TerrainType.GEMS
+    const extracted = Math.min(tile.oreAmount, amount)
+    tile.oreAmount = Math.max(0, tile.oreAmount - extracted)
+
     if (tile.oreAmount <= 0) {
+      // Fully depleted — becomes grass, does NOT regenerate
       tile.terrain = TerrainType.GRASS
       tile.oreAmount = 0
       tile.passable = true
       tile.buildable = true
-      this.depletedOreTiles.add(this.key(col, row))
+      // Don't add to depletedOreTiles — fully depleted tiles don't regen
       this.removeOreTile(col, row)
+    } else {
+      // Partially depleted — track for regeneration
+      this.depletedOreTiles.add(this.key(col, row))
     }
 
     this.redrawTile(col, row)
     this.renderAnimatedTiles()
+    return isGems ? extracted * 2 : extracted // gems worth 2x
   }
 
   getOreRichness(col: number, row: number): number {
     const tile = this.getTile(col, row)
-    if (!tile || tile.terrain !== TerrainType.ORE) return 0
+    if (!tile || (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS)) return 0
     return tile.oreAmount
+  }
+
+  isGemsTile(col: number, row: number): boolean {
+    const tile = this.getTile(col, row)
+    return tile?.terrain === TerrainType.GEMS
   }
 
   get worldWidth(): number { return this.data.width * TILE_SIZE }
@@ -727,6 +752,7 @@ export class GameMap {
         this.drawWaterEdge(g, px, py, col, row)
         break
       case TerrainType.ORE:
+      case TerrainType.GEMS:
         this.drawOreDetail(g, px, py, col, row, tile.oreAmount)
         break
       case TerrainType.FOREST:
@@ -752,19 +778,29 @@ export class GameMap {
       const row = Math.floor(key / this.data.width)
       const tile = this.getTile(col, row)
 
-      if (!tile || tile.terrain === TerrainType.ORE) {
+      // Partially depleted ore/gem tiles regenerate; fully depleted (grass) tiles do NOT
+      if (!tile) {
         this.depletedOreTiles.delete(key)
         continue
       }
-      if (!this.hasAdjacentOre(col, row)) continue
-      if (Math.random() > 0.1) continue
+      if (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS) {
+        this.depletedOreTiles.delete(key)
+        continue
+      }
+      if (tile.oreAmount <= 0) {
+        this.depletedOreTiles.delete(key)
+        continue
+      }
 
-      tile.terrain = TerrainType.ORE
-      tile.oreAmount = 1
-      tile.passable = true
-      tile.buildable = false
-      this.depletedOreTiles.delete(key)
-      this.addOreTile(col, row)
+      // Adjacent ore speeds up regen slightly
+      const adjacentBonus = this.hasAdjacentOre(col, row) ? 1.3 : 1.0
+      const maxAmt = tile.terrain === TerrainType.GEMS ? GEMS_TILE_MAX : ORE_TILE_MAX
+      const regenAmount = Math.floor(ORE_REGEN_RATE * adjacentBonus)
+      tile.oreAmount = Math.min(maxAmt, tile.oreAmount + regenAmount)
+
+      if (tile.oreAmount >= maxAmt) {
+        this.depletedOreTiles.delete(key)
+      }
       changed.push({ col, row })
     }
 
@@ -779,9 +815,10 @@ export class GameMap {
     const changed: Array<{ col: number; row: number }> = []
     for (const { col, row } of this.oreTiles) {
       const tile = this.getTile(col, row)
-      if (!tile || tile.terrain !== TerrainType.ORE) continue
-      if (tile.oreAmount > 0 && tile.oreAmount < ORE_MAX_AMOUNT) {
-        tile.oreAmount += 1
+      if (!tile || (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS)) continue
+      const maxAmt = tile.terrain === TerrainType.GEMS ? GEMS_TILE_MAX : ORE_TILE_MAX
+      if (tile.oreAmount > 0 && tile.oreAmount < maxAmt) {
+        tile.oreAmount = Math.min(maxAmt, tile.oreAmount + ORE_REGEN_RATE)
         changed.push({ col, row })
       }
     }
@@ -797,7 +834,7 @@ export class GameMap {
       for (let dc = -1; dc <= 1; dc++) {
         if (dr === 0 && dc === 0) continue
         const tile = this.getTile(col + dc, row + dr)
-        if (tile && tile.terrain === TerrainType.ORE && tile.oreAmount > 0) {
+        if (tile && (tile.terrain === TerrainType.ORE || tile.terrain === TerrainType.GEMS) && tile.oreAmount > 0) {
           return true
         }
       }

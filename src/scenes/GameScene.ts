@@ -1327,6 +1327,12 @@ export class GameScene extends Phaser.Scene {
   private handleRightClick(ptr: Phaser.Input.Pointer): void {
     ;(ptr.event as MouseEvent | undefined)?.preventDefault()
     this.cursorMode = 'normal'
+    // Right-click deselects all units
+    if (this.selectedIds.size > 0) {
+      this.selectedIds.clear()
+      this.registry.set('selectedIds', [])
+      return
+    }
     if (this.selectedIds.size === 0) return
 
     const worldX = ptr.worldX
@@ -1481,6 +1487,27 @@ export class GameScene extends Phaser.Scene {
       return
     }
 
+    // Check if clicking on own production building → set as primary producer
+    const ownBuilding = this.getOwnBuildingAt(worldX, worldY)
+    if (ownBuilding) {
+      const producerTypes = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery']
+      if (producerTypes.includes(ownBuilding.def.id)) {
+        this.production.setPrimaryProducer(0, ownBuilding.id)
+        const hudScene = this.scene.get('HUDScene')
+        if (hudScene) {
+          hudScene.events.emit('evaAlert', {
+            message: `${ownBuilding.def.name} set as primary`,
+            type: 'success',
+          })
+        }
+      }
+      // Select the building for info display
+      this.deselectAll()
+      this.selectedIds.add(ownBuilding.id)
+      this.syncSelectionState()
+      return
+    }
+
     if (this.selectedIds.size === 0) {
       if (!shiftHeld) this.deselectAll()
       return
@@ -1536,6 +1563,20 @@ export class GameScene extends Phaser.Scene {
     }
 
     return bestUnit
+  }
+
+  private getOwnBuildingAt(worldX: number, worldY: number): import('../entities/Building').Building | null {
+    for (const building of this.entityMgr.getBuildingsForPlayer(0)) {
+      if (building.state === 'dying') continue
+      const bx = building.x
+      const by = building.y
+      const bw = building.def.footprint.w * TILE_SIZE
+      const bh = building.def.footprint.h * TILE_SIZE
+      if (worldX >= bx && worldX <= bx + bw && worldY >= by && worldY <= by + bh) {
+        return building
+      }
+    }
+    return null
   }
 
   private syncSelectionState(): void {

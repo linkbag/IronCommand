@@ -733,6 +733,100 @@ export const BUILDING_DEFS: Record<string, BuildingDef> = {
     },
     attack: null,
   },
+
+  // ════════════════════════════════════════════════════════════
+  // NEUTRAL / CAPTURABLE BUILDINGS
+  // These spawn on the map as neutral (playerId = -1).
+  // Any player's Engineer can capture them by walking into them.
+  // ════════════════════════════════════════════════════════════
+
+  oil_derrick: {
+    id: 'oil_derrick',
+    name: 'Oil Derrick',
+    category: 'tech',
+    side: null,
+    factionExclusive: null,
+    spriteKey: 'bld_oil_derrick',
+    footprint: { w: 2, h: 2 },
+    providespower: 0,
+    produces: [],
+    stats: {
+      maxHp: 500,
+      armor: 0.1,
+      speed: 0,
+      sightRange: 4,
+      cost: 0,
+      buildTime: 0,
+      prerequisites: [],
+    },
+    attack: null,
+  },
+
+  tech_center: {
+    id: 'tech_center',
+    name: 'Tech Center',
+    category: 'tech',
+    side: null,
+    factionExclusive: null,
+    spriteKey: 'bld_tech_center',
+    footprint: { w: 2, h: 2 },
+    providespower: 0,
+    produces: [],
+    stats: {
+      maxHp: 600,
+      armor: 0.15,
+      speed: 0,
+      sightRange: 5,
+      cost: 0,
+      buildTime: 0,
+      prerequisites: [],
+    },
+    attack: null,
+  },
+
+  neutral_hospital: {
+    id: 'neutral_hospital',
+    name: 'Hospital',
+    category: 'tech',
+    side: null,
+    factionExclusive: null,
+    spriteKey: 'bld_hospital',
+    footprint: { w: 2, h: 2 },
+    providespower: 0,
+    produces: [],
+    stats: {
+      maxHp: 500,
+      armor: 0.1,
+      speed: 0,
+      sightRange: 4,
+      cost: 0,
+      buildTime: 0,
+      prerequisites: [],
+    },
+    attack: null,
+  },
+
+  neutral_repair_depot: {
+    id: 'neutral_repair_depot',
+    name: 'Repair Depot',
+    category: 'tech',
+    side: null,
+    factionExclusive: null,
+    spriteKey: 'bld_repair_depot',
+    footprint: { w: 3, h: 3 },
+    providespower: 0,
+    produces: [],
+    stats: {
+      maxHp: 600,
+      armor: 0.15,
+      speed: 0,
+      sightRange: 4,
+      cost: 0,
+      buildTime: 0,
+      prerequisites: [],
+    },
+    attack: null,
+  },
 }
 
 // ── Helpers ──────────────────────────────────────────────────

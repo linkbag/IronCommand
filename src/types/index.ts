@@ -47,13 +47,14 @@ export enum TerrainType {
   ROAD = 5,
   BRIDGE = 6,
   FOREST = 7,
+  GEMS = 8,
 }
 
 export interface TileData {
   terrain: TerrainType
   passable: boolean
   buildable: boolean
-  oreAmount: number       // 0-5 richness (0 = depleted, 5 = full ore)
+  oreAmount: number       // 0-2000 total ore value (0 = depleted)
   fogState: FogState
   occupiedBy: string | null  // entity ID
 }
@@ -199,3 +200,12 @@ export const STARTING_CREDITS = 10000
 export const ORE_PER_LOAD = 500
 export const HARVESTER_CAPACITY = 1500
 export const POWER_LOW_THRESHOLD = 0.5  // build/production slows below this
+
+// ── Ore system constants ─────────────────────────────────────
+export const ORE_TILE_MAX = 2000        // max ore amount per tile
+export const GEMS_TILE_MAX = 3000       // max gems amount per tile
+export const ORE_HARVEST_VALUE = 100    // credits per harvest tick from ore
+export const GEMS_HARVEST_VALUE = 200   // credits per harvest tick from gems
+export const ORE_HARVEST_RATE = 100     // ore units extracted per harvest tick
+export const ORE_REGEN_RATE = 20        // ore units regenerated per tick (20% of mining speed)
+export const NEUTRAL_PLAYER_ID = -1     // neutral/capturable buildings
