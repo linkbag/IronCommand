@@ -152,10 +152,9 @@ export class Pathfinder {
       return cached.path
     }
 
-    // Goal must be reachable
+    // Goal tile itself must be passable; expand search up to 20 tiles
     if (!this.isWalkable(goal.col, goal.row, isAir)) {
-      // Try to find nearest passable tile to goal
-      const fallback = this.nearestPassable(goal, 3)
+      const fallback = this.nearestPassable(goal, 20)
       if (!fallback) return []
       return this.findPath(start, fallback, isAir)
     }
@@ -176,6 +175,9 @@ export class Pathfinder {
     nodeMap.set(encodeCoord(start.col, start.row, width), startNode)
 
     let examined = 0
+    // Track the closest reachable node to the goal (for fallback)
+    let closestNode: AStarNode = startNode
+    let closestH = startNode.h
 
     while (openList.size > 0 && examined < MAX_SEARCH_DEPTH) {
       const current = openList.pop()!
@@ -185,6 +187,12 @@ export class Pathfinder {
         const path = reconstructPath(current)
         this.cache.set(cacheKey, { path, tick: this.currentTick })
         return path
+      }
+
+      // Track node closest to goal for fallback routing
+      if (current.h < closestH) {
+        closestH = current.h
+        closestNode = current
       }
 
       const currentKey = encodeCoord(current.col, current.row, width)
@@ -216,21 +224,36 @@ export class Pathfinder {
       }
     }
 
-    return []  // No path found
+    // No full path found — route to the closest reachable point to the goal
+    if (closestNode !== startNode && closestH < startNode.h) {
+      const fallbackPath = reconstructPath(closestNode)
+      this.cache.set(cacheKey, { path: fallbackPath, tick: this.currentTick })
+      return fallbackPath
+    }
+
+    return []  // Completely unreachable (e.g., start itself is isolated)
   }
 
   private nearestPassable(origin: TileCoord, radius: number): TileCoord | null {
     const { width, height } = this.mapRef.data
+    let bestDist = Infinity
+    let best: TileCoord | null = null
     for (let r = 1; r <= radius; r++) {
       for (let dc = -r; dc <= r; dc++) {
         for (let dr = -r; dr <= r; dr++) {
           if (Math.abs(dc) !== r && Math.abs(dr) !== r) continue
           const c = origin.col + dc, row = origin.row + dr
           if (c >= 0 && c < width && row >= 0 && row < height && this.isWalkable(c, row, false)) {
-            return { col: c, row }
+            const dist = Math.abs(dc) + Math.abs(dr)
+            if (dist < bestDist) {
+              bestDist = dist
+              best = { col: c, row }
+            }
           }
         }
       }
+      // If we found any passable tile in this ring, it's the closest
+      if (best) return best
     }
     return null
   }
