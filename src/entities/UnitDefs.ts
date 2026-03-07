@@ -1016,7 +1016,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
     factionExclusive: 'italy',
     spriteKey: 'unit_prism_tank',
     stats: {
-      maxHp: 200,
+      maxHp: 240,
       armor: 0.15,
       speed: 2.5,
       sightRange: 7,
@@ -1025,7 +1025,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       prerequisites: ['war_factory', 'battle_lab'],
     },
     attack: {
-      damage: 100,
+      damage: 115,
       range: 8,
       fireRate: 0.5,
       projectileSpeed: 0, // hitscan beam
@@ -1065,7 +1065,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
     factionExclusive: 'russia',
     spriteKey: 'unit_tesla_tank',
     stats: {
-      maxHp: 300,
+      maxHp: 340,
       armor: 0.25,
       speed: 2.5,
       sightRange: 6,
@@ -1074,7 +1074,7 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       prerequisites: ['war_factory', 'radar_tower'],
     },
     attack: {
-      damage: 90,
+      damage: 105,
       range: 5,
       fireRate: 0.7,
       projectileSpeed: 0, // hitscan electric

@@ -14,9 +14,18 @@ interface PowerState {
   isLow: boolean
 }
 
+type Difficulty = 'easy' | 'medium' | 'hard'
+
+const AI_INCOME_MULT: Record<Difficulty, number> = {
+  easy: 0.85,
+  medium: 1.0,
+  hard: 1.25,
+}
+
 export class Economy extends Phaser.Events.EventEmitter {
   private credits: Map<number, number>       // playerId → credits
   private powerState: Map<number, PowerState> // playerId → power
+  private aiIncomeMult: Map<number, number>
   private em: EntityManager
 
   constructor(entityManager: EntityManager, playerIds: number[]) {
@@ -24,6 +33,7 @@ export class Economy extends Phaser.Events.EventEmitter {
     this.em = entityManager
     this.credits = new Map()
     this.powerState = new Map()
+    this.aiIncomeMult = new Map()
 
     for (const id of playerIds) {
       this.credits.set(id, STARTING_CREDITS)
@@ -72,7 +82,11 @@ export class Economy extends Phaser.Events.EventEmitter {
 
   /** Speed multiplier for production when power is low */
   getProductionSpeedMultiplier(playerId: number): number {
-    return this.isPowerLow(playerId) ? 0.5 : 1.0
+    return this.isPowerLow(playerId) ? 0.35 : 1.0
+  }
+
+  setAIDifficulty(playerId: number, difficulty: Difficulty): void {
+    this.aiIncomeMult.set(playerId, AI_INCOME_MULT[difficulty])
   }
 
   // ── Oil derrick income ──────────────────────────────────────
@@ -95,7 +109,8 @@ export class Economy extends Phaser.Events.EventEmitter {
       for (const b of this.em.getAllBuildings()) {
         if (b.def.id !== 'oil_derrick' || b.state !== 'active') continue
         if (b.playerId < 0) continue  // neutral uncaptured
-        this.addCredits(b.playerId, Economy.OIL_DERRICK_INCOME)
+        const aiMult = this.aiIncomeMult.get(b.playerId) ?? 1
+        this.addCredits(b.playerId, Math.floor(Economy.OIL_DERRICK_INCOME * aiMult))
       }
     }
   }
@@ -141,8 +156,9 @@ export class Economy extends Phaser.Events.EventEmitter {
 
   private wireEntityManager(): void {
     this.em.on('ore_dumped', (playerId: number, amount: number) => {
-      // `amount` is already converted to credit value per processed load.
-      const credits = Math.max(0, Math.floor(amount))
+      // Convert ore load to credits with AI income multiplier
+      const aiMult = this.aiIncomeMult.get(playerId) ?? 1
+      const credits = Math.max(0, Math.floor(amount * aiMult))
       this.addCredits(playerId, credits)
       this.emit('ore_converted', playerId, amount, credits)
     })

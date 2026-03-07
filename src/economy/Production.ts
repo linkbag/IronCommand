@@ -15,6 +15,7 @@ import { FACTIONS } from '../data/factions'
 export class Production extends Phaser.Events.EventEmitter {
   private em: EntityManager
   private economy: Economy
+  private playerBuildSpeedMult: Map<number, number>
 
   // Per-building production queues (buildingId → queue items with progress tracking)
   private queues: Map<string, BuildQueueItem[]>
@@ -29,6 +30,7 @@ export class Production extends Phaser.Events.EventEmitter {
     this.em = entityManager
     this.economy = economy
     this.queues = new Map()
+    this.playerBuildSpeedMult = new Map()
   }
 
   // ── Queue API ────────────────────────────────────────────────
@@ -204,8 +206,14 @@ export class Production extends Phaser.Events.EventEmitter {
     }
   }
 
+  setPlayerBuildSpeedMultiplier(playerId: number, multiplier: number): void {
+    this.playerBuildSpeedMult.set(playerId, Math.max(0.1, multiplier))
+  }
+
   private updatePlayerQueues(playerId: number, delta: number, _gameState: GameState): void {
-    const speedMult = this.economy.getProductionSpeedMultiplier(playerId)
+    const powerSpeed = this.economy.getProductionSpeedMultiplier(playerId)
+    const difficultySpeed = this.playerBuildSpeedMult.get(playerId) ?? 1
+    const speedMult = powerSpeed * difficultySpeed
     const buildings = this.em.getBuildingsForPlayer(playerId)
 
     for (const building of buildings) {

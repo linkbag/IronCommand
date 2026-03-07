@@ -79,6 +79,8 @@ export class GameScene extends Phaser.Scene {
   private matchStartMs = 0
   private playerUnitsKilled = 0
   private playerBuildingsDestroyed = 0
+  private lastCombatMs = 0
+  private staleMateBoostActive = false
 
   constructor() {
     super({ key: 'GameScene' })
@@ -108,6 +110,8 @@ export class GameScene extends Phaser.Scene {
     this.matchStartMs = 0
     this.playerUnitsKilled = 0
     this.playerBuildingsDestroyed = 0
+    this.lastCombatMs = 0
+    this.staleMateBoostActive = false
   }
 
   create() {
@@ -186,6 +190,11 @@ export class GameScene extends Phaser.Scene {
     this.aiCommanders = aiPlayers.map(p =>
       new AI(p.id, cfg.aiDifficulty, this.entityMgr, this.economy, this.production, p.faction)
     )
+    for (const p of aiPlayers) {
+      this.economy.setAIDifficulty(p.id, cfg.aiDifficulty)
+      const buildSpeed = cfg.aiDifficulty === 'hard' ? 1.3 : 1.0
+      this.production.setPlayerBuildSpeedMultiplier(p.id, buildSpeed)
+    }
 
     // ── 9. Game state ─────────────────────────────────────────
     this.gameState = {
@@ -197,6 +206,7 @@ export class GameScene extends Phaser.Scene {
       map: this.gameMap.data,
     }
     this.matchStartMs = this.time.now
+    this.lastCombatMs = this.matchStartMs
 
     // ── 10. Event wiring ──────────────────────────────────────
     this.wireEntityEvents()
@@ -455,6 +465,7 @@ export class GameScene extends Phaser.Scene {
     // Win/loss check (every 120 ticks ≈ 2s)
     if (this.gameState.tick % 120 === 0) {
       this.checkWinCondition()
+      this.updateStalematePressure()
     }
 
     // Push live state to HUD via registry
@@ -506,6 +517,8 @@ export class GameScene extends Phaser.Scene {
     })
 
     this.entityMgr.on('unit_destroyed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
+      this.lastCombatMs = this.time.now
+      this.staleMateBoostActive = false
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p) p.entities = p.entities.filter(id => id !== entityId)
       if (playerId !== this.gameState.localPlayerId) {
@@ -519,6 +532,8 @@ export class GameScene extends Phaser.Scene {
     })
 
     this.entityMgr.on('building_destroyed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
+      this.lastCombatMs = this.time.now
+      this.staleMateBoostActive = false
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p) p.entities = p.entities.filter(id => id !== entityId)
       if (playerId !== this.gameState.localPlayerId) {
@@ -1792,6 +1807,24 @@ export class GameScene extends Phaser.Scene {
     if (opponents.length > 0 && opponents.every(p => p.isDefeated)) {
       this.triggerVictory()
     }
+  }
+
+  private updateStalematePressure(): void {
+    if (this.gameOver || this.gameState.phase !== 'playing') return
+    if (this.aiCommanders.length === 0) return
+
+    const STALEMATE_MS = 5 * 60 * 1000
+    const now = this.time.now
+    const stalled = now - this.lastCombatMs >= STALEMATE_MS
+    if (!stalled || this.staleMateBoostActive) return
+
+    for (const ai of this.aiCommanders) {
+      ai.setAggressiveFor(2 * 60 * 1000)
+    }
+    this.staleMateBoostActive = true
+
+    const hud = this.scene.get('HUDScene')
+    if (hud) hud.events.emit('evaAlert', { message: 'Enemy forces are escalating!', type: 'warning' })
   }
 
   private triggerVictory(): void {
