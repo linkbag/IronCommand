@@ -389,8 +389,8 @@ function generateMapData(
     }
   }
 
-  // Compute start positions — spread around map edges
-  const startPositions: Position[] = computeStartPositions(width, height, 8)
+  // Compute deterministic template-aware start positions.
+  const startPositions: Position[] = computeStartPositions(tiles, width, height, seed, resolved)
 
   // Clear terrain around start positions (make them buildable grass)
   for (const sp of startPositions) {
@@ -409,35 +409,13 @@ function generateMapData(
     }
   }
 
-  // Guarantee a reachable ore field near each spawn so the opening harvester loop
+  // Guarantee reachable ore near each spawn so the opening harvester loop
   // is reliable regardless of random ore cluster generation.
+  const spawnOreRng = makePRNG((seed ^ 0x51f15e33 ^ (width << 8) ^ height) >>> 0)
   for (const sp of startPositions) {
     const spCol = Math.floor(sp.x / TILE_SIZE)
     const spRow = Math.floor(sp.y / TILE_SIZE)
-    const centerMapCol = Math.floor(width / 2)
-    const centerMapRow = Math.floor(height / 2)
-
-    const dirCol = spCol <= centerMapCol ? 1 : -1
-    const dirRow = spRow <= centerMapRow ? 1 : -1
-
-    const oreCol = Phaser.Math.Clamp(spCol + dirCol * 12, 4, width - 5)
-    const oreRow = Phaser.Math.Clamp(spRow + dirRow * 10, 4, height - 5)
-
-    const oreRadius = 3
-    for (let dr = -oreRadius; dr <= oreRadius; dr++) {
-      for (let dc = -oreRadius; dc <= oreRadius; dc++) {
-        if (dc * dc + dr * dr > oreRadius * oreRadius) continue
-        const tc = oreCol + dc
-        const tr = oreRow + dr
-        if (tc < 0 || tc >= width || tr < 0 || tr >= height) continue
-
-        const t = tiles[tr][tc]
-        t.terrain = TerrainType.ORE
-        t.oreAmount = ORE_TILE_MAX
-        t.passable = true
-        t.buildable = false
-      }
-    }
+    ensureOreFieldNearSpawn(tiles, width, height, spCol, spRow, spawnOreRng)
   }
 
   return {
@@ -450,46 +428,459 @@ function generateMapData(
   }
 }
 
-/**
- * RA2-style spawn distribution:
- * 2 players → opposite corners
- * 3 players → triangle
- * 4 players → four corners
- * 5-8 players → evenly spaced around perimeter (clock positions)
- */
-function computeStartPositions(w: number, h: number, count: number): Position[] {
-  const margin = 8
-  const cx = w / 2
-  const cy = h / 2
-  const rx = cx - margin  // radius along x
-  const ry = cy - margin  // radius along y
+const SPAWN_EDGE_MARGIN = 6
+const SPAWN_MIN_DISTANCE_RATIO = 0.25
+const SPAWN_ORE_RADIUS_TILES = 15
+const SPAWN_ORE_CLUSTER_RADIUS = 3
 
-  // For 4 or fewer, use corners/specific positions for more natural feel
-  if (count <= 4) {
-    const corners: Position[] = [
-      { x: margin * TILE_SIZE, y: margin * TILE_SIZE },                       // top-left
-      { x: (w - margin) * TILE_SIZE, y: (h - margin) * TILE_SIZE },          // bottom-right
-      { x: (w - margin) * TILE_SIZE, y: margin * TILE_SIZE },                // top-right
-      { x: margin * TILE_SIZE, y: (h - margin) * TILE_SIZE },                // bottom-left
-    ]
-    if (count === 2) return [corners[0], corners[1]]
-    if (count === 3) return [corners[0], corners[1], corners[2]]
-    return corners.slice(0, count)
+type ResolvedMapTemplate = Exclude<MapTemplate, 'random'>
+
+interface SpawnCandidate {
+  col: number
+  row: number
+  centerDist: number
+  edgeDist: number
+}
+
+function computeSpawnCountForSize(w: number, h: number): number {
+  const maxDim = Math.max(w, h)
+  if (maxDim <= 64) return 4
+  if (maxDim <= 128) return 6
+  return 8
+}
+
+function spawnTemplateOffset(template: ResolvedMapTemplate): number {
+  switch (template) {
+    case 'continental': return 0x11f00d1
+    case 'islands': return 0x22f00d2
+    case 'desert': return 0x33f00d3
+    case 'arctic': return 0x44f00d4
+    case 'urban': return 0x55f00d5
+  }
+}
+
+function isSpawnableTile(tile: TileData): boolean {
+  if (!tile.passable || !tile.buildable) return false
+  return tile.terrain !== TerrainType.WATER && tile.terrain !== TerrainType.ROCK
+}
+
+function inSpawnBounds(col: number, row: number, w: number, h: number, margin = SPAWN_EDGE_MARGIN): boolean {
+  return col >= margin && col < w - margin && row >= margin && row < h - margin
+}
+
+function tileDistance(a: TileCoord, b: TileCoord): number {
+  return Math.hypot(a.col - b.col, a.row - b.row)
+}
+
+function hasTerrainWithinRadius(
+  tiles: TileData[][],
+  col: number,
+  row: number,
+  radius: number,
+  terrain: TerrainType,
+): boolean {
+  const h = tiles.length
+  const w = tiles[0]?.length ?? 0
+  const r2 = radius * radius
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (dx * dx + dy * dy > r2) continue
+      const tx = col + dx
+      const ty = row + dy
+      if (tx < 0 || tx >= w || ty < 0 || ty >= h) continue
+      if (tiles[ty][tx].terrain === terrain) return true
+    }
+  }
+  return false
+}
+
+function hasOreWithinRadius(
+  tiles: TileData[][],
+  col: number,
+  row: number,
+  radius = SPAWN_ORE_RADIUS_TILES,
+): boolean {
+  const h = tiles.length
+  const w = tiles[0]?.length ?? 0
+  const r2 = radius * radius
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (dx * dx + dy * dy > r2) continue
+      const tx = col + dx
+      const ty = row + dy
+      if (tx < 0 || tx >= w || ty < 0 || ty >= h) continue
+      const t = tiles[ty][tx]
+      if ((t.terrain === TerrainType.ORE || t.terrain === TerrainType.GEMS) && t.oreAmount > 0) return true
+    }
+  }
+  return false
+}
+
+function collectSpawnCandidates(
+  tiles: TileData[][],
+  w: number,
+  h: number,
+  template: ResolvedMapTemplate,
+): SpawnCandidate[] {
+  const centerCol = (w - 1) * 0.5
+  const centerRow = (h - 1) * 0.5
+  const edgeBand = Math.max(8, Math.floor(Math.min(w, h) * 0.18))
+  const all: SpawnCandidate[] = []
+  const preferred: SpawnCandidate[] = []
+
+  for (let row = SPAWN_EDGE_MARGIN; row < h - SPAWN_EDGE_MARGIN; row++) {
+    for (let col = SPAWN_EDGE_MARGIN; col < w - SPAWN_EDGE_MARGIN; col++) {
+      const tile = tiles[row][col]
+      if (!isSpawnableTile(tile)) continue
+      const edgeDist = Math.min(col, row, w - 1 - col, h - 1 - row)
+      const centerDist = Math.hypot(col - centerCol, row - centerRow)
+      const candidate: SpawnCandidate = { col, row, centerDist, edgeDist }
+      all.push(candidate)
+
+      if (template === 'continental' && edgeDist <= edgeBand) preferred.push(candidate)
+      if (template === 'desert' && hasTerrainWithinRadius(tiles, col, row, 5, TerrainType.WATER)) preferred.push(candidate)
+      if (template === 'arctic' && tile.terrain === TerrainType.GRASS) preferred.push(candidate)
+    }
   }
 
-  // 5-8: evenly around perimeter using angular distribution
-  const positions: Position[] = []
-  // Start at top-left corner (angle ~225° or -3π/4) and go clockwise
-  const startAngle = -Math.PI * 3 / 4
-  for (let i = 0; i < count; i++) {
-    const angle = startAngle + (i / count) * Math.PI * 2
-    const col = Math.round(cx + Math.cos(angle) * rx)
-    const row = Math.round(cy + Math.sin(angle) * ry)
-    const clampedCol = Phaser.Math.Clamp(col, margin, w - margin)
-    const clampedRow = Phaser.Math.Clamp(row, margin, h - margin)
-    positions.push({ x: clampedCol * TILE_SIZE, y: clampedRow * TILE_SIZE })
+  if (template === 'urban' || template === 'islands') return all
+  return preferred.length > 0 ? preferred : all
+}
+
+function pickDistributedSpawns(
+  candidates: SpawnCandidate[],
+  count: number,
+  w: number,
+  h: number,
+  minDistance: number,
+  rng: () => number,
+): TileCoord[] {
+  if (count <= 0 || candidates.length === 0) return []
+  const selected: TileCoord[] = []
+  const used = new Set<number>()
+  const centerCol = (w - 1) * 0.5
+  const centerRow = (h - 1) * 0.5
+  const targetRadius = Math.min(w, h) * 0.34
+  const baseAngle = rng() * Math.PI * 2
+
+  while (selected.length < count) {
+    let bestIdx = -1
+    let bestScore = Number.NEGATIVE_INFINITY
+
+    for (let i = 0; i < candidates.length; i++) {
+      if (used.has(i)) continue
+      const c = candidates[i]
+
+      let nearest = Number.POSITIVE_INFINITY
+      for (const s of selected) {
+        nearest = Math.min(nearest, tileDistance(c, s))
+      }
+      if (selected.length > 0 && nearest < minDistance) continue
+
+      const angle = Math.atan2(c.row - centerRow, c.col - centerCol)
+      const expectedAngle = baseAngle + (selected.length / count) * Math.PI * 2
+      let angleDiff = Math.abs(angle - expectedAngle)
+      if (angleDiff > Math.PI) angleDiff = Math.PI * 2 - angleDiff
+      const centerPenalty = Math.abs(c.centerDist - targetRadius)
+      const spacingScore = selected.length === 0 ? c.centerDist : nearest
+      const score = spacingScore * 1.25 - centerPenalty * 0.9 - angleDiff * 5 + rng() * 0.001
+      if (score > bestScore) {
+        bestScore = score
+        bestIdx = i
+      }
+    }
+
+    if (bestIdx >= 0) {
+      used.add(bestIdx)
+      selected.push({ col: candidates[bestIdx].col, row: candidates[bestIdx].row })
+      continue
+    }
+    break
   }
-  return positions
+
+  return selected
+}
+
+function collectSpawnableComponents(tiles: TileData[][], w: number, h: number): TileCoord[][] {
+  const visited = new Uint8Array(w * h)
+  const components: TileCoord[][] = []
+  const dirs: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+
+  for (let row = SPAWN_EDGE_MARGIN; row < h - SPAWN_EDGE_MARGIN; row++) {
+    for (let col = SPAWN_EDGE_MARGIN; col < w - SPAWN_EDGE_MARGIN; col++) {
+      const idx = row * w + col
+      if (visited[idx]) continue
+      if (!isSpawnableTile(tiles[row][col])) continue
+
+      const queue: TileCoord[] = [{ col, row }]
+      visited[idx] = 1
+      const comp: TileCoord[] = []
+
+      while (queue.length > 0) {
+        const cur = queue.pop()!
+        comp.push(cur)
+        for (const [dx, dy] of dirs) {
+          const nx = cur.col + dx
+          const ny = cur.row + dy
+          if (!inSpawnBounds(nx, ny, w, h)) continue
+          const nIdx = ny * w + nx
+          if (visited[nIdx]) continue
+          visited[nIdx] = 1
+          if (!isSpawnableTile(tiles[ny][nx])) continue
+          queue.push({ col: nx, row: ny })
+        }
+      }
+
+      if (comp.length > 0) components.push(comp)
+    }
+  }
+
+  components.sort((a, b) => b.length - a.length)
+  return components
+}
+
+function pickIslandSpawns(
+  tiles: TileData[][],
+  w: number,
+  h: number,
+  count: number,
+  minDistance: number,
+  rng: () => number,
+): TileCoord[] {
+  const centerCol = (w - 1) * 0.5
+  const centerRow = (h - 1) * 0.5
+  const selected: TileCoord[] = []
+  const components = collectSpawnableComponents(tiles, w, h)
+  for (const comp of components) {
+    if (selected.length >= count) break
+    if (comp.length < 24) continue
+    let best: TileCoord | null = null
+    let bestScore = Number.NEGATIVE_INFINITY
+    for (const cell of comp) {
+      let nearest = Number.POSITIVE_INFINITY
+      for (const s of selected) nearest = Math.min(nearest, tileDistance(cell, s))
+      if (selected.length > 0 && nearest < minDistance) continue
+      const centerDist = Math.hypot(cell.col - centerCol, cell.row - centerRow)
+      const edgeDist = Math.min(cell.col, cell.row, w - 1 - cell.col, h - 1 - cell.row)
+      const score = centerDist * 0.8 + edgeDist * 0.2 + rng() * 0.001
+      if (score > bestScore) {
+        best = cell
+        bestScore = score
+      }
+    }
+    if (best) selected.push(best)
+  }
+  return selected
+}
+
+function pickUrbanQuadrantSpawns(
+  candidates: SpawnCandidate[],
+  w: number,
+  h: number,
+  minDistance: number,
+): TileCoord[] {
+  const cx = (w - 1) * 0.5
+  const cy = (h - 1) * 0.5
+  const quadrantCenters: TileCoord[] = [
+    { col: Math.floor(w * 0.25), row: Math.floor(h * 0.25) },
+    { col: Math.floor(w * 0.75), row: Math.floor(h * 0.25) },
+    { col: Math.floor(w * 0.75), row: Math.floor(h * 0.75) },
+    { col: Math.floor(w * 0.25), row: Math.floor(h * 0.75) },
+  ]
+
+  const byQuadrant: SpawnCandidate[][] = [[], [], [], []]
+  for (const c of candidates) {
+    const q = (c.col < cx ? 0 : 1) + (c.row < cy ? 0 : 2)
+    byQuadrant[q].push(c)
+  }
+
+  const selected: TileCoord[] = []
+  for (let i = 0; i < 4; i++) {
+    const pool = byQuadrant[i]
+    if (pool.length === 0) continue
+    pool.sort((a, b) => tileDistance(a, quadrantCenters[i]) - tileDistance(b, quadrantCenters[i]))
+    for (const cand of pool) {
+      const valid = selected.every((s) => tileDistance(s, cand) >= minDistance)
+      if (!valid) continue
+      selected.push({ col: cand.col, row: cand.row })
+      break
+    }
+  }
+  return selected
+}
+
+function nudgeSpawnToValid(
+  desired: TileCoord,
+  tiles: TileData[][],
+  w: number,
+  h: number,
+  rng: () => number,
+): TileCoord | null {
+  if (inSpawnBounds(desired.col, desired.row, w, h) && isSpawnableTile(tiles[desired.row][desired.col])) {
+    return desired
+  }
+  const offset = Math.floor(rng() * 4)
+  const maxRadius = 14
+  for (let r = 1; r <= maxRadius; r++) {
+    for (let step = 0; step < 4; step++) {
+      const side = (step + offset) % 4
+      for (let i = -r; i <= r; i++) {
+        const col = side === 0 ? desired.col - r : side === 1 ? desired.col + i : side === 2 ? desired.col + r : desired.col + i
+        const row = side === 0 ? desired.row + i : side === 1 ? desired.row - r : side === 2 ? desired.row + i : desired.row + r
+        if (!inSpawnBounds(col, row, w, h)) continue
+        if (isSpawnableTile(tiles[row][col])) return { col, row }
+      }
+    }
+  }
+  return null
+}
+
+function computeStartPositions(
+  tiles: TileData[][],
+  w: number,
+  h: number,
+  seed: number,
+  template: ResolvedMapTemplate,
+): Position[] {
+  const count = computeSpawnCountForSize(w, h)
+  const rng = makePRNG((seed ^ spawnTemplateOffset(template) ^ (w << 16) ^ h) >>> 0)
+  const minDistance = Math.hypot(w, h) * SPAWN_MIN_DISTANCE_RATIO
+  const candidates = collectSpawnCandidates(tiles, w, h, template)
+
+  const selectedTiles: TileCoord[] = []
+  if (template === 'islands') {
+    selectedTiles.push(...pickIslandSpawns(tiles, w, h, count, minDistance, rng))
+  } else if (template === 'urban') {
+    selectedTiles.push(...pickUrbanQuadrantSpawns(candidates, w, h, minDistance))
+  }
+
+  if (selectedTiles.length < count) {
+    const remaining = count - selectedTiles.length
+    const selectedKey = new Set(selectedTiles.map((s) => s.row * w + s.col))
+    const pool = candidates.filter((c) => !selectedKey.has(c.row * w + c.col))
+    const extra = pickDistributedSpawns(pool, remaining, w, h, minDistance, rng)
+    selectedTiles.push(...extra)
+  }
+
+  if (selectedTiles.length < count) {
+    const cx = w * 0.5
+    const cy = h * 0.5
+    const rx = cx - SPAWN_EDGE_MARGIN - 1
+    const ry = cy - SPAWN_EDGE_MARGIN - 1
+    for (let i = 0; i < count * 2 && selectedTiles.length < count; i++) {
+      const angle = rng() * Math.PI * 2 + (i / count) * Math.PI * 2
+      const desired = {
+        col: Math.round(cx + Math.cos(angle) * rx),
+        row: Math.round(cy + Math.sin(angle) * ry),
+      }
+      const nudged = nudgeSpawnToValid(desired, tiles, w, h, rng)
+      if (!nudged) continue
+      const farEnough = selectedTiles.every((s) => tileDistance(s, nudged) >= minDistance)
+      if (!farEnough) continue
+      if (selectedTiles.some((s) => s.col === nudged.col && s.row === nudged.row)) continue
+      selectedTiles.push(nudged)
+    }
+  }
+
+  if (selectedTiles.length < count) {
+    for (const cand of candidates) {
+      if (selectedTiles.length >= count) break
+      const alreadyUsed = selectedTiles.some((s) => s.col === cand.col && s.row === cand.row)
+      if (alreadyUsed) continue
+      const farEnough = selectedTiles.every((s) => tileDistance(s, cand) >= minDistance)
+      if (!farEnough) continue
+      selectedTiles.push({ col: cand.col, row: cand.row })
+    }
+  }
+
+  const finalTiles: TileCoord[] = []
+  for (const tile of selectedTiles) {
+    if (finalTiles.length >= count) break
+    const nudged = nudgeSpawnToValid(tile, tiles, w, h, rng) ?? tile
+    const farEnough = finalTiles.every((s) => tileDistance(s, nudged) >= minDistance)
+    if (!farEnough) continue
+    finalTiles.push(nudged)
+  }
+
+  if (finalTiles.length < count) {
+    for (const cand of candidates) {
+      if (finalTiles.length >= count) break
+      const nudged = nudgeSpawnToValid(cand, tiles, w, h, rng) ?? { col: cand.col, row: cand.row }
+      const duplicate = finalTiles.some((s) => s.col === nudged.col && s.row === nudged.row)
+      if (duplicate) continue
+      const farEnough = finalTiles.every((s) => tileDistance(s, nudged) >= minDistance)
+      if (!farEnough) continue
+      finalTiles.push(nudged)
+    }
+  }
+
+  return finalTiles.map((tile) => ({ x: tile.col * TILE_SIZE, y: tile.row * TILE_SIZE }))
+}
+
+function ensureOreFieldNearSpawn(
+  tiles: TileData[][],
+  w: number,
+  h: number,
+  spawnCol: number,
+  spawnRow: number,
+  rng: () => number,
+): void {
+  if (hasOreWithinRadius(tiles, spawnCol, spawnRow, SPAWN_ORE_RADIUS_TILES)) return
+
+  let chosen: TileCoord | null = null
+  const centerCol = Math.floor(w / 2)
+  const centerRow = Math.floor(h / 2)
+  const dirCol = spawnCol <= centerCol ? 1 : -1
+  const dirRow = spawnRow <= centerRow ? 1 : -1
+  const baseCol = spawnCol + dirCol * 8
+  const baseRow = spawnRow + dirRow * 8
+
+  for (let radius = 0; radius <= 6 && !chosen; radius++) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const col = baseCol + dx
+        const row = baseRow + dy
+        if (!inSpawnBounds(col, row, w, h, 4)) continue
+        const spawnDist = Math.hypot(col - spawnCol, row - spawnRow)
+        if (spawnDist > SPAWN_ORE_RADIUS_TILES || spawnDist < 7) continue
+        const tile = tiles[row][col]
+        if (tile.terrain === TerrainType.WATER || tile.terrain === TerrainType.ROCK) continue
+        chosen = { col, row }
+        break
+      }
+      if (chosen) break
+    }
+  }
+
+  if (!chosen) {
+    for (let tries = 0; tries < 40 && !chosen; tries++) {
+      const angle = rng() * Math.PI * 2
+      const dist = 7 + Math.floor(rng() * (SPAWN_ORE_RADIUS_TILES - 7))
+      const col = Math.round(spawnCol + Math.cos(angle) * dist)
+      const row = Math.round(spawnRow + Math.sin(angle) * dist)
+      if (!inSpawnBounds(col, row, w, h, 4)) continue
+      const tile = tiles[row][col]
+      if (tile.terrain === TerrainType.WATER || tile.terrain === TerrainType.ROCK) continue
+      chosen = { col, row }
+    }
+  }
+
+  if (!chosen) return
+
+  for (let dy = -SPAWN_ORE_CLUSTER_RADIUS; dy <= SPAWN_ORE_CLUSTER_RADIUS; dy++) {
+    for (let dx = -SPAWN_ORE_CLUSTER_RADIUS; dx <= SPAWN_ORE_CLUSTER_RADIUS; dx++) {
+      if (dx * dx + dy * dy > SPAWN_ORE_CLUSTER_RADIUS * SPAWN_ORE_CLUSTER_RADIUS) continue
+      const col = chosen.col + dx
+      const row = chosen.row + dy
+      if (!inSpawnBounds(col, row, w, h, 2)) continue
+      const t = tiles[row][col]
+      if (t.terrain === TerrainType.WATER || t.terrain === TerrainType.ROCK) continue
+      t.terrain = TerrainType.ORE
+      t.oreAmount = ORE_TILE_MAX
+      t.passable = true
+      t.buildable = false
+    }
+  }
 }
 
 // ── GameMap class ─────────────────────────────────────────────
