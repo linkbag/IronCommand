@@ -9,7 +9,7 @@ import { FogState, TILE_SIZE } from '../types'
 import { FACTIONS } from '../data/factions'
 import { UNIT_DEFS, getAvailableUnitIds } from '../entities/UnitDefs'
 import { BUILDING_DEFS, getAvailableBuildingIds, NEUTRAL_BUILDING_IDS, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
-import { cartToScreen, screenToCart, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond, getIsoWorldBounds } from '../engine/IsoUtils'
+import { cartToScreen, screenToCart, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from '../engine/IsoUtils'
 
 // ── Layout constants ───────────────────────────────────────────────────
 const SIDEBAR_W       = 220
@@ -313,13 +313,10 @@ export class HUDScene extends Phaser.Scene {
       const rx = ptr.x - x
       const ry = ptr.y - y
       const map = this.gameState.map
-      const bounds = getIsoWorldBounds(map.width, map.height)
-      const cart = screenToCart(
-        Phaser.Math.Clamp((rx / w) * bounds.width, 0, bounds.width),
-        Phaser.Math.Clamp((ry / h) * bounds.height, 0, bounds.height),
-      )
-      const wx = Phaser.Math.Clamp(cart.x, 0, map.width * TILE_SIZE - 1)
-      const wy = Phaser.Math.Clamp(cart.y, 0, map.height * TILE_SIZE - 1)
+      const col = Phaser.Math.Clamp((rx / w) * map.width, 0, map.width - 0.001)
+      const row = Phaser.Math.Clamp((ry / h) * map.height, 0, map.height - 0.001)
+      const wx = Phaser.Math.Clamp(col * TILE_SIZE, 0, map.width * TILE_SIZE - 1)
+      const wy = Phaser.Math.Clamp(row * TILE_SIZE, 0, map.height * TILE_SIZE - 1)
 
       if ((ptr.button ?? 0) === 2 || ptr.rightButtonDown()) {
         const selectedIds = (this.registry.get('selectedIds') as string[]) ?? []
@@ -1756,9 +1753,8 @@ export class HUDScene extends Phaser.Scene {
     if (!this.gameState?.map) return
 
     const map    = this.gameState.map
-    const bounds = getIsoWorldBounds(map.width, map.height)
-    const scaleX = this.mmW / bounds.width
-    const scaleY = this.mmH / bounds.height
+    const mapW = map.width * TILE_SIZE
+    const mapH = map.height * TILE_SIZE
     const ox     = this.sidebarX + 4
     const oy     = this.minimapY
 
@@ -1781,10 +1777,8 @@ export class HUDScene extends Phaser.Scene {
         const b = color & 0xff
         return ((r >> 1) << 16) | ((gc >> 1) << 8) | (b >> 1)
       }
-      // Sample every Nth tile for performance
-      const step = Math.max(1, Math.floor(1 / Math.max(scaleX, scaleY)))
-      const miniTileW = Math.max(1, ISO_TILE_W * scaleX)
-      const miniTileH = Math.max(1, ISO_TILE_H * scaleY)
+      // Sample every Nth tile for performance on large maps.
+      const step = Math.max(1, Math.floor(Math.max(map.width / this.mmW, map.height / this.mmH)))
       for (let row = 0; row < map.height; row += step) {
         for (let col = 0; col < map.width; col += step) {
           const tile = map.tiles[row]?.[col]
@@ -1794,12 +1788,14 @@ export class HUDScene extends Phaser.Scene {
             tile.fogState === FogState.HIDDEN ? 0x000000
             : tile.fogState === FogState.EXPLORED ? dimColor(terrainColor)
             : terrainColor
-          const screen = cartToScreen(col * TILE_SIZE, row * TILE_SIZE)
-          const mx = ox + screen.x * scaleX
-          const my = oy + screen.y * scaleY
+          const mx = ox + (col / map.width) * this.mmW
+          const my = oy + (row / map.height) * this.mmH
+          const nx = ox + (Math.min(map.width, col + step) / map.width) * this.mmW
+          const ny = oy + (Math.min(map.height, row + step) / map.height) * this.mmH
+          const cellW = Math.max(1, Math.ceil(nx - mx))
+          const cellH = Math.max(1, Math.ceil(ny - my))
           tg.fillStyle(color, 1)
-          drawIsoDiamond(tg, mx - miniTileW / 2, my, miniTileW * step, miniTileH * step)
-          tg.fillPath()
+          tg.fillRect(mx, my, cellW, cellH)
         }
       }
     }
@@ -1814,26 +1810,29 @@ export class HUDScene extends Phaser.Scene {
       em.getAllEntities().forEach(e => {
         if (!e.isAlive) return
 
-        // Only show enemy entities if tile is VISIBLE in fog
+        // Show enemy entities in explored or visible tiles (hide only in unrevealed fog).
         const isOwn = e.playerId === localId
         if (!isOwn && map.tiles) {
           const tc = Math.floor(e.x / TILE_SIZE)
           const tr = Math.floor(e.y / TILE_SIZE)
           const fog = map.tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
-          if (fog !== FogState.VISIBLE) return
+          if (fog === FogState.HIDDEN) return
         }
 
         // RA2 minimap colors: own blue, enemy red.
         const color = isOwn ? 0x4488ff : 0xe94560
-        const screen = cartToScreen(e.x, e.y)
-        const mx = ox + screen.x * scaleX
-        const my = oy + screen.y * scaleY
+        const tc = Phaser.Math.Clamp(e.x / TILE_SIZE, 0, map.width)
+        const tr = Phaser.Math.Clamp(e.y / TILE_SIZE, 0, map.height)
+        const mx = ox + (tc / map.width) * this.mmW
+        const my = oy + (tr / map.height) * this.mmH
         const sz = e.type === 'building' ? 2.8 : 2
         g.fillStyle(color, 1)
         if (e.type === 'building') {
-          const fw = (e.def?.footprint?.w ?? 2) * ISO_TILE_W * scaleX
-          const fh = (e.def?.footprint?.h ?? 2) * ISO_TILE_H * scaleY
-          g.fillRect(mx - fw / 2, my - fh * 0.2, Math.max(2, fw), Math.max(2, fh))
+          const fwTiles = e.def?.footprint?.w ?? 2
+          const fhTiles = e.def?.footprint?.h ?? 2
+          const fw = Math.max(2, (fwTiles / map.width) * this.mmW)
+          const fh = Math.max(2, (fhTiles / map.height) * this.mmH)
+          g.fillRect(mx - fw / 2, my - fh / 2, fw, fh)
         } else {
           g.fillRect(mx - sz / 2, my - sz / 2, sz, sz)
         }
@@ -1847,26 +1846,33 @@ export class HUDScene extends Phaser.Scene {
           const tc = Math.floor(b.x / TILE_SIZE)
           const tr = Math.floor(b.y / TILE_SIZE)
           const fog = map.tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
-          if (fog !== FogState.VISIBLE) continue
+          if (fog === FogState.HIDDEN) continue
         }
-        const screen = cartToScreen(b.x, b.y)
-        const mx = ox + screen.x * scaleX
-        const my = oy + screen.y * scaleY
-        const fw = Math.max(2, (b.def?.footprint?.w ?? 2) * ISO_TILE_W * scaleX)
-        const fh = Math.max(2, (b.def?.footprint?.h ?? 2) * ISO_TILE_H * scaleY)
+        const tc = Phaser.Math.Clamp(b.x / TILE_SIZE, 0, map.width)
+        const tr = Phaser.Math.Clamp(b.y / TILE_SIZE, 0, map.height)
+        const mx = ox + (tc / map.width) * this.mmW
+        const my = oy + (tr / map.height) * this.mmH
+        const fw = Math.max(2, ((b.def?.footprint?.w ?? 2) / map.width) * this.mmW)
+        const fh = Math.max(2, ((b.def?.footprint?.h ?? 2) / map.height) * this.mmH)
         g.lineStyle(1, isOwn ? 0x77aaff : 0xff8899, 0.9)
-        g.strokeRect(mx - fw / 2, my - fh * 0.2, fw, fh)
+        g.strokeRect(mx - fw / 2, my - fh / 2, fw, fh)
       }
     }
 
-    // Camera viewport rectangle (white)
+    // Camera viewport rectangle (white), projected into top-down map space.
     const camX = (this.registry.get('camX') as number) ?? 0
     const camY = (this.registry.get('camY') as number) ?? 0
     const viewportW = this.scale.width - SIDEBAR_W
-    const vw   = viewportW * scaleX
-    const vh   = this.scale.height * scaleY
-    const vx   = ox + camX * scaleX
-    const vy   = oy + camY * scaleY
+    const topLeft = screenToCart(camX, camY)
+    const bottomRight = screenToCart(camX + viewportW, camY + this.scale.height)
+    const leftCart = Phaser.Math.Clamp(Math.min(topLeft.x, bottomRight.x), 0, mapW)
+    const topCart = Phaser.Math.Clamp(Math.min(topLeft.y, bottomRight.y), 0, mapH)
+    const rightCart = Phaser.Math.Clamp(Math.max(topLeft.x, bottomRight.x), 0, mapW)
+    const bottomCart = Phaser.Math.Clamp(Math.max(topLeft.y, bottomRight.y), 0, mapH)
+    const vx = ox + (leftCart / mapW) * this.mmW
+    const vy = oy + (topCart / mapH) * this.mmH
+    const vw = Math.max(1, ((rightCart - leftCart) / mapW) * this.mmW)
+    const vh = Math.max(1, ((bottomCart - topCart) / mapH) * this.mmH)
     g.lineStyle(1, 0xffffff, 0.6)
     g.strokeRect(vx, vy, vw, vh)
   }
