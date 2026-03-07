@@ -1517,6 +1517,10 @@ export class HUDScene extends Phaser.Scene {
     const item = this.buildItems.find(i => i.id === defId)
     if (item) this.ghostLabel.setText(`[${item.label}] LMB=place  RMB=cancel`)
     this.input.on('pointerdown', this.onPlacementPointer, this)
+
+    // Auto-deselect combat units so clicking to place won't redirect them
+    const gs = this.scene.get('GameScene')
+    if (gs) gs.events.emit('clearSelection')
   }
 
   private exitPlacement(refund: boolean) {

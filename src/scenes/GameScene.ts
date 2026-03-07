@@ -28,7 +28,7 @@ const ACK_LINES: Record<string, string[]> = {
   harvester: ['Returning', 'Harvesting', 'On my way'],
 }
 const PLAYER_TINT = 0x4488ff
-const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff] // red, orange, purple for up to 3 AI
+const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff, 0x44cc44, 0xffdd00, 0x44dddd, 0xff66aa] // red, orange, purple, green, yellow, cyan, pink
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
@@ -688,6 +688,9 @@ export class GameScene extends Phaser.Scene {
   // ── HUD → GameScene event wiring ──────────────────────────────
 
   private wireHUDEvents(): void {
+    // Clear selection when entering building placement mode
+    this.events.on('clearSelection', () => this.deselectAll())
+
     // Place building from HUD placement mode
     this.events.on('placeBuilding', (data: { defId: string; tileCol: number; tileRow: number }) => {
       const def = BUILDING_DEFS[data.defId]
