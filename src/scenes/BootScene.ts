@@ -268,351 +268,330 @@ export class BootScene extends Phaser.Scene {
   }
 
   private genInfantry(key: string, color: number, accent: number, kind: InfantryKind) {
-    const size = 16
-    const g = this.make.graphics({ x: 0, y: 0 }, false)
-    const body = this.darken(color, 8)
-
-    switch (kind) {
-      case 'gi':
-      case 'conscript':
-        g.fillStyle(accent, 1)
-        g.fillCircle(8, 4, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(6, 6, 4, 7)
-        g.fillStyle(body, 1)
-        g.fillRect(4, 7, 2, 5)
-        g.fillRect(10, 7, 2, 5)
-        g.fillStyle(0x232323, 1)
-        g.fillRect(10, 8, 4, 1)
-        break
-      case 'engineer':
-        g.fillStyle(0xffd34d, 1)
-        g.fillRect(5, 2, 6, 3)
-        g.fillStyle(accent, 1)
-        g.fillCircle(8, 5, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(6, 7, 4, 6)
-        g.fillStyle(0x9aa2a6, 1)
-        g.fillRect(11, 8, 3, 1)
-        g.fillCircle(13, 8, 1)
-        break
-      case 'spy':
-        g.fillStyle(0x1d1d1d, 1)
-        g.fillRect(5, 2, 6, 2)
-        g.fillRect(6, 1, 4, 1)
-        g.fillStyle(accent, 1)
-        g.fillCircle(8, 5, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(5, 7, 6, 7)
-        g.fillStyle(this.darken(color, 15), 1)
-        g.fillRect(7, 8, 2, 6)
-        break
-      case 'attack_dog':
-        g.fillStyle(color, 1)
-        g.fillRect(3, 8, 8, 4)
-        g.fillRect(9, 7, 3, 3)
-        g.fillTriangle(12, 7, 15, 8, 12, 10)
-        g.fillStyle(body, 1)
-        g.fillRect(4, 12, 1, 3)
-        g.fillRect(7, 12, 1, 3)
-        g.fillRect(10, 12, 1, 3)
-        break
-      case 'tanya':
-        g.fillStyle(accent, 1)
-        g.fillCircle(8, 4, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(6, 6, 4, 7)
-        g.fillStyle(0x333333, 1)
-        g.fillRect(3, 8, 2, 1)
-        g.fillRect(11, 8, 2, 1)
-        break
-      case 'chrono_legionnaire':
-        g.fillStyle(accent, 0.55)
-        g.fillCircle(8, 8, 7)
-        g.fillStyle(accent, 1)
-        g.fillCircle(8, 4, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(6, 6, 4, 7)
-        g.lineStyle(1, 0xffffff, 0.75)
-        g.strokeCircle(8, 8, 6)
-        break
-      case 'sniper':
-        g.fillStyle(color, 1)
-        g.fillRect(3, 9, 10, 3)
-        g.fillStyle(accent, 1)
-        g.fillCircle(4, 8, 1)
-        g.fillStyle(0x222222, 1)
-        g.fillRect(10, 8, 5, 1)
-        break
-      case 'flak_trooper':
-        g.fillStyle(accent, 1)
-        g.fillCircle(8, 4, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(5, 6, 6, 8)
-        g.fillStyle(0x383838, 1)
-        g.fillRect(10, 8, 4, 2)
-        break
-      case 'tesla_trooper':
-        g.fillStyle(accent, 0.35)
-        g.fillCircle(8, 8, 7)
-        g.fillStyle(this.lighten(color, 10), 1)
-        g.fillCircle(8, 4, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(4, 6, 8, 8)
-        g.lineStyle(1, accent, 0.9)
-        g.lineBetween(11, 6, 14, 4)
-        g.lineBetween(11, 8, 14, 7)
-        break
-      case 'crazy_ivan':
-        g.fillStyle(accent, 1)
-        g.fillCircle(8, 4, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(6, 6, 4, 7)
-        g.fillStyle(0x2a2a2a, 1)
-        g.fillCircle(13, 8, 2)
-        g.fillRect(12, 6, 2, 2)
-        break
-      case 'yuri':
-        g.fillStyle(accent, 0.4)
-        g.strokeEllipse(8, 3, 10, 4)
-        g.strokeEllipse(8, 3, 14, 6)
-        g.fillStyle(accent, 1)
-        g.fillCircle(8, 4, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(6, 6, 4, 7)
-        break
-      case 'desolator':
-        g.fillStyle(accent, 0.3)
-        g.fillCircle(8, 12, 3)
-        g.fillStyle(0x9fb1a2, 1)
-        g.fillCircle(8, 4, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(5, 6, 6, 8)
-        g.fillStyle(0x95ff55, 1)
-        g.fillRect(11, 8, 3, 1)
-        break
-      case 'terrorist':
-        g.fillStyle(accent, 1)
-        g.fillCircle(8, 4, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(6, 6, 4, 7)
-        g.fillStyle(0x222222, 1)
-        g.fillCircle(12, 8, 2)
-        g.fillStyle(0xff4422, 1)
-        g.fillRect(11, 5, 2, 1)
-        break
+    const w = 20
+    const h = 24
+    const dirs = ['ne', 'se', 'sw', 'nw'] as const
+    const dirOffset: Record<(typeof dirs)[number], { x: number; y: number }> = {
+      ne: { x: 2, y: -1 },
+      se: { x: 2, y: 1 },
+      sw: { x: -2, y: 1 },
+      nw: { x: -2, y: -1 },
     }
 
-    g.lineStyle(1, 0x000000, 0.4)
-    g.strokeRect(0, 0, size, size)
-    g.generateTexture(key, size, size)
-    g.destroy()
+    for (const dir of dirs) {
+      const g = this.make.graphics({ x: 0, y: 0 }, false)
+      const body = this.darken(color, 8)
+      const headX = 10 + dirOffset[dir].x
+      const headY = 6 + dirOffset[dir].y
+      const torsoX = 6 + dirOffset[dir].x
+      const torsoY = 9 + dirOffset[dir].y
+      const weaponX = headX + dirOffset[dir].x * 2
+      const weaponY = headY + 3
+
+      if (kind === 'attack_dog') {
+        g.fillStyle(body, 0.3)
+        g.fillEllipse(10, 18, 14, 5)
+        g.fillStyle(color, 1)
+        g.fillEllipse(10 + dirOffset[dir].x, 13 + dirOffset[dir].y, 12, 7)
+        g.fillEllipse(14 + dirOffset[dir].x, 12 + dirOffset[dir].y, 6, 5)
+        g.fillStyle(body, 1)
+        g.fillRect(6, 15, 2, 5)
+        g.fillRect(9, 16, 2, 4)
+        g.fillRect(12, 16, 2, 4)
+        g.fillRect(14, 15, 2, 5)
+      } else {
+        g.fillStyle(this.darken(color, 20), 0.3)
+        g.fillEllipse(10, 20, 12, 5)
+        g.fillStyle(accent, 1)
+        g.fillEllipse(headX, headY, 7, 6)
+        g.fillStyle(color, 1)
+        g.fillTriangle(torsoX + 4, torsoY, torsoX + 8, torsoY + 8, torsoX, torsoY + 8)
+        g.fillStyle(body, 1)
+        g.fillRect(torsoX + 2, torsoY + 8, 2, 5)
+        g.fillRect(torsoX + 6, torsoY + 8, 2, 5)
+      }
+
+      switch (kind) {
+        case 'gi':
+        case 'conscript':
+        case 'flak_trooper':
+          g.lineStyle(2, 0x2b2b2b, 1)
+          g.lineBetween(weaponX, weaponY, weaponX + dirOffset[dir].x * 2, weaponY - 2)
+          break
+        case 'engineer':
+          g.fillStyle(0xffd34d, 1)
+          g.fillEllipse(headX, headY - 1, 8, 4)
+          g.lineStyle(2, 0xb9c1c8, 1)
+          g.lineBetween(weaponX, weaponY, weaponX + 2, weaponY + 3)
+          break
+        case 'rocketeer':
+          g.fillStyle(0x5f6470, 1)
+          g.fillRect(torsoX - 2, torsoY + 1, 4, 7)
+          g.fillRect(torsoX + 8, torsoY + 1, 4, 7)
+          g.fillStyle(0xff9b3b, 1)
+          g.fillTriangle(torsoX - 1, torsoY + 8, torsoX + 1, torsoY + 12, torsoX + 3, torsoY + 8)
+          g.fillTriangle(torsoX + 9, torsoY + 8, torsoX + 11, torsoY + 12, torsoX + 13, torsoY + 8)
+          break
+        case 'tesla_trooper':
+          g.fillStyle(this.lighten(color, 6), 1)
+          g.fillEllipse(torsoX + 4, torsoY + 4, 12, 10)
+          g.lineStyle(1, 0x67e2ff, 0.9)
+          g.lineBetween(weaponX, weaponY, weaponX + 4, weaponY - 3)
+          g.lineBetween(weaponX + 4, weaponY - 3, weaponX + 2, weaponY - 5)
+          break
+        case 'sniper':
+          g.fillStyle(color, 1)
+          g.fillEllipse(10 + dirOffset[dir].x, 14 + dirOffset[dir].y, 14, 5)
+          g.lineStyle(2, 0x2f2f2f, 1)
+          g.lineBetween(weaponX, weaponY + 3, weaponX + dirOffset[dir].x * 3, weaponY + 1)
+          break
+        case 'tanya':
+          g.lineStyle(2, 0x2f2f2f, 1)
+          g.lineBetween(weaponX - 3, weaponY + 2, weaponX - 1, weaponY + 1)
+          g.lineBetween(weaponX + 1, weaponY + 2, weaponX + 3, weaponY + 1)
+          break
+        case 'spy':
+          g.fillStyle(0x202020, 1)
+          g.fillEllipse(headX, headY - 2, 10, 3)
+          g.fillRect(headX - 3, headY - 5, 6, 3)
+          break
+        case 'crazy_ivan':
+          g.fillStyle(0x2a2a2a, 1)
+          g.fillCircle(weaponX + 2, weaponY + 2, 2)
+          g.lineStyle(1, 0xff9a55, 1)
+          g.lineBetween(weaponX + 2, weaponY - 1, weaponX + 2, weaponY + 1)
+          break
+        case 'yuri':
+          g.lineStyle(1, accent, 0.7)
+          g.strokeEllipse(headX, headY - 1, 12, 6)
+          g.strokeEllipse(headX, headY - 1, 16, 8)
+          break
+        case 'chrono_legionnaire':
+          g.lineStyle(1, accent, 0.8)
+          g.strokeEllipse(headX, headY + 3, 14, 12)
+          break
+        case 'desolator':
+          g.fillStyle(0x9dff6f, 0.5)
+          g.fillEllipse(weaponX + 1, weaponY + 3, 4, 2)
+          break
+        case 'terrorist':
+          g.fillStyle(0x202020, 1)
+          g.fillCircle(weaponX + 1, weaponY + 2, 2)
+          g.fillStyle(0xff5533, 1)
+          g.fillRect(weaponX + 1, weaponY - 1, 1, 2)
+          break
+      }
+
+      g.lineStyle(1, 0x000000, 0.35)
+      g.strokeRect(0, 0, w, h)
+      g.generateTexture(`${key}_iso_${dir}`, w, h)
+      if (dir === 'se') {
+        g.generateTexture(key, w, h)
+      }
+      g.destroy()
+    }
   }
 
   private genVehicle(key: string, color: number, accent: number, kind: VehicleKind, w: number, h: number) {
-    const g = this.make.graphics({ x: 0, y: 0 }, false)
-    const dark = this.darken(color, 15)
-
-    if (kind !== 'terror_drone' && kind !== 'conquistador_mech' && kind !== 'mecha_walker') {
-      g.fillStyle(0x2b2b2b, 1)
-      g.fillRect(1, h - 4, w - 2, 3)
-      g.fillRect(1, 1, w - 2, 3)
+    const dirs = ['ne', 'se', 'sw', 'nw'] as const
+    const barrelDir: Record<(typeof dirs)[number], { x: number; y: number }> = {
+      ne: { x: 11, y: -5 },
+      se: { x: 9, y: 2 },
+      sw: { x: -9, y: 2 },
+      nw: { x: -11, y: -5 },
     }
 
-    switch (kind) {
-      case 'grizzly_tank':
-      case 'rhino_tank':
-      case 'tesla_tank':
-      case 'dragon_tank':
-      case 'mirage_tank':
-      case 'prism_tank':
+    for (const dir of dirs) {
+      const g = this.make.graphics({ x: 0, y: 0 }, false)
+      const dark = this.darken(color, 18)
+      const top = this.lighten(color, 8)
+      const cx = Math.floor(w / 2)
+      const cy = Math.floor(h / 2)
+
+      if (kind === 'terror_drone') {
+        g.fillStyle(0x000000, 0.25)
+        g.fillEllipse(cx, cy + 6, 14, 5)
         g.fillStyle(color, 1)
-        g.fillRect(4, 5, w - 8, h - 10)
-        g.fillStyle(this.lighten(color, 10), 1)
-        g.fillRect(Math.floor(w * 0.35), 6, Math.floor(w * 0.3), h - 12)
-        if (kind === 'rhino_tank') g.fillRect(3, 6, w - 6, h - 12)
+        g.fillEllipse(cx, cy, 10, 8)
+        g.fillStyle(accent, 1)
+        g.fillCircle(cx, cy, 2)
+        g.lineStyle(2, dark, 1)
+        g.lineBetween(cx - 4, cy + 1, cx - 9, cy + 6)
+        g.lineBetween(cx + 4, cy + 1, cx + 9, cy + 6)
+        g.lineBetween(cx - 4, cy - 1, cx - 9, cy - 6)
+        g.lineBetween(cx + 4, cy - 1, cx + 9, cy - 6)
+      } else if (kind === 'conquistador_mech' || kind === 'mecha_walker') {
+        g.fillStyle(0x000000, 0.25)
+        g.fillEllipse(cx, cy + 7, 18, 6)
+        g.fillStyle(color, 1)
+        g.fillEllipse(cx, cy - 1, 12, 9)
         g.fillStyle(dark, 1)
-        g.fillRect(3, 7, w - 6, 2)
-        g.lineStyle(2, kind === 'tesla_tank' ? 0x67e2ff : 0xdddddd, 1)
-        g.lineBetween(Math.floor(w * 0.55), Math.floor(h * 0.5), w - 2, Math.floor(h * 0.5) - 1)
-        if (kind === 'prism_tank') {
-          g.fillStyle(accent, 1)
-          g.fillTriangle(Math.floor(w * 0.48), 7, Math.floor(w * 0.58), 9, Math.floor(w * 0.43), 11)
-        }
-        if (kind === 'dragon_tank') {
-          g.fillStyle(accent, 1)
-          g.fillTriangle(w - 3, Math.floor(h * 0.5), w - 8, Math.floor(h * 0.5) - 2, w - 8, Math.floor(h * 0.5) + 2)
-        }
-        break
-      case 'apocalypse_tank':
-        g.fillStyle(color, 1)
-        g.fillRect(3, 5, w - 6, h - 10)
-        g.fillStyle(this.lighten(color, 8), 1)
-        g.fillRect(9, 6, w - 18, h - 12)
-        g.lineStyle(2, 0xd39d4c, 1)
-        g.lineBetween(15, Math.floor(h * 0.5) - 2, w - 2, Math.floor(h * 0.5) - 2)
-        g.lineBetween(15, Math.floor(h * 0.5) + 2, w - 2, Math.floor(h * 0.5) + 2)
-        break
-      case 'ifv':
-      case 'flak_track':
-      case 'demo_truck':
-        g.fillStyle(color, 1)
-        g.fillRect(3, 6, w - 8, h - 10)
-        g.fillRect(w - 9, 7, 5, h - 12)
-        if (kind === 'ifv') {
-          g.fillStyle(accent, 1)
-          g.fillRect(8, 4, 10, 2)
-          g.fillRect(10, 2, 6, 2)
-        }
-        if (kind === 'flak_track') {
-          g.lineStyle(2, 0xb0b0b0, 1)
-          g.lineBetween(10, 6, 12, 2)
-          g.lineBetween(14, 6, 16, 2)
-        }
-        if (kind === 'demo_truck') {
-          g.fillStyle(0xff4422, 1)
-          g.fillRect(7, 8, 10, 4)
-          g.fillStyle(0x222222, 1)
-          g.fillCircle(18, 10, 2)
-        }
-        break
-      case 'tank_destroyer':
-        g.fillStyle(color, 1)
-        g.fillRect(3, 6, w - 8, h - 10)
-        g.fillRect(8, 5, 8, h - 12)
-        g.lineStyle(3, accent, 1)
-        g.lineBetween(13, Math.floor(h * 0.5), w - 2, Math.floor(h * 0.5))
-        break
-      case 'v3_launcher':
-      case 'brahmos_battery':
-        g.fillStyle(color, 1)
-        g.fillRect(3, 8, w - 9, h - 10)
-        g.fillRect(w - 10, 9, 6, h - 12)
-        g.fillStyle(accent, 1)
-        g.fillRect(10, 2, 3, 8)
-        g.fillTriangle(10, 2, 13, 2, 11, 0)
-        if (kind === 'brahmos_battery') {
-          g.fillRect(15, 3, 3, 7)
-          g.fillTriangle(15, 3, 18, 3, 16, 1)
-        }
-        break
-      case 'chrono_miner':
-      case 'war_miner':
-        g.fillStyle(color, 1)
-        g.fillRect(3, 6, w - 8, h - 10)
-        g.fillStyle(this.lighten(color, 8), 1)
-        g.fillRect(6, 7, 6, h - 12)
-        g.fillStyle(accent, 1)
-        g.fillRect(w - 8, 8, 5, h - 12)
-        g.lineStyle(2, this.darken(accent, 20), 1)
-        g.lineBetween(w - 7, h - 4, w - 1, h - 1)
-        if (kind === 'chrono_miner') {
-          g.lineStyle(1, 0x81ecff, 1)
-          g.strokeCircle(9, 10, 4)
-        }
-        break
-      case 'mcv':
-        g.fillStyle(color, 1)
-        g.fillRect(3, 5, w - 6, h - 8)
-        g.fillStyle(this.lighten(color, 8), 1)
-        g.fillRect(9, 7, w - 18, h - 12)
-        g.fillRect(4, 8, 4, h - 14)
-        g.fillRect(w - 8, 8, 4, h - 14)
-        break
-      case 'terror_drone':
-        g.fillStyle(color, 1)
-        g.fillCircle(Math.floor(w / 2), Math.floor(h / 2), 5)
-        g.fillStyle(accent, 1)
-        g.fillCircle(Math.floor(w / 2), Math.floor(h / 2), 2)
-        g.lineStyle(2, this.darken(color, 20), 1)
-        g.lineBetween(5, 5, 9, 8)
-        g.lineBetween(w - 5, 5, w - 9, 8)
-        g.lineBetween(5, h - 5, 9, h - 8)
-        g.lineBetween(w - 5, h - 5, w - 9, h - 8)
-        break
-      case 'conquistador_mech':
-      case 'mecha_walker':
-        g.fillStyle(color, 1)
-        g.fillRect(Math.floor(w * 0.38), 5, Math.floor(w * 0.24), h - 10)
-        g.fillRect(Math.floor(w * 0.3), 8, Math.floor(w * 0.4), 6)
-        g.fillStyle(this.lighten(color, 8), 1)
-        g.fillRect(Math.floor(w * 0.31), 3, Math.floor(w * 0.38), 4)
-        g.fillStyle(dark, 1)
-        g.fillRect(Math.floor(w * 0.28), h - 7, 4, 6)
-        g.fillRect(Math.floor(w * 0.68), h - 7, 4, 6)
+        g.fillRect(cx - 6, cy + 2, 4, 7)
+        g.fillRect(cx + 2, cy + 2, 4, 7)
         g.lineStyle(2, accent, 1)
-        g.lineBetween(Math.floor(w * 0.7), 10, w - 2, 7)
-        break
-    }
+        g.lineBetween(cx + 3, cy, cx + 10, cy - 3)
+      } else {
+        g.fillStyle(0x2b2b2b, 0.9)
+        g.fillRect(2, h - 5, w - 4, 3)
+        g.fillRect(2, 2, w - 4, 3)
+        g.fillStyle(top, 1)
+        g.beginPath()
+        g.moveTo(cx, 4)
+        g.lineTo(w - 4, cy - 1)
+        g.lineTo(cx, h - 7)
+        g.lineTo(4, cy - 1)
+        g.closePath()
+        g.fillPath()
+        g.fillStyle(color, 1)
+        g.fillRect(4, cy - 1, cx - 4, h - cy - 6)
+        g.fillStyle(dark, 1)
+        g.fillRect(cx, cy - 1, cx - 4, h - cy - 6)
 
-    g.lineStyle(1, 0x000000, 0.45)
-    g.strokeRect(0, 0, w, h)
-    g.generateTexture(key, w, h)
-    g.destroy()
+        if (kind === 'war_miner' || kind === 'chrono_miner') {
+          g.fillStyle(accent, 1)
+          g.fillRect(w - 9, cy + 1, 6, 5)
+          g.lineStyle(2, this.darken(accent, 20), 1)
+          g.lineBetween(w - 9, cy + 6, w - 2, cy + 9)
+          if (kind === 'chrono_miner') {
+            g.lineStyle(1, 0x81ecff, 1)
+            g.strokeEllipse(cx - 5, cy + 1, 9, 6)
+          }
+        } else if (kind === 'v3_launcher' || kind === 'brahmos_battery') {
+          g.fillStyle(accent, 1)
+          g.fillRect(cx - 5, 3, 3, 9)
+          g.fillTriangle(cx - 5, 3, cx - 2, 3, cx - 4, 1)
+          if (kind === 'brahmos_battery') {
+            g.fillRect(cx, 4, 3, 8)
+            g.fillTriangle(cx, 4, cx + 3, 4, cx + 1, 2)
+          }
+        } else if (kind === 'ifv') {
+          g.fillStyle(accent, 1)
+          g.fillRect(cx - 5, 3, 10, 3)
+        } else if (kind === 'flak_track') {
+          g.lineStyle(2, 0xb0b0b0, 1)
+          g.lineBetween(cx - 4, 6, cx - 2, 2)
+          g.lineBetween(cx + 2, 6, cx + 4, 2)
+        } else if (kind === 'mcv') {
+          g.fillStyle(this.lighten(color, 14), 1)
+          g.fillRect(cx - 10, 6, 6, 5)
+          g.fillRect(cx + 4, 6, 6, 5)
+        } else if (kind === 'demo_truck') {
+          g.fillStyle(0xff4422, 1)
+          g.fillRect(cx - 6, cy - 1, 10, 4)
+        } else {
+          g.fillStyle(this.lighten(color, 12), 1)
+          g.fillCircle(cx, cy - 1, kind === 'apocalypse_tank' ? 5 : 4)
+          g.lineStyle(2, kind === 'tesla_tank' ? 0x67e2ff : 0xcfd4d8, 1)
+          g.lineBetween(cx, cy - 1, cx + barrelDir[dir].x, cy + barrelDir[dir].y)
+          if (kind === 'apocalypse_tank') {
+            g.lineBetween(cx - 2, cy, cx - 2 + barrelDir[dir].x, cy + barrelDir[dir].y + 2)
+          }
+          if (kind === 'prism_tank') {
+            g.fillStyle(accent, 1)
+            g.fillTriangle(cx, cy - 8, cx - 3, cy - 2, cx + 3, cy - 2)
+          }
+          if (kind === 'dragon_tank') {
+            g.fillStyle(0xff8f42, 0.8)
+            g.fillTriangle(cx + barrelDir[dir].x, cy + barrelDir[dir].y, cx + barrelDir[dir].x + 4, cy + barrelDir[dir].y - 1, cx + barrelDir[dir].x + 1, cy + barrelDir[dir].y + 3)
+          }
+          if (kind === 'mirage_tank') {
+            g.fillStyle(accent, 0.35)
+            g.fillEllipse(cx, cy - 2, 14, 8)
+          }
+        }
+      }
+
+      g.lineStyle(1, 0x000000, 0.4)
+      g.strokeRect(0, 0, w, h)
+      g.generateTexture(`${key}_iso_${dir}`, w, h)
+      if (dir === 'se') {
+        g.generateTexture(key, w, h)
+      }
+      g.destroy()
+    }
   }
 
   private genAircraft(key: string, color: number, accent: number, kind: AircraftKind) {
-    const w = 24
+    const w = 28
     const h = 20
-    const g = this.make.graphics({ x: 0, y: 0 }, false)
-
-    switch (kind) {
-      case 'harrier':
-      case 'black_eagle':
-        g.fillStyle(color, 1)
-        g.fillTriangle(3, 10, 21, 10, 10, 5)
-        g.fillTriangle(3, 10, 21, 10, 10, 15)
-        g.fillStyle(accent, 1)
-        g.fillRect(10, 8, 10, 4)
-        if (kind === 'black_eagle') {
-          g.fillStyle(0x222222, 1)
-          g.fillRect(4, 9, 5, 2)
-        }
-        break
-      case 'nighthawk':
-        g.fillStyle(color, 1)
-        g.fillRect(6, 6, 12, 8)
-        g.fillRect(4, 8, 16, 4)
-        g.lineStyle(2, accent, 1)
-        g.lineBetween(2, 5, 22, 5)
-        g.lineBetween(12, 4, 12, 1)
-        break
-      case 'rocketeer':
-        g.fillStyle(accent, 1)
-        g.fillCircle(12, 6, 2)
-        g.fillStyle(color, 1)
-        g.fillRect(10, 8, 4, 7)
-        g.fillStyle(this.darken(color, 20), 1)
-        g.fillRect(7, 9, 2, 5)
-        g.fillRect(15, 9, 2, 5)
-        g.fillStyle(0xffaa44, 1)
-        g.fillTriangle(8, 14, 10, 18, 12, 14)
-        g.fillTriangle(12, 14, 14, 18, 16, 14)
-        break
-      case 'recon_drone':
-        g.fillStyle(color, 1)
-        g.fillRect(9, 8, 6, 4)
-        g.fillRect(4, 9, 4, 2)
-        g.fillRect(16, 9, 4, 2)
-        g.fillStyle(accent, 1)
-        g.fillCircle(12, 10, 1)
-        break
-      case 'kirov':
-        g.fillStyle(color, 1)
-        g.fillEllipse(12, 9, 20, 11)
-        g.fillStyle(this.lighten(color, 8), 1)
-        g.fillEllipse(11, 8, 14, 7)
-        g.fillStyle(this.darken(color, 20), 1)
-        g.fillRect(9, 12, 6, 4)
-        g.fillStyle(accent, 1)
-        g.fillRect(19, 8, 3, 2)
-        break
+    const dirs = ['ne', 'se', 'sw', 'nw'] as const
+    const noseDir: Record<(typeof dirs)[number], { x: number; y: number }> = {
+      ne: { x: 7, y: -4 },
+      se: { x: 7, y: 3 },
+      sw: { x: -7, y: 3 },
+      nw: { x: -7, y: -4 },
     }
 
-    g.lineStyle(1, 0x000000, 0.4)
-    g.strokeRect(0, 0, w, h)
-    g.generateTexture(key, w, h)
-    g.destroy()
+    for (const dir of dirs) {
+      const g = this.make.graphics({ x: 0, y: 0 }, false)
+      const cx = Math.floor(w / 2)
+      const cy = Math.floor(h / 2)
+
+      g.fillStyle(0x000000, 0.2)
+      g.fillEllipse(cx, cy + 6, 14, 4)
+
+      switch (kind) {
+        case 'harrier':
+        case 'black_eagle':
+          g.fillStyle(color, 1)
+          g.fillTriangle(cx, cy - 5, cx - 10, cy + 4, cx + 10, cy + 4)
+          g.fillRect(cx - 2, cy - 3, 4, 8)
+          g.fillStyle(accent, 1)
+          g.fillTriangle(cx + noseDir[dir].x, cy + noseDir[dir].y, cx + noseDir[dir].x - 2, cy + noseDir[dir].y + 2, cx + noseDir[dir].x + 2, cy + noseDir[dir].y + 2)
+          if (kind === 'black_eagle') {
+            g.fillStyle(0x1f1f1f, 1)
+            g.fillRect(cx - 7, cy + 2, 4, 2)
+          }
+          break
+        case 'nighthawk':
+          g.fillStyle(color, 1)
+          g.fillEllipse(cx, cy + 1, 16, 9)
+          g.fillRect(cx - 6, cy - 1, 12, 4)
+          g.lineStyle(2, accent, 1)
+          g.lineBetween(cx - 12, cy - 3, cx + 12, cy - 3)
+          g.lineBetween(cx, cy - 2, cx, cy - 8)
+          break
+        case 'rocketeer':
+          g.fillStyle(accent, 1)
+          g.fillCircle(cx, cy - 4, 2)
+          g.fillStyle(color, 1)
+          g.fillRect(cx - 2, cy - 2, 4, 8)
+          g.fillStyle(this.darken(color, 20), 1)
+          g.fillRect(cx - 5, cy - 1, 2, 6)
+          g.fillRect(cx + 3, cy - 1, 2, 6)
+          g.fillStyle(0xffaa44, 1)
+          g.fillTriangle(cx - 5, cy + 5, cx - 3, cy + 9, cx - 1, cy + 5)
+          g.fillTriangle(cx + 1, cy + 5, cx + 3, cy + 9, cx + 5, cy + 5)
+          break
+        case 'recon_drone':
+          g.fillStyle(color, 1)
+          g.fillRect(cx - 4, cy - 1, 8, 4)
+          g.lineStyle(1.5, this.darken(color, 20), 1)
+          g.lineBetween(cx - 9, cy + 1, cx - 4, cy + 1)
+          g.lineBetween(cx + 4, cy + 1, cx + 9, cy + 1)
+          g.fillStyle(accent, 1)
+          g.fillCircle(cx, cy + 1, 1)
+          break
+        case 'kirov':
+          g.fillStyle(color, 1)
+          g.fillEllipse(cx, cy, 22, 12)
+          g.fillStyle(this.lighten(color, 8), 1)
+          g.fillEllipse(cx - 1, cy - 1, 15, 8)
+          g.fillStyle(this.darken(color, 20), 1)
+          g.fillRect(cx - 4, cy + 4, 8, 4)
+          g.fillStyle(accent, 1)
+          g.fillRect(cx + 7, cy - 1, 4, 2)
+          break
+      }
+
+      g.lineStyle(1, 0x000000, 0.35)
+      g.strokeRect(0, 0, w, h)
+      g.generateTexture(`${key}_iso_${dir}`, w, h)
+      if (dir === 'se') {
+        g.generateTexture(key, w, h)
+      }
+      g.destroy()
+    }
   }
 
   private genNaval(key: string, color: number, accent: number, kind: NavalKind) {
