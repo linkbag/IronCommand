@@ -503,6 +503,13 @@ export class Unit extends Phaser.GameObjects.Container {
         return
       }
     }
+    if (!this.canAttackTarget(this.target)) {
+      this.target = this.findNearbyEnemy()
+      if (!this.target) {
+        this.processNextOrder()
+        return
+      }
+    }
 
     if (!this.canAttackTarget(this.target)) {
       this.target = this.findNearbyEnemy()
@@ -552,6 +559,18 @@ export class Unit extends Phaser.GameObjects.Container {
     })
 
     return nearest
+  }
+
+  private isAirTarget(entity: IEntityRef): boolean {
+    const maybeCategory = (entity as { def?: { category?: string } }).def?.category
+    return maybeCategory === 'aircraft'
+  }
+
+  private canAttackTarget(entity: IEntityRef): boolean {
+    if (!this.def.attack) return false
+    return this.isAirTarget(entity)
+      ? this.def.attack.canAttackAir
+      : this.def.attack.canAttackGround
   }
 
   // ── Private: harvest ─────────────────────────────────────────

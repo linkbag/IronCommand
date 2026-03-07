@@ -198,6 +198,11 @@ export class Combat extends Phaser.Events.EventEmitter {
         return
       }
     }
+
+    const attack = this.getEffectiveAttack(attacker, target)
+    if (this.isAirEntity(target) && !attack.canAttackAir) return
+    if (!this.isAirEntity(target) && !attack.canAttackGround) return
+
     // RA2 Veterancy: damage multiplier for units
     const vetMult = (attacker instanceof Unit) ? attacker.getVeterancyDamageMultiplier() : 1.0
 
@@ -558,5 +563,28 @@ export class Combat extends Phaser.Events.EventEmitter {
       if (['base', 'production', 'power', 'tech', 'superweapon'].includes(cat)) return 'large'
     }
     return 'medium'
+  }
+
+  private isAirEntity(entity: Unit | Building): boolean {
+    return entity.def.category === 'aircraft'
+  }
+
+  private getEffectiveAttack(attacker: Unit | Building, target: Unit | Building): AttackStats {
+    const base = attacker.def.attack!
+
+    // Japan Mecha Walker: missiles for air, autocannon shells for ground.
+    if (attacker instanceof Unit && attacker.def.id === 'mecha_walker' && !this.isAirEntity(target)) {
+      return {
+        ...base,
+        damage: 95,
+        projectileSpeed: 620,
+        damageType: DamageType.EXPLOSIVE,
+        canAttackAir: false,
+        canAttackGround: true,
+        splash: 0.35,
+      }
+    }
+
+    return base
   }
 }
