@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 04:10*
+*Last updated: 2026-03-08 05:07*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -150,3 +150,7 @@ feat/ic-move-feedback-v2 adds move trajectory lines and order marker overlays. C
 ### Update: 2026-03-08 04:10
 ### codex-ic-autoattack-nearby — 2026-03-08 04:10
 One regression fixed: attack-move units were blocked from fire-while-moving because the shared scan budget was consumed by the attack-move scan inside updateMovement(), preventing the outer tryFireWhileMoving() from running. Fixed by inlining fire-on-move inside the attack-move block when no stop-and-fight target is found, and excluding attack-move orders from the outer moving-fire scan. TypeScript clean.
+
+### Update: 2026-03-08 05:07
+### codex-ic-ai-grand-strategy-goals — 2026-03-08 05:07
+One bug fixed: buildExtraPower() was called on any mild credit overflow (not just when power was needed), causing the AI to spam power plants as its primary spend sink. Reverted condition to needsMorePower() only. All other changes (reserve-based spending, remote hotspot pressure, rebalancing, expansion scoring) are logically sound. tsc --noEmit passes.
