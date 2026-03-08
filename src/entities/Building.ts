@@ -10,6 +10,9 @@ import { TILE_SIZE } from '../types'
 import { cartToScreen } from '../engine/IsoUtils'
 
 export type BuildingState = 'constructing' | 'active' | 'low_power' | 'dying'
+type FacilityVisualType = 'factory' | 'barracks' | 'refinery' | 'power' | 'radar' | 'lab' | 'defense'
+type FacilitySizeProfile = { widthScale: number; depthScale: number; heightScale: number }
+type BuildingPalette = { top: number; left: number; right: number; line: number; detail: number; symbol: number; warning: number }
 
 function adjustBrightness(color: number, amount: number): number {
   const r = Math.max(0, Math.min(255, ((color >> 16) & 0xff) + amount))
@@ -93,9 +96,13 @@ export class Building extends Phaser.GameObjects.Container {
     this.bodyGraphic = scene.add.graphics()
     this.crackOverlay = scene.add.graphics()
     this.healthBar = scene.add.graphics()
-    this.statusText = scene.add.text(0, 0, def.name.slice(0, 4).toUpperCase(), {
-      fontSize: '7px',
-      color: '#ffffff',
+    this.statusText = scene.add.text(0, 0, '', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontStyle: 'bold',
+      fontSize: '18px',
+      color: '#f5f9ff',
+      stroke: '#111820',
+      strokeThickness: 3,
       resolution: 2,
     }).setOrigin(0.5, 0.5)
 
@@ -370,37 +377,71 @@ export class Building extends Phaser.GameObjects.Container {
     const g = this.bodyGraphic
     g.clear()
     const dims = this.getIsoDims()
-    console.log('[Building.drawBody] iso box coords', {
-      id: this.def.id,
-      halfW: dims.halfW,
-      halfH: dims.halfH,
-      wallH: dims.wallH,
-      baseY: dims.baseY,
-      topY: dims.topY,
-      northTop: { x: 0, y: dims.topY - dims.halfH },
-      southBottom: { x: 0, y: dims.baseY + dims.halfH },
-    })
+    const visualType = this.getFacilityVisualType()
     this.drawDropShadow(dims)
     const pct = this.hp / this.def.stats.maxHp
-    const palette = this.getBuildingPalette(pct)
+    const palette = this.getBuildingPalette(pct, visualType)
 
     this.drawIsoBox(g, dims, palette)
-    this.drawBuildingDetails(g, dims)
+    this.drawBuildingDetails(g, dims, visualType, palette)
+    this.updateStatusOverlay(dims, visualType)
     this.drawDamageOverlay(pct)
 
     if (this.state === 'low_power') {
-      g.lineStyle(2, 0xff4400, 0.8)
-      g.strokeEllipse(0, dims.baseY - dims.wallH * 0.08, dims.halfW * 1.35, dims.halfH * 1.35)
+      const warningY = dims.topY + dims.halfH * 0.2
+      g.fillStyle(palette.warning, 1)
+      g.fillRect(-3, warningY - 3, 6, 6)
+      g.lineStyle(1, adjustBrightness(palette.warning, -64), 1)
+      g.strokeRect(-3, warningY - 3, 6, 6)
+    }
+  }
+
+  private getFacilityVisualType(): FacilityVisualType {
+    const id = this.def.id
+    if (this.def.category === 'defense') return 'defense'
+    if (id.includes('barracks')) return 'barracks'
+    if (id.includes('refinery') || id.includes('purifier')) return 'refinery'
+    if (id.includes('power') || id.includes('reactor')) return 'power'
+    if (id.includes('radar') || id.includes('sensor') || id.includes('satellite')) return 'radar'
+    if (id.includes('lab') || id.includes('tech_center') || id.includes('tech')) return 'lab'
+    if (id.includes('factory') || id.includes('yard') || id.includes('construction')) return 'factory'
+
+    switch (this.def.category) {
+      case 'power': return 'power'
+      case 'tech': return 'lab'
+      case 'production': return 'factory'
+      default: return 'factory'
+    }
+  }
+
+  private getFacilitySizeProfile(visualType: FacilityVisualType): FacilitySizeProfile {
+    switch (visualType) {
+      case 'factory':
+        return { widthScale: 1.2, depthScale: 1, heightScale: 1.18 }
+      case 'refinery':
+        return { widthScale: 1.1, depthScale: 1, heightScale: 1.1 }
+      case 'lab':
+        return { widthScale: 1, depthScale: 0.96, heightScale: 1.2 }
+      case 'radar':
+        return { widthScale: 0.92, depthScale: 0.9, heightScale: 1.3 }
+      case 'power':
+        return { widthScale: 0.94, depthScale: 0.92, heightScale: 1.05 }
+      case 'barracks':
+        return { widthScale: 1, depthScale: 0.96, heightScale: 0.95 }
+      case 'defense':
+        return { widthScale: 0.76, depthScale: 0.84, heightScale: 0.66 }
     }
   }
 
   private getIsoDims(): { halfW: number; halfH: number; wallH: number; baseY: number; topY: number } {
+    const visualType = this.getFacilityVisualType()
+    const sizeProfile = this.getFacilitySizeProfile(visualType)
     const maxFootprint = Math.max(this.def.footprint.w, this.def.footprint.h)
-    const halfW = Math.max(16, maxFootprint * 16)
-    const halfH = Math.max(8, Math.round(halfW / 2))
+    const halfW = Math.max(14, Math.round(maxFootprint * 16 * sizeProfile.widthScale))
+    const halfH = Math.max(7, Math.round((halfW / 2) * sizeProfile.depthScale))
     const baseY = 14
 
-    let wallH = 24 + Math.max(0, maxFootprint - 2) * 4
+    let wallH = Math.round((24 + Math.max(0, maxFootprint - 2) * 4) * sizeProfile.heightScale)
     switch (this.def.id) {
       case 'construction_yard':
       case 'war_factory':
@@ -431,26 +472,35 @@ export class Building extends Phaser.GameObjects.Container {
         break
     }
 
+    wallH = Math.max(10, wallH)
     return { halfW, halfH, wallH, baseY, topY: baseY - wallH }
   }
 
-  private getBuildingPalette(pct: number): { top: number; left: number; right: number; line: number } {
+  private getBuildingPalette(pct: number, visualType: FacilityVisualType): BuildingPalette {
     const lowPower = this.state === 'low_power'
-    let main = lowPower ? 0x7a6a4e : this.factionColor
-    if (pct < 0.5) main = adjustBrightness(main, -45)
-    if (this.def.id === 'tesla_reactor' || this.def.id === 'tesla_coil') {
-      main = this.blendColors(main, 0x7b1d1d, 0.45)
-    } else if (this.def.id === 'power_plant' || this.def.id === 'battle_lab') {
-      main = this.blendColors(main, 0x90b8c8, 0.3)
-    } else if (this.def.id === 'war_factory' || this.def.id === 'ore_refinery' || this.def.id === 'construction_yard') {
-      main = this.blendColors(main, 0x6f6f6f, 0.4)
+    const typeTint: Record<FacilityVisualType, number> = {
+      factory: 0x626870,
+      barracks: 0x4f714c,
+      refinery: 0x7a6848,
+      power: 0x6c8195,
+      radar: 0x3f7886,
+      lab: 0x607492,
+      defense: 0x5f6468,
     }
 
+    let main = this.blendColors(this.factionColor, typeTint[visualType], 0.24)
+    if (lowPower) main = this.blendColors(main, 0x7a6749, 0.5)
+    if (pct < 0.5) main = adjustBrightness(main, -32)
+    if (pct < 0.25) main = adjustBrightness(main, -18)
+
     return {
-      top: adjustBrightness(main, 32),
-      left: adjustBrightness(main, 10),
-      right: adjustBrightness(main, -22),
-      line: adjustBrightness(main, -44),
+      top: adjustBrightness(main, 26),
+      left: adjustBrightness(main, 6),
+      right: adjustBrightness(main, -20),
+      line: adjustBrightness(main, -46),
+      detail: adjustBrightness(main, -14),
+      symbol: lowPower ? 0xffd9a8 : adjustBrightness(main, 80),
+      warning: 0xf29b3a,
     }
   }
 
@@ -470,7 +520,7 @@ export class Building extends Phaser.GameObjects.Container {
   private drawIsoBox(
     g: Phaser.GameObjects.Graphics,
     dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
-    palette: { top: number; left: number; right: number; line: number },
+    palette: BuildingPalette,
   ): void {
     const { halfW, halfH, baseY, topY } = dims
 
@@ -501,7 +551,7 @@ export class Building extends Phaser.GameObjects.Container {
     g.fillStyle(palette.right, 1)
     g.fillPoints(rightFace, true)
 
-    g.lineStyle(1, palette.line, 0.5)
+    g.lineStyle(1, palette.line, 1)
     g.lineBetween(0, topY - halfH, halfW, topY)
     g.lineBetween(halfW, topY, 0, topY + halfH)
     g.lineBetween(0, topY + halfH, -halfW, topY)
@@ -516,64 +566,165 @@ export class Building extends Phaser.GameObjects.Container {
   private drawDropShadow(dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number }): void {
     const s = this.dropShadow
     s.clear()
-    s.fillStyle(0x000000, 0.2)
-    s.fillEllipse(0, dims.baseY + 7, dims.halfW * 1.15, Math.max(6, dims.halfH * 0.8))
+    const y = dims.baseY + dims.halfH * 0.9
+    const spread = dims.halfW * 0.86
+    const depth = Math.max(4, dims.halfH * 0.42)
+    const shadow = [
+      new Phaser.Geom.Point(0, y),
+      new Phaser.Geom.Point(spread, y + depth * 0.4),
+      new Phaser.Geom.Point(0, y + depth),
+      new Phaser.Geom.Point(-spread, y + depth * 0.4),
+    ]
+    s.fillStyle(0x000000, 0.16)
+    s.fillPoints(shadow, true)
   }
 
   private drawBuildingDetails(
     g: Phaser.GameObjects.Graphics,
     dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    visualType: FacilityVisualType,
+    palette: BuildingPalette,
   ): void {
     const hw = dims.halfW
     const hh = dims.halfH
-    const roofY = dims.topY
-    const wallY = dims.topY + hh * 0.7
-    const detailW = Math.max(8, hw * 0.28)
-    const detailH = Math.max(5, hh * 0.45)
+    const badgeY = dims.topY + hh * 0.22
+    const badgeW = Math.max(10, hw * 0.42)
+    const badgeH = Math.max(8, hh * 0.56)
+    const roofBadge = [
+      new Phaser.Geom.Point(0, badgeY - badgeH),
+      new Phaser.Geom.Point(badgeW, badgeY),
+      new Phaser.Geom.Point(0, badgeY + badgeH),
+      new Phaser.Geom.Point(-badgeW, badgeY),
+    ]
+    g.fillStyle(palette.detail, 1)
+    g.fillPoints(roofBadge, true)
+    g.lineStyle(1, palette.line, 1)
+    g.lineBetween(0, badgeY - badgeH, badgeW, badgeY)
+    g.lineBetween(badgeW, badgeY, 0, badgeY + badgeH)
+    g.lineBetween(0, badgeY + badgeH, -badgeW, badgeY)
+    g.lineBetween(-badgeW, badgeY, 0, badgeY - badgeH)
 
-    g.fillStyle(0x2a2a2a, 0.45)
-    g.fillRect(-detailW * 0.5, wallY, detailW, detailH)
+    this.drawFacilitySymbol(g, visualType, 0, badgeY, Math.max(10, Math.round(hw * 0.36)), palette.symbol, palette.line)
 
-    switch (this.def.category) {
+    const sillY = dims.baseY + hh * 0.2
+    g.fillStyle(adjustBrightness(palette.detail, -8), 1)
+    g.fillRect(-hw * 0.42, sillY, hw * 0.84, Math.max(2, hh * 0.14))
+  }
+
+  private updateStatusOverlay(
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    visualType: FacilityVisualType,
+  ): void {
+    const label = this.getFacilityLabel(visualType)
+    const fontSize = Math.max(12, Math.min(30, Math.round(dims.halfW * 0.45)))
+    this.statusText.setText(label)
+    this.statusText.setFontSize(fontSize)
+    this.statusText.setPosition(0, dims.topY + dims.halfH * 0.22)
+    this.statusText.setColor(this.state === 'low_power' ? '#ffd39a' : '#f5f9ff')
+    this.statusText.setStroke('#111820', Math.max(2, Math.round(fontSize * 0.18)))
+    this.statusText.setVisible(true)
+  }
+
+  private getFacilityLabel(visualType: FacilityVisualType): string {
+    switch (visualType) {
+      case 'factory':
+        return 'FAC'
+      case 'barracks':
+        return 'BAR'
+      case 'refinery':
+        return 'REF'
       case 'power':
-        g.fillStyle(0xf4d447, 0.92)
-        g.fillRect(-3, roofY - hh * 0.7, 6, 12)
-        break
-      case 'production':
-        g.fillStyle(0xa9b7c9, 0.88)
-        g.fillRect(hw * 0.22, roofY - hh * 0.35, detailW, detailH)
-        break
+        return 'PWR'
+      case 'radar':
+        return 'RAD'
+      case 'lab':
+        return 'LAB'
       case 'defense':
-        g.fillStyle(0x3b3b3b, 0.95)
-        g.fillRect(-4, roofY - hh * 0.95, 8, 14)
-        g.fillStyle(0x222222, 0.95)
-        g.fillRect(4, roofY - hh * 0.78, hw * 0.34, 3)
-        break
-      case 'tech':
-        g.fillStyle(0x88c8ff, 0.9)
-        g.fillRect(-5, roofY - hh * 0.65, 10, 10)
-        break
-      case 'superweapon':
-        g.fillStyle(0xff9c48, 0.9)
-        g.fillRect(-6, roofY - hh * 0.82, 12, 14)
-        break
-      case 'base':
-        g.fillStyle(0xd6d6d6, 0.8)
-        g.fillRect(-2, roofY - hh * 0.92, 4, 13)
-        break
+        return 'DEF'
     }
+  }
 
-    if (this.def.id === 'air_force_command' || this.def.id === 'radar_tower') {
-      g.fillStyle(0xb8d6ef, 0.95)
-      g.fillRect(-8, roofY - hh * 1.15, 16, 5)
-    }
-    if (this.def.id === 'war_factory' || this.def.id === 'construction_yard') {
-      g.fillStyle(0x5b5b5b, 0.88)
-      g.fillRect(-hw * 0.6, dims.baseY + hh * 0.08, hw * 1.2, 4)
-    }
-    if (this.def.id === 'tesla_coil' || this.def.id === 'prism_tower') {
-      g.fillStyle(0x9fd2ff, 0.92)
-      g.fillRect(-3, roofY - hh * 1.2, 6, 12)
+  private drawFacilitySymbol(
+    g: Phaser.GameObjects.Graphics,
+    visualType: FacilityVisualType,
+    cx: number,
+    cy: number,
+    size: number,
+    symbolColor: number,
+    lineColor: number,
+  ): void {
+    const half = Math.max(5, Math.round(size / 2))
+    g.fillStyle(symbolColor, 1)
+    g.lineStyle(2, lineColor, 1)
+
+    switch (visualType) {
+      case 'factory':
+        g.fillRect(cx - half, cy - 1, half * 2, 2)
+        g.fillRect(cx - half + 1, cy - half, 2, half)
+        g.fillRect(cx + half - 3, cy - half, 2, half)
+        g.fillRect(cx - 1, cy - half + 1, 2, half - 1)
+        break
+      case 'barracks':
+        g.fillRect(cx - half, cy - half + 1, half * 2, 2)
+        {
+          const midW = Math.max(2, half * 2 - 4)
+          const lowW = Math.max(2, half * 2 - 8)
+          g.fillRect(cx - midW / 2, cy - 1, midW, 2)
+          g.fillRect(cx - lowW / 2, cy + half - 3, lowW, 2)
+        }
+        break
+      case 'refinery':
+        g.fillRect(cx - half, cy - half + 1, 4, half * 2 - 2)
+        g.fillRect(cx + half - 4, cy - half + 1, 4, half * 2 - 2)
+        g.fillRect(cx - 1, cy - 2, 2, half + 2)
+        g.fillRect(cx - half + 3, cy + half - 4, half * 2 - 6, 2)
+        break
+      case 'power': {
+        const bolt = [
+          new Phaser.Geom.Point(cx - 1, cy - half),
+          new Phaser.Geom.Point(cx + half - 2, cy - half),
+          new Phaser.Geom.Point(cx + 1, cy - 1),
+          new Phaser.Geom.Point(cx + half - 1, cy - 1),
+          new Phaser.Geom.Point(cx - 1, cy + half),
+          new Phaser.Geom.Point(cx - half + 1, cy + half),
+          new Phaser.Geom.Point(cx - 2, cy + 1),
+          new Phaser.Geom.Point(cx - half + 1, cy + 1),
+        ]
+        g.fillPoints(bolt, true)
+        break
+      }
+      case 'radar':
+        g.fillRect(cx - 1, cy - half + 1, 2, half * 2 - 1)
+        g.fillRect(cx - half, cy - 1, half * 2, 2)
+        g.fillRect(cx - half + 1, cy + half - 2, half * 2 - 2, 2)
+        g.fillRect(cx + half - 2, cy - half + 2, 2, 3)
+        break
+      case 'lab':
+        {
+          const topW = Math.max(2, half * 2 - 2)
+          const sideH = Math.max(2, half * 2 - 6)
+          const baseW = Math.max(2, half * 2 - 4)
+          g.fillRect(cx - topW / 2, cy - half + 2, topW, 2)
+          g.fillRect(cx - baseW / 2, cy + half - 4, baseW, 2)
+          g.fillRect(cx - baseW / 2, cy - half + 4, 2, sideH)
+          g.fillRect(cx + baseW / 2 - 2, cy - half + 4, 2, sideH)
+        }
+        g.fillRect(cx - 1, cy - 1, 2, 2)
+        break
+      case 'defense': {
+        const shield = [
+          new Phaser.Geom.Point(cx, cy - half),
+          new Phaser.Geom.Point(cx + half - 1, cy - 1),
+          new Phaser.Geom.Point(cx + half - 2, cy + half - 2),
+          new Phaser.Geom.Point(cx, cy + half),
+          new Phaser.Geom.Point(cx - half + 2, cy + half - 2),
+          new Phaser.Geom.Point(cx - half + 1, cy - 1),
+        ]
+        g.fillPoints(shield, true)
+        g.lineBetween(cx - 1, cy - half + 2, cx - 1, cy + half - 2)
+        g.lineBetween(cx + 1, cy - half + 2, cx + 1, cy + half - 2)
+        break
+      }
     }
   }
 
@@ -699,15 +850,6 @@ export class Building extends Phaser.GameObjects.Container {
       this.emit('fire_at_target', this, nearest)
       this.playDefenseMuzzleFlash(nearest.x, nearest.y)
       this.attackCooldown = 1 / attack.fireRate
-
-      if (this.def.id === 'grand_cannon') {
-        console.log('[GrandCannon] Fired', {
-          buildingId: this.id,
-          owner: this.playerId,
-          targetId: nearest.id,
-          targetCategory: nearest.def?.category ?? 'unknown',
-        })
-      }
     })
   }
 
