@@ -35,7 +35,7 @@ const FOG_ALPHA: Record<FogState, number> = {
 
 const ORE_MAX_AMOUNT = ORE_TILE_MAX
 const ORE_SPREAD_INTERVAL_MS = 30000
-const ORE_GROWTH_INTERVAL_MS = 6000  // regenerate every 6s (50 units/tick = ~500/min)
+const ORE_GROWTH_INTERVAL_MS = 6000  // regenerate every 6s (2 units/tick = 20/min)
 
 function scaleColor(color: number, factor: number): number {
   const r = Math.max(0, Math.min(255, Math.round(((color >> 16) & 0xff) * factor)))
@@ -1762,11 +1762,8 @@ export class GameMap {
         continue
       }
 
-      // Adjacent ore speeds up regen slightly
-      const adjacentBonus = this.hasAdjacentOre(col, row) ? 1.3 : 1.0
       const maxAmt = ORE_TILE_MAX
-      const regenAmount = Math.floor(ORE_REGEN_RATE * adjacentBonus)
-      tile.oreAmount = Math.min(maxAmt, tile.oreAmount + regenAmount)
+      tile.oreAmount = Math.min(maxAmt, tile.oreAmount + ORE_REGEN_RATE)
 
       if (tile.oreAmount >= maxAmt) {
         this.depletedOreTiles.delete(key)
@@ -1797,19 +1794,6 @@ export class GameMap {
       for (const c of changed) this.redrawTile(c.col, c.row)
       this.renderAnimatedTiles()
     }
-  }
-
-  private hasAdjacentOre(col: number, row: number): boolean {
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dc = -1; dc <= 1; dc++) {
-        if (dr === 0 && dc === 0) continue
-        const tile = this.getTile(col + dc, row + dr)
-        if (tile && (tile.terrain === TerrainType.ORE || tile.terrain === TerrainType.GEMS) && tile.oreAmount > 0) {
-          return true
-        }
-      }
-    }
-    return false
   }
 
   private key(col: number, row: number): number {

@@ -18,7 +18,8 @@ import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, Fact
 import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL_PLAYER_ID } from '../types'
 import { cartToScreen, screenToCart, getIsoWorldBounds } from '../engine/IsoUtils'
 import { FACTIONS } from '../data/factions'
-import type { SkirmishConfig } from './SetupScene'
+import type { SkirmishConfig } from './skirmishConfig'
+import { createDefaultSkirmishConfig, isMapRevealEnabled } from './skirmishConfig'
 
 // Unit acknowledgment lines
 const ACK_LINES: Record<string, string[]> = {
@@ -101,17 +102,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   init(data: { config: SkirmishConfig }) {
-    this.skirmishCfg = data?.config ?? {
-      playerFaction: 'usa',
-      mapSize: 'small',
-      revealMap: false,
-      mapTemplate: 'continental',
-      mapSeed: Math.floor(Math.random() * 99999) + 1,
-      playerSpawn: -1,
-      aiCount: 1,
-      aiDifficulty: 'medium',
-      startingCredits: STARTING_CREDITS,
-      allyPlayerIds: [],
+    this.skirmishCfg = data?.config ?? createDefaultSkirmishConfig()
+    if (!this.skirmishCfg.mapVisibility) {
+      this.skirmishCfg.mapVisibility = this.skirmishCfg.revealMap ? 'allVisible' : 'fog'
     }
     // Reset per-session state
     this.aiCommanders = []
@@ -2447,7 +2440,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private isMapRevealActive(): boolean {
-    return this.skirmishCfg.revealMap || this.forceFullMapReveal
+    return isMapRevealEnabled(this.skirmishCfg) || this.forceFullMapReveal
   }
 
   private nudgeIdleBlocker(tile: TileCoord, excludeUnitId?: string): boolean {
