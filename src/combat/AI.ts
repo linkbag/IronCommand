@@ -384,7 +384,7 @@ export class AI {
       this.considerScouting(gameState)
     }
 
-      // Superweapon management (medium/hard only)
+    // Superweapon management (medium/hard only)
     if (this.difficulty !== 'easy') {
       this.tickSuperweapons(gameState)
     }
