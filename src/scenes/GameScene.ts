@@ -632,6 +632,7 @@ export class GameScene extends Phaser.Scene {
     this.registry.set('canPlaceBuilding', (defId: string, col: number, row: number) => {
       const def = BUILDING_DEFS[defId]
       if (!def) return false
+      if (defId !== 'construction_yard' && !this.entityMgr.playerHasBuilding(0, 'construction_yard')) return false
       const isShipyard = defId === 'naval_shipyard'
       // Shipyard requires water tiles; other buildings require land
       if (!isShipyard) {
@@ -692,6 +693,8 @@ export class GameScene extends Phaser.Scene {
     this.entityMgr.on('building_placed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p && !p.entities.includes(entityId)) p.entities.push(entityId)
+      const building = this.entityMgr.getBuilding(entityId)
+      if (building) this.setBuildingTileOccupancy(building, true)
     })
     this.entityMgr.on('construction_complete', (building: import('../entities/Building').Building) => {
       this.onBuildingActivated(building)
@@ -712,7 +715,17 @@ export class GameScene extends Phaser.Scene {
       }
     })
 
-    this.entityMgr.on('building_destroyed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
+    this.entityMgr.on('building_destroyed', (payload: {
+      entityId: string
+      playerId: number
+      occupiedTiles?: Array<{ col: number; row: number }>
+    }) => {
+      const { entityId, playerId, occupiedTiles } = payload
+      if (occupiedTiles) {
+        for (const tile of occupiedTiles) {
+          this.gameMap.setOccupied(tile.col, tile.row, null)
+        }
+      }
       this.lastCombatMs = this.time.now
       this.staleMateBoostActive = false
       const p = this.gameState.players.find(pl => pl.id === playerId)
@@ -780,6 +793,11 @@ export class GameScene extends Phaser.Scene {
         if (hud) hud.events.emit('evaAlert', { message: 'Prerequisites not met', type: 'danger' })
         return
       }
+      if (data.defId !== 'construction_yard' && !this.entityMgr.playerHasBuilding(0, 'construction_yard')) {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'Construction Yard required', type: 'danger' })
+        return
+      }
 
       const isShipyard = data.defId === 'naval_shipyard'
 
@@ -820,10 +838,7 @@ export class GameScene extends Phaser.Scene {
         building.setAlpha(1)
         this.onBuildingActivated(building)
 
-        // Mark tiles as occupied
-        for (const tile of building.occupiedTiles) {
-          this.gameMap.setOccupied(tile.col, tile.row, building.id)
-        }
+        this.setBuildingTileOccupancy(building, true)
 
         const hud = this.scene.get('HUDScene')
         if (hud) {
@@ -845,10 +860,7 @@ export class GameScene extends Phaser.Scene {
       const refund = building.sell()
       if (refund > 0) {
         this.economy.addCredits(0, refund)
-        // Free occupied tiles
-        for (const tile of building.occupiedTiles) {
-          this.gameMap.setOccupied(tile.col, tile.row, null)
-        }
+        this.setBuildingTileOccupancy(building, false)
         const hud = this.scene.get('HUDScene')
         if (hud) hud.events.emit('evaAlert', { message: `Building sold ($${refund})`, type: 'warning' })
       }
@@ -901,6 +913,11 @@ export class GameScene extends Phaser.Scene {
         if (!unit || unit.playerId !== 0) continue
         unit.giveOrder({ type: data.type as any, target: data.target })
       }
+    })
+
+    this.events.on('toggleDeploySelection', (data?: { ids?: string[] }) => {
+      const ids = data?.ids ?? Array.from(this.selectedIds)
+      this.handleDeployToggle(ids)
     })
 
     // Cursor mode changed from HUD
@@ -1164,6 +1181,7 @@ export class GameScene extends Phaser.Scene {
       if (cy) {
         cy.state = 'active'
         this.onBuildingActivated(cy)
+        this.setBuildingTileOccupancy(cy, true)
       }
       else console.error(`[IC] FAILED to create Construction Yard for player ${player.id}`)
 
@@ -1174,6 +1192,7 @@ export class GameScene extends Phaser.Scene {
       if (pp) {
         pp.state = 'active'
         this.onBuildingActivated(pp)
+        this.setBuildingTileOccupancy(pp, true)
       }
 
       // Ore Refinery — start active
@@ -1182,6 +1201,7 @@ export class GameScene extends Phaser.Scene {
       if (ref) {
         ref.state = 'active'
         this.onBuildingActivated(ref)
+        this.setBuildingTileOccupancy(ref, true)
       }
 
       // Side-appropriate Harvester — find nearest ore and auto-send
@@ -1285,6 +1305,7 @@ export class GameScene extends Phaser.Scene {
         if (building) {
           building.state = 'active'
           this.onBuildingActivated(building)
+          this.setBuildingTileOccupancy(building, true)
           placed++
           console.log(`[Neutral] Placed ${defId} at (${col}, ${row})`)
         }
@@ -1671,26 +1692,9 @@ export class GameScene extends Phaser.Scene {
       if (this.selectedIds.size > 0) this.showUnitAck('Guard position')
     })
 
-    // D — deploy (GI/Conscript toggle fortified, MCV deploy/undeploy)
+    // D — deploy/undeploy (MCV <-> Construction Yard, infantry guard toggle)
     this.input.keyboard!.on('keydown-D', () => {
-      this.selectedIds.forEach(id => {
-        const unit = this.entityMgr.getUnit(id)
-        if (!unit || unit.playerId !== 0) return
-        if (unit.def.id === 'mcv') {
-          this.deployMCV(unit)
-          return
-        }
-        // Toggle guard mode as "deploy" (fortified position: can't move, auto-engage)
-        if (unit.def.category === 'infantry') {
-          if (unit.state === 'idle') {
-            unit.giveOrder({ type: 'guard' })
-            this.showUnitAck('Deployed')
-          } else {
-            unit.giveOrder({ type: 'stop' })
-            this.showUnitAck('Undeployed')
-          }
-        }
-      })
+      this.handleDeployToggle(Array.from(this.selectedIds))
     })
 
     // X — scatter: units spread out (anti-splash)
@@ -1768,9 +1772,7 @@ export class GameScene extends Phaser.Scene {
       const refund = building.sell()
       if (refund > 0) {
         this.economy.addCredits(0, refund)
-        for (const tile of building.occupiedTiles) {
-          this.gameMap.setOccupied(tile.col, tile.row, null)
-        }
+        this.setBuildingTileOccupancy(building, false)
         const hud = this.scene.get('HUDScene')
         if (hud) hud.events.emit('evaAlert', { message: `Building sold ($${refund})`, type: 'warning' })
       }
@@ -2409,9 +2411,50 @@ export class GameScene extends Phaser.Scene {
     return false
   }
 
-  private deployMCV(unit: import('../entities/Unit').Unit): void {
+  private handleDeployToggle(ids: string[]): void {
+    let didAction = false
+    for (const id of ids) {
+      const unit = this.entityMgr.getUnit(id)
+      if (unit && unit.playerId === this.gameState.localPlayerId) {
+        if (unit.def.id === 'mcv') {
+          didAction = this.deployMCV(unit) || didAction
+          continue
+        }
+        // Infantry fallback: toggle guard mode as a "deploy" stance.
+        if (unit.def.category === 'infantry') {
+          if (unit.state === 'idle') {
+            unit.giveOrder({ type: 'guard' })
+            this.showUnitAck('Deployed')
+          } else {
+            unit.giveOrder({ type: 'stop' })
+            this.showUnitAck('Undeployed')
+          }
+          didAction = true
+        }
+        continue
+      }
+
+      const building = this.entityMgr.getBuilding(id)
+      if (!building || building.playerId !== this.gameState.localPlayerId) continue
+      if (building.def.id === 'construction_yard') {
+        didAction = this.undeployConstructionYard(building) || didAction
+      }
+    }
+
+    if (!didAction && ids.length > 0) {
+      this.showUnitAck('No deploy action')
+    }
+  }
+
+  private deployMCV(unit: import('../entities/Unit').Unit): boolean {
+    if (unit.state === 'dying') return false
+    if (unit.state !== 'idle') {
+      this.showUnitAck('MCV must be stationary')
+      return false
+    }
+
     const tile = this.gameMap.worldToTile(unit.x, unit.y)
-    const def = BUILDING_DEFS['construction_yard']
+    const def = BUILDING_DEFS.construction_yard
     const col = tile.col - Math.floor(def.footprint.w / 2)
     const row = tile.row - Math.floor(def.footprint.h / 2)
 
@@ -2419,23 +2462,132 @@ export class GameScene extends Phaser.Scene {
       for (let c = 0; c < def.footprint.w; c++) {
         if (!this.gameMap.isBuildable(col + c, row + r)) {
           this.showUnitAck('Cannot deploy here')
-          return
+          return false
         }
       }
     }
 
+    const blockingUnits = this.getUnitsBlockingFootprint(col, row, def.footprint.w, def.footprint.h, unit.id)
+    if (blockingUnits.length > 0) {
+      this.showUnitAck('Deploy location blocked')
+      return false
+    }
+
     const cy = this.entityMgr.createBuilding(unit.playerId, 'construction_yard', col, row)
-    if (!cy) return
+    if (!cy) {
+      this.showUnitAck('Deploy failed')
+      return false
+    }
     cy.state = 'active'
     cy.setAlpha(1)
     this.onBuildingActivated(cy)
-    for (const occ of cy.occupiedTiles) {
-      this.gameMap.setOccupied(occ.col, occ.row, cy.id)
-    }
-    unit.takeDamage(unit.hp + 999, unit.playerId)
+    this.setBuildingTileOccupancy(cy, true)
+
+    this.entityMgr.despawnEntity(unit.id)
+    this.transferOwnedEntityId(unit.playerId, unit.id, cy.id)
+
     this.selectedIds.delete(unit.id)
+    this.selectedIds.add(cy.id)
+    this.syncSelectionState()
     this.showUnitAck('Construction Yard deployed')
     console.log('[MCV] Deployed into Construction Yard', { playerId: unit.playerId, col, row })
+    return true
+  }
+
+  private hasLocalConstructionWorkflowInProgress(): boolean {
+    const hud = this.scene.get('HUDScene') as { isConstructionWorkflowActive?: () => boolean } | undefined
+    return Boolean(hud?.isConstructionWorkflowActive?.())
+  }
+
+  private undeployConstructionYard(building: import('../entities/Building').Building): boolean {
+    if (building.state !== 'active' && building.state !== 'low_power') {
+      this.showUnitAck('Construction Yard is busy')
+      return false
+    }
+    if (building.playerId === this.gameState.localPlayerId && this.hasLocalConstructionWorkflowInProgress()) {
+      this.showUnitAck('Finish/cancel construction first')
+      const hud = this.scene.get('HUDScene')
+      if (hud) hud.events.emit('evaAlert', { message: 'Cannot pack while construction is active', type: 'warning' })
+      return false
+    }
+
+    const spawnTile = this.findMCVSpawnTileForBuilding(building)
+    if (!spawnTile) {
+      this.showUnitAck('Cannot undeploy: exit blocked')
+      return false
+    }
+
+    const spawn = this.gameMap.tileToWorld(spawnTile.col, spawnTile.row)
+    const mcv = this.entityMgr.createUnit(building.playerId, 'mcv', spawn.x, spawn.y)
+    if (!mcv) {
+      this.showUnitAck('Undeploy failed')
+      return false
+    }
+    mcv.giveOrder({ type: 'stop' })
+
+    this.setBuildingTileOccupancy(building, false)
+    this.entityMgr.despawnEntity(building.id)
+    this.transferOwnedEntityId(building.playerId, building.id, mcv.id)
+
+    this.selectedIds.delete(building.id)
+    this.selectedIds.add(mcv.id)
+    this.syncSelectionState()
+    this.showUnitAck('Construction Yard packed up')
+    console.log('[MCV] Packed Construction Yard into MCV', { playerId: building.playerId, col: spawnTile.col, row: spawnTile.row })
+    return true
+  }
+
+  private getUnitsBlockingFootprint(
+    col: number,
+    row: number,
+    w: number,
+    h: number,
+    ignoreUnitId?: string,
+  ): import('../entities/Unit').Unit[] {
+    const maxCol = col + w - 1
+    const maxRow = row + h - 1
+    return this.entityMgr.getAllUnits().filter(u => {
+      if (u.id === ignoreUnitId || u.state === 'dying' || u.hp <= 0) return false
+      const tc = Math.floor(u.x / TILE_SIZE)
+      const tr = Math.floor(u.y / TILE_SIZE)
+      return tc >= col && tc <= maxCol && tr >= row && tr <= maxRow
+    })
+  }
+
+  private findMCVSpawnTileForBuilding(building: import('../entities/Building').Building): TileCoord | null {
+    const center = this.gameMap.worldToTile(building.x, building.y)
+    const maxRadius = 3
+
+    for (let radius = 0; radius <= maxRadius; radius++) {
+      for (let dr = -radius; dr <= radius; dr++) {
+        for (let dc = -radius; dc <= radius; dc++) {
+          if (Math.max(Math.abs(dc), Math.abs(dr)) !== radius) continue
+          const col = center.col + dc
+          const row = center.row + dr
+          const tile = this.gameMap.getTile(col, row)
+          if (!tile || !tile.passable) continue
+          if (tile.occupiedBy !== null && tile.occupiedBy !== building.id) continue
+          if (this.getUnitsBlockingFootprint(col, row, 1, 1).length > 0) continue
+          return { col, row }
+        }
+      }
+    }
+    return null
+  }
+
+  private setBuildingTileOccupancy(building: import('../entities/Building').Building, occupied: boolean): void {
+    for (const tile of building.occupiedTiles) {
+      this.gameMap.setOccupied(tile.col, tile.row, occupied ? building.id : null)
+    }
+  }
+
+  private transferOwnedEntityId(playerId: number, oldId: string, newId: string): void {
+    const player = this.gameState.players.find(p => p.id === playerId)
+    if (!player) return
+    player.entities = player.entities.filter(id => id !== oldId)
+    if (!player.entities.includes(newId)) {
+      player.entities.push(newId)
+    }
   }
 
   private onBuildingActivated(building: import('../entities/Building').Building): void {

@@ -174,6 +174,10 @@ export class HUDScene extends Phaser.Scene {
 
   // ── Cursor mode ───────────────────────────────────────────────────
   private cursorMode: CursorMode = 'normal'
+  private actionCommandBg?: Phaser.GameObjects.Graphics
+  private actionCommandTxt?: Phaser.GameObjects.Text
+  private actionCommandZone?: Phaser.GameObjects.Zone
+  private actionCommandEnabled = false
 
   // ── EVA alerts ────────────────────────────────────────────────────
   private alertEntries: AlertEntry[] = []
@@ -260,6 +264,7 @@ export class HUDScene extends Phaser.Scene {
     this.tickBuildProgress(delta)
     this.tickSuperweapons(delta)
     this.tickSelectedInfo()
+    this.updateDeployActionButton()
     this.tickGhost()
   }
 
@@ -1202,6 +1207,32 @@ export class HUDScene extends Phaser.Scene {
     return null
   }
 
+  private isBuildingQueueItem(defId: string): boolean {
+    const item = this.buildItems.find(i => i.id === defId)
+    return item?.tab === 'buildings' || item?.tab === 'defenses'
+  }
+
+  private hasActiveConstructionYard(): boolean {
+    type E = { getPlayerActiveBuildingIds(playerId: number): string[] }
+    const em = this.registry.get('entityMgr') as E | undefined
+    if (!em) return true
+    const localPlayerId = this.gameState?.localPlayerId ?? 0
+    return em.getPlayerActiveBuildingIds(localPlayerId).includes('construction_yard')
+  }
+
+  isConstructionWorkflowActive(): boolean {
+    for (const id of this.buildProgress.keys()) {
+      if (this.isBuildingQueueItem(id)) return true
+    }
+    for (const id of this.pendingPlace.values()) {
+      if (this.isBuildingQueueItem(id)) return true
+    }
+    if (this.placementMode && this.placementDefId && this.isBuildingQueueItem(this.placementDefId)) {
+      return true
+    }
+    return false
+  }
+
   private startBuildItem(item: BuildableItem): void {
     this.buildProgress.set(item.id, 0)
     this.buildProgressDisplay.set(item.id, 0)
@@ -1252,6 +1283,10 @@ export class HUDScene extends Phaser.Scene {
 
     // If building is ready to place, enter placement mode
     if (this.pendingPlace.has(item.id) && isBuildingTab) {
+      if (!this.hasActiveConstructionYard()) {
+        this.showAlert('Construction Yard required', 'danger')
+        return
+      }
       this.enterPlacement(item.id)
       return
     }
@@ -1387,7 +1422,6 @@ export class HUDScene extends Phaser.Scene {
     const defs: Array<{ label: string; mode: CursorMode; accent: number }> = [
       { label: '$ SELL', mode: 'sell',   accent: HUD_GOLD   },
       { label: '# FIX',  mode: 'repair', accent: 0x4488ff   },
-      { label: '* DIP',  mode: 'normal', accent: HUD_BORDER },
     ]
 
     defs.forEach((def, i) => {
@@ -1427,6 +1461,75 @@ export class HUDScene extends Phaser.Scene {
         btnBg.strokeRect(bx + 1, y + 1, btnW - 2, ACTION_H - 2)
       })
     })
+
+    const commandX = x + btnW * 2
+    this.actionCommandBg = this.add.graphics()
+    this.actionCommandTxt = this.add.text(commandX + btnW / 2, y + ACTION_H / 2, 'D DEPLOY', {
+      fontFamily: 'monospace', fontSize: '8px', color: '#888888',
+    }).setOrigin(0.5)
+
+    this.actionCommandZone = this.add.zone(commandX + btnW / 2, y + ACTION_H / 2, btnW - 2, ACTION_H - 2)
+      .setInteractive({ cursor: 'pointer' })
+
+    this.actionCommandZone.on('pointerdown', () => {
+      if (!this.actionCommandEnabled) return
+      const ids = (this.registry.get('selectedIds') as string[]) ?? []
+      if (ids.length === 0) return
+      const gs = this.scene.get('GameScene')
+      if (gs) gs.events.emit('toggleDeploySelection', { ids })
+    })
+
+    this.actionCommandZone.on('pointerover', () => {
+      if (this.actionCommandEnabled) this.actionCommandTxt?.setColor('#d4f4d4')
+    })
+
+    this.actionCommandZone.on('pointerout', () => {
+      this.actionCommandTxt?.setColor(this.actionCommandEnabled ? '#88cc88' : '#666666')
+    })
+
+    this.updateDeployActionButton()
+  }
+
+  private updateDeployActionButton() {
+    if (!this.actionCommandBg || !this.actionCommandTxt) return
+    const btnW = Math.floor(SIDEBAR_W / 3)
+    const ids = (this.registry.get('selectedIds') as string[]) ?? []
+    const em = this.registry.get('entityMgr') as {
+      getEntity(id: string): { playerId?: number; defId?: string } | undefined
+    } | undefined
+
+    let hasMCV = false
+    let hasConYard = false
+    const localPlayerId = this.gameState?.localPlayerId ?? 0
+    if (em) {
+      for (const id of ids) {
+        const entity = em.getEntity(id)
+        if (!entity || entity.playerId !== localPlayerId) continue
+        if (entity.defId === 'mcv') hasMCV = true
+        if (entity.defId === 'construction_yard') hasConYard = true
+      }
+    }
+
+    const busyPacking = hasConYard && !hasMCV && this.isConstructionWorkflowActive()
+    const canCommand = (hasMCV || hasConYard) && !busyPacking
+    const label = busyPacking
+      ? 'D BUSY'
+      : hasMCV && hasConYard
+      ? 'D TOGGLE'
+      : hasMCV
+        ? 'D DEPLOY'
+        : hasConYard
+          ? 'D PACK'
+          : 'NO CMD'
+
+    this.actionCommandEnabled = canCommand
+    this.actionCommandTxt.setText(label).setColor(canCommand ? '#88cc88' : '#666666')
+
+    this.actionCommandBg.clear()
+    this.actionCommandBg.fillStyle(canCommand ? 0x132417 : HUD_PANEL, 1)
+    this.actionCommandBg.fillRect(this.sidebarX + btnW * 2 + 1, this.actionY + 1, btnW - 2, ACTION_H - 2)
+    this.actionCommandBg.lineStyle(1, canCommand ? HUD_GREEN : HUD_BORDER, canCommand ? 0.8 : 0.5)
+    this.actionCommandBg.strokeRect(this.sidebarX + btnW * 2 + 1, this.actionY + 1, btnW - 2, ACTION_H - 2)
   }
 
   // ── EVA alerts ───────────────────────────────────────────────────────
@@ -1567,6 +1670,10 @@ export class HUDScene extends Phaser.Scene {
     if (ptr.rightButtonDown()) { this.exitPlacement(true); return }
     if (!ptr.leftButtonDown()) return
     if (ptr.x >= this.sidebarX) return           // clicked sidebar
+    if (!this.hasActiveConstructionYard()) {
+      this.showAlert('Construction Yard required', 'danger')
+      return
+    }
 
     const world = this.pointerScreenToCart(ptr.x, ptr.y)
     const tileCol = Math.floor(world.x / TILE_SIZE)
@@ -1952,9 +2059,18 @@ export class HUDScene extends Phaser.Scene {
 
   private tickBuildProgress(delta: number) {
     const done: string[] = []
+    const hasConYard = this.hasActiveConstructionYard()
+
+    if (this.placementMode && this.placementDefId && this.isBuildingQueueItem(this.placementDefId) && !hasConYard) {
+      this.exitPlacement(false)
+      this.showAlert('Placement paused: no Construction Yard', 'warning')
+    }
 
     this.buildProgress.forEach((_, id) => {
       const item = this.buildItems.find(i => i.id === id)!
+      if (this.isBuildingQueueItem(item.id) && !hasConYard) {
+        return
+      }
       const totalTime = item.buildTime * 1000
       const paid = this.creditsPaid.get(id) ?? 0
       const remaining = item.cost - paid
@@ -2194,6 +2310,14 @@ export class HUDScene extends Phaser.Scene {
       infoText += `\n${isPrimary ? '★ PRIMARY' : 'Click to set primary'}`
       infoText += '\nRight-click to set rally point'
       if (speedBonus > 1) infoText += ` | +${Math.round((speedBonus - 1) * 100)}% speed`
+    }
+
+    if (ids.length === 1) {
+      if (first.defId === 'mcv') infoText += '\n[D] Deploy into Construction Yard'
+      if (first.defId === 'construction_yard') {
+        infoText += '\n[D] Pack up into MCV'
+        if (this.isConstructionWorkflowActive()) infoText += '\nFinish/cancel build queue first'
+      }
     }
 
     this.selectedInfoTxt.setText(infoText)
