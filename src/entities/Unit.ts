@@ -6,7 +6,7 @@
 
 import Phaser from 'phaser'
 import type { UnitDef, Order, TileCoord, Position } from '../types'
-import { TILE_SIZE, HARVESTER_CAPACITY, ORE_PER_LOAD, GEMS_PER_LOAD, ORE_HARVEST_RATE, REFINERY_PROCESS_RATE } from '../types'
+import { TILE_SIZE, HARVESTER_CAPACITY, ORE_PER_LOAD, GEMS_PER_LOAD, ORE_HARVEST_RATE, REFINERY_PROCESS_RATE, ORE_TILE_MAX } from '../types'
 import { cartToScreen } from '../engine/IsoUtils'
 
 export type UnitState = 'idle' | 'moving' | 'attacking' | 'harvesting' | 'dying'
@@ -18,6 +18,12 @@ function adjustBrightness(color: number, amount: number): number {
   const b = Math.max(0, Math.min(255, (color & 0xff) + amount))
   return (r << 16) | (g << 8) | b
 }
+
+const IDLE_AUTO_ACQUIRE_SCAN_MS = 220
+const MOVING_AUTO_ACQUIRE_SCAN_MS = 140
+const ATTACK_MOVE_SCAN_MS = 110
+const ORE_LOW_RATIO_THRESHOLD = 0.05
+const ORE_RETARGET_COOLDOWN_MS = 2500
 
 // Minimal scene interface — Agent 1 will provide the concrete implementation
 export interface IRTSScene extends Phaser.Scene {
@@ -63,6 +69,7 @@ export class Unit extends Phaser.GameObjects.Container {
   // Combat
   private attackCooldown: number
   private target: IEntityRef | null
+  private autoAcquireScanCooldownMs = 0
 
   // RA2 Veterancy: 0 = rookie, 1 = veteran (3 kills), 2 = elite (7 kills)
   kills = 0
@@ -83,6 +90,7 @@ export class Unit extends Phaser.GameObjects.Container {
   private unloadTimer: number
   private harvestCapacity: number
   private refineryId: string | null
+  private oreRetargetCooldownMs = 0
 
   // Visuals
   facing = 0 // 0: NE, 1: SE, 2: SW, 3: NW
@@ -350,6 +358,8 @@ export class Unit extends Phaser.GameObjects.Container {
     if (this.state === 'dying') return
 
     this.attackCooldown = Math.max(0, this.attackCooldown - delta / 1000)
+    this.autoAcquireScanCooldownMs = Math.max(0, this.autoAcquireScanCooldownMs - delta)
+    this.oreRetargetCooldownMs = Math.max(0, this.oreRetargetCooldownMs - delta)
     this.weaponFxTimer = Math.max(0, this.weaponFxTimer - delta)
     if (this.weaponFxTimer <= 0 && this.muzzleFlash.visible) {
       this.muzzleFlash.setVisible(false)
@@ -387,7 +397,13 @@ export class Unit extends Phaser.GameObjects.Container {
       case 'moving':
         this.updateMovement(delta)
         // Auto-attack while moving (RA2-style: units fire on the move)
-        if (this.def.attack && this.attackCooldown <= 0) {
+        if (
+          this.def.attack &&
+          this.attackCooldown <= 0 &&
+          this.state === 'moving' &&
+          this.currentOrder?.type !== 'attackMove' &&
+          this.consumeAutoAcquireScanBudget(MOVING_AUTO_ACQUIRE_SCAN_MS)
+        ) {
           this.tryFireWhileMoving()
         }
         break
@@ -481,6 +497,19 @@ export class Unit extends Phaser.GameObjects.Container {
         this.state = 'harvesting'
         if (order.target) {
           this.startMoveTo(order.target)
+        }
+        break
+
+      case 'repair':
+        if (order.targetEntityId) {
+          this.state = 'attacking'
+          this.emit('resolve_target', order.targetEntityId, (ref: IEntityRef) => {
+            this.target = ref
+          })
+        } else if (order.target) {
+          this.startMoveTo(order.target)
+        } else {
+          this.state = 'idle'
         }
         break
 
@@ -595,8 +624,14 @@ export class Unit extends Phaser.GameObjects.Container {
     }
 
     // Attack-move: check for targets while moving
-    if (this.currentOrder?.type === 'attackMove' && this.def.attack) {
-      this.updateAttackMove()
+    if (
+      this.currentOrder?.type === 'attackMove' &&
+      this.def.attack &&
+      this.consumeAutoAcquireScanBudget(ATTACK_MOVE_SCAN_MS)
+    ) {
+      if (!this.updateAttackMove() && this.attackCooldown <= 0) {
+        this.tryFireWhileMoving()
+      }
     }
   }
 
@@ -676,9 +711,33 @@ export class Unit extends Phaser.GameObjects.Container {
     return false
   }
 
+  private consumeAutoAcquireScanBudget(intervalMs: number): boolean {
+    if (this.autoAcquireScanCooldownMs > 0) return false
+    this.autoAcquireScanCooldownMs = intervalMs
+    return true
+  }
+
+  private fireAtTarget(target: IEntityRef): void {
+    if (!this.def.attack) return
+    this.emit('fire_at_target', this, target)
+    this.playWeaponEffect(target.x, target.y)
+    this.updateTurretFacingFromVector(target.x - this.x, target.y - this.y)
+    this.attackCooldown = 1 / (this.getEffectiveFireRate() * this.getVeterancyFireRateMultiplier())
+  }
+
   /** Fire at nearby enemies while moving — doesn't stop movement */
   private tryFireWhileMoving(): void {
     if (!this.def.attack) return
+
+    // Preserve user intent on explicit attack orders: keep firing only that target.
+    if (this.currentOrder?.type === 'attack' && this.target && this.target.hp > 0 && this.canAttackTarget(this.target)) {
+      const targetDist = Phaser.Math.Distance.Between(this.x, this.y, this.target.x, this.target.y)
+      if (targetDist <= this.getEffectiveAttackRangePixels()) {
+        this.fireAtTarget(this.target)
+      }
+      return
+    }
+
     const rangePixels = this.getEffectiveAttackRangePixels()
 
     this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: IEntityRef[]) => {
@@ -692,10 +751,7 @@ export class Unit extends Phaser.GameObjects.Container {
         if (d < nearestDist) { nearestDist = d; nearest = e }
       }
       if (nearest && nearestDist <= rangePixels) {
-        this.emit('fire_at_target', this, nearest)
-        this.playWeaponEffect(nearest.x, nearest.y)
-        this.updateTurretFacingFromVector(nearest.x - this.x, nearest.y - this.y)
-        this.attackCooldown = 1 / this.def.attack!.fireRate
+        this.fireAtTarget(nearest)
       }
     })
   }
@@ -709,6 +765,15 @@ export class Unit extends Phaser.GameObjects.Container {
     if (this.currentOrder?.type === 'harvest') {
       this.state = 'harvesting'
       this.harvestTimer = 0
+    } else if (this.currentOrder?.type === 'repair') {
+      if (this.currentOrder.targetEntityId) {
+        this.state = 'attacking'
+      } else if (this.currentOrder.target) {
+        this.emit('engineer_repair_bridge', this, this.currentOrder.target, (_done: boolean) => {})
+        this.processNextOrder()
+      } else {
+        this.processNextOrder()
+      }
     } else if (this.currentOrder?.type === 'attackMove' && this.def.attack) {
       if (!this.updateAttackMove()) {
         this.processNextOrder()
@@ -742,6 +807,22 @@ export class Unit extends Phaser.GameObjects.Container {
         this.startMoveTo({ x: this.target.x, y: this.target.y })
         return
       }
+
+      const repairOrder = this.currentOrder?.type === 'repair'
+      const sameOwner = this.target.playerId === this.playerId
+      if (repairOrder && sameOwner) {
+        if (this.attackCooldown <= 0) {
+          this.attackCooldown = 0.55
+          this.emit('engineer_repair_target', this, this.target, (done: boolean) => {
+            if (done) {
+              this.target = null
+              this.processNextOrder()
+            }
+          })
+        }
+        return
+      }
+
       // In range — attempt capture
       this.emit('fire_at_target', this, this.target)
       this.state = 'idle'
@@ -759,7 +840,7 @@ export class Unit extends Phaser.GameObjects.Container {
       if (this.currentOrder?.type === 'attackMove' && this.updateAttackMove()) {
         return
       }
-      this.target = this.findNearbyEnemy()
+      this.target = this.findNearbyEnemy(this.getAutoAcquireRangePixels(), true)
       if (!this.target) {
         this.processNextOrder()
         return
@@ -769,7 +850,7 @@ export class Unit extends Phaser.GameObjects.Container {
       if (this.currentOrder?.type === 'attackMove' && this.updateAttackMove()) {
         return
       }
-      this.target = this.findNearbyEnemy()
+      this.target = this.findNearbyEnemy(this.getAutoAcquireRangePixels(), true)
       if (!this.target) {
         this.processNextOrder()
         return
@@ -780,7 +861,7 @@ export class Unit extends Phaser.GameObjects.Container {
       if (this.currentOrder?.type === 'attackMove' && this.updateAttackMove()) {
         return
       }
-      this.target = this.findNearbyEnemy()
+      this.target = this.findNearbyEnemy(this.getAutoAcquireRangePixels(), true)
       if (!this.target) {
         this.processNextOrder()
         return
@@ -812,16 +893,9 @@ export class Unit extends Phaser.GameObjects.Container {
   }
 
   private updateAttackMove(): boolean {
-    const unitTarget = this.findNearbyEnemyUnit()
-    if (unitTarget) {
-      this.target = unitTarget
-      this.state = 'attacking'
-      return true
-    }
-
-    const buildingTarget = this.findNearbyEnemyBuilding()
-    if (buildingTarget) {
-      this.target = buildingTarget
+    const target = this.findNearbyEnemy(this.getAutoAcquireRangePixels(), true)
+    if (target) {
+      this.target = target
       this.state = 'attacking'
       return true
     }
@@ -829,9 +903,8 @@ export class Unit extends Phaser.GameObjects.Container {
     return false
   }
 
-  private findNearbyEnemy(): IEntityRef | null {
+  private findNearbyEnemy(rangePixels = this.getEffectiveAttackRangePixels(), preferUnits = false): IEntityRef | null {
     if (!this.def.attack) return null
-    const rangePixels = this.getEffectiveAttackRangePixels()
     let nearest: IEntityRef | null = null
     let nearestDist = Infinity
 
@@ -839,10 +912,21 @@ export class Unit extends Phaser.GameObjects.Container {
     this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: IEntityRef[]) => {
       for (const e of enemies) {
         if (!this.canAttackEntityRef(e)) continue
+        if (preferUnits && this.isBuildingCategory(e.def?.category ?? '')) continue
         const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
         if (d < nearestDist) {
           nearestDist = d
           nearest = e
+        }
+      }
+      if (!nearest && preferUnits) {
+        for (const e of enemies) {
+          if (!this.canAttackEntityRef(e)) continue
+          const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y)
+          if (d < nearestDist) {
+            nearestDist = d
+            nearest = e
+          }
         }
       }
     })
@@ -906,6 +990,11 @@ export class Unit extends Phaser.GameObjects.Container {
   private getEffectiveAttackRangePixels(): number {
     if (!this.def.attack) return 0
     return this.getEffectiveAttackRangeTiles() * TILE_SIZE
+  }
+
+  private getAutoAcquireRangePixels(): number {
+    if (!this.def.attack) return 0
+    return Math.max(this.getEffectiveAttackRangePixels(), this.def.stats.sightRange * TILE_SIZE)
   }
 
   private getEffectiveAttackRangeTiles(): number {
@@ -992,6 +1081,31 @@ export class Unit extends Phaser.GameObjects.Container {
 
     // Check if adjacent to an ore tile
     this.emit('check_ore_at', this.x, this.y, (oreAmount: number, tilePos: Position, isGems?: boolean) => {
+      const lowOreThreshold = Math.max(1, Math.floor(ORE_TILE_MAX * ORE_LOW_RATIO_THRESHOLD))
+
+      // Move to a richer nearby patch when current field is nearly depleted.
+      if (
+        oreAmount > 0 &&
+        oreAmount <= lowOreThreshold &&
+        this.cargoLoads < this.harvestCapacity &&
+        this.oreRetargetCooldownMs <= 0
+      ) {
+        this.oreRetargetCooldownMs = ORE_RETARGET_COOLDOWN_MS
+        this.emit(
+          'find_ore_field',
+          this.x,
+          this.y,
+          (target: Position | null) => {
+            if (!target) return
+            const moveDist = Phaser.Math.Distance.Between(this.x, this.y, target.x, target.y)
+            if (moveDist > TILE_SIZE * 1.5) {
+              this.startMoveTo(target)
+            }
+          },
+          { maxRadiusTiles: 14, minOreAmount: lowOreThreshold + 1 },
+        )
+      }
+
       if (oreAmount > 0 && this.cargoLoads < this.harvestCapacity) {
         this.harvestTimer += delta
         if (this.harvestTimer >= HARVEST_TIME) {
@@ -1019,8 +1133,12 @@ export class Unit extends Phaser.GameObjects.Container {
 
   private updateIdle(): void {
     // Auto-acquire targets when idle (all units auto-engage by default)
-    if (this.def.attack && this.orders.length === 0) {
-      const nearbyEnemy = this.findNearbyEnemy()
+    if (
+      this.def.attack &&
+      this.orders.length === 0 &&
+      this.consumeAutoAcquireScanBudget(IDLE_AUTO_ACQUIRE_SCAN_MS)
+    ) {
+      const nearbyEnemy = this.findNearbyEnemy(this.getAutoAcquireRangePixels(), true)
       if (nearbyEnemy) {
         this.target = nearbyEnemy
         this.state = 'attacking'
