@@ -4,26 +4,18 @@
 // ============================================================
 
 import Phaser from 'phaser'
-import type { FactionId } from '../types'
+import type { FactionId, MapTemplate } from '../types'
 import { TILE_SIZE } from '../types'
 import { FACTIONS, FACTION_IDS } from '../data/factions'
 import { generatePreviewData, PREVIEW_COLORS } from '../engine/GameMap'
+import {
+  createDefaultSkirmishConfig,
+  migrateSkirmishConfig,
+} from '../config/skirmishConfig'
+import type { SkirmishConfig } from '../config/skirmishConfig'
 
-import type { MapTemplate } from '../types'
+export type { SkirmishConfig } from '../config/skirmishConfig'
 export type { MapTemplate }
-
-export interface SkirmishConfig {
-  playerFaction: FactionId
-  mapSize: 'small' | 'medium' | 'large'
-  revealMap: boolean
-  mapTemplate: MapTemplate
-  mapSeed: number
-  playerSpawn: number           // -1 = random, 0-7 = specific spawn index
-  aiCount: number
-  aiDifficulty: 'easy' | 'medium' | 'hard'
-  startingCredits: number
-  allyPlayerIds: number[] // AI player IDs allied with human player (player 0)
-}
 
 const STYLE = {
   bg: 0x08080f,
@@ -60,18 +52,7 @@ const MAP_VISIBILITY_OPTIONS: Array<{ label: string; value: boolean }> = [
 ]
 
 export class SetupScene extends Phaser.Scene {
-  private config: SkirmishConfig = {
-    playerFaction: 'usa',
-    mapSize: 'medium',
-    revealMap: false,
-    mapTemplate: 'continental',
-    mapSeed: Math.floor(Math.random() * 99999) + 1,
-    playerSpawn: -1,
-    aiCount: 1,
-    aiDifficulty: 'medium',
-    startingCredits: 10000,
-    allyPlayerIds: [],
-  }
+  private config: SkirmishConfig = createDefaultSkirmishConfig()
 
   // Graphic refs for redraws
   private factionButtons: Map<FactionId, { bg: Phaser.GameObjects.Graphics; border: Phaser.GameObjects.Graphics }> = new Map()
@@ -92,6 +73,10 @@ export class SetupScene extends Phaser.Scene {
 
   constructor() {
     super({ key: 'SetupScene' })
+  }
+
+  init(data?: { config?: unknown }) {
+    this.config = data?.config ? migrateSkirmishConfig(data.config) : createDefaultSkirmishConfig()
   }
 
   create() {
@@ -845,7 +830,10 @@ export class SetupScene extends Phaser.Scene {
 
   private launchMission() {
     this.sanitizeAllyPlayerIds()
-    const config: SkirmishConfig = { ...this.config, allyPlayerIds: [...this.config.allyPlayerIds] }
+    const config = migrateSkirmishConfig({
+      ...this.config,
+      allyPlayerIds: [...this.config.allyPlayerIds],
+    })
     this.cameras.main.fadeOut(400, 0, 0, 0)
     this.cameras.main.once('camerafadeoutcomplete', () => {
       this.scene.start('GameScene', { config })

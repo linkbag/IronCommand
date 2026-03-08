@@ -18,7 +18,12 @@ import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, Fact
 import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL_PLAYER_ID } from '../types'
 import { cartToScreen, screenToCart, getIsoWorldBounds } from '../engine/IsoUtils'
 import { FACTIONS } from '../data/factions'
-import type { SkirmishConfig } from './SetupScene'
+import {
+  createDefaultSkirmishConfig,
+  getBehaviorAIDifficulty,
+  migrateSkirmishConfig,
+} from '../config/skirmishConfig'
+import type { SkirmishConfig } from '../config/skirmishConfig'
 
 // Unit acknowledgment lines
 const ACK_LINES: Record<string, string[]> = {
@@ -100,19 +105,10 @@ export class GameScene extends Phaser.Scene {
     super({ key: 'GameScene' })
   }
 
-  init(data: { config: SkirmishConfig }) {
-    this.skirmishCfg = data?.config ?? {
-      playerFaction: 'usa',
-      mapSize: 'small',
-      revealMap: false,
-      mapTemplate: 'continental',
-      mapSeed: Math.floor(Math.random() * 99999) + 1,
-      playerSpawn: -1,
-      aiCount: 1,
-      aiDifficulty: 'medium',
-      startingCredits: STARTING_CREDITS,
-      allyPlayerIds: [],
-    }
+  init(data: { config?: unknown }) {
+    this.skirmishCfg = data?.config
+      ? migrateSkirmishConfig(data.config)
+      : createDefaultSkirmishConfig()
     // Reset per-session state
     this.aiCommanders = []
     this.selectedIds = new Set()
@@ -275,12 +271,13 @@ export class GameScene extends Phaser.Scene {
 
     // ── 8. AI commanders ──────────────────────────────────────
     try {
+    const aiBehaviorDifficulty = getBehaviorAIDifficulty(cfg.aiDifficulty)
     this.aiCommanders = aiPlayers.map(p =>
-      new AI(p.id, cfg.aiDifficulty, this.entityMgr, this.economy, this.production, p.faction)
+      new AI(p.id, aiBehaviorDifficulty, this.entityMgr, this.economy, this.production, p.faction)
     )
     for (const p of aiPlayers) {
-      this.economy.setAIDifficulty(p.id, cfg.aiDifficulty)
-      const buildSpeed = cfg.aiDifficulty === 'hard' ? 1.3 : 1.0
+      this.economy.setAIDifficulty(p.id, aiBehaviorDifficulty)
+      const buildSpeed = aiBehaviorDifficulty === 'hard' ? 1.3 : 1.0
       this.production.setPlayerBuildSpeedMultiplier(p.id, buildSpeed)
     }
     } catch (e) { console.error('[IC] CRASH in section 8 (AI):', e); throw e }
