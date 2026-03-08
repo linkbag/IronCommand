@@ -80,6 +80,8 @@ export class GameScene extends Phaser.Scene {
   // ── Last alert position (for Space key) ────────────────────
   private lastAlertPos: Position | null = null
   private lastUnderAttackAlertMs = 0
+  private lastMinimapAttackPingMs = 0
+  private minimapAttackPingBucketMs: Map<string, number> = new Map()
   private fogAnchorSources: Array<{ pos: TileCoord; range: number }> = []
   private playerSpawnIndexById: Map<number, number> = new Map()
   private waypointMode = false
@@ -126,6 +128,8 @@ export class GameScene extends Phaser.Scene {
     this.selectionPulseTweens = new Map()
     this.lastAlertPos = null
     this.lastUnderAttackAlertMs = 0
+    this.lastMinimapAttackPingMs = 0
+    this.minimapAttackPingBucketMs = new Map()
     this.fogAnchorSources = []
     this.playerSpawnIndexById = new Map()
     this.waypointMode = false
@@ -727,17 +731,58 @@ export class GameScene extends Phaser.Scene {
       }
     })
 
+    this.entityMgr.on('unit_damaged', (payload: { unit: { playerId: number; x: number; y: number }; sourcePlayerId: number; amount: number }) => {
+      const u = payload.unit
+      if (u.playerId !== this.gameState.localPlayerId || payload.amount <= 0) return
+      this.handleLocalPlayerUnderAttack(u.x, u.y, payload.sourcePlayerId)
+    })
+
     // Building under attack — alert on damage with cooldown.
     this.entityMgr.on('building_damaged', (payload: { building: { playerId: number; x: number; y: number }; sourcePlayerId: number; amount: number }) => {
       const b = payload.building
-      if (b.playerId !== 0 || payload.amount <= 0) return
-      this.lastAlertPos = { x: b.x, y: b.y }
-      this.registry.set('lastAlertPos', this.lastAlertPos)
-      if (this.time.now - this.lastUnderAttackAlertMs < 3000) return
-      this.lastUnderAttackAlertMs = this.time.now
-      const hud = this.scene.get('HUDScene')
-      if (hud) hud.events.emit('underAttack')
+      if (b.playerId !== this.gameState.localPlayerId || payload.amount <= 0) return
+      this.handleLocalPlayerUnderAttack(b.x, b.y, payload.sourcePlayerId)
     })
+  }
+
+  private handleLocalPlayerUnderAttack(worldX: number, worldY: number, sourcePlayerId: number): void {
+    const localPlayerId = this.gameState.localPlayerId
+    if (!this.entityMgr.isEnemy(sourcePlayerId, localPlayerId)) return
+
+    this.lastAlertPos = { x: worldX, y: worldY }
+    this.registry.set('lastAlertPos', this.lastAlertPos)
+    this.emitMinimapAttackPing(worldX, worldY)
+
+    if (this.time.now - this.lastUnderAttackAlertMs < 3000) return
+    this.lastUnderAttackAlertMs = this.time.now
+    const hud = this.scene.get('HUDScene')
+    if (hud) hud.events.emit('underAttack')
+  }
+
+  private emitMinimapAttackPing(worldX: number, worldY: number): void {
+    const now = this.time.now
+    const globalCooldownMs = 300
+    const bucketCooldownMs = 1400
+    const staleBucketMs = 5500
+    const bucketSizePx = TILE_SIZE * 3
+    const bx = Math.floor(worldX / bucketSizePx)
+    const by = Math.floor(worldY / bucketSizePx)
+    const key = `${bx},${by}`
+
+    for (const [bucketKey, ts] of this.minimapAttackPingBucketMs.entries()) {
+      if (now - ts > staleBucketMs) {
+        this.minimapAttackPingBucketMs.delete(bucketKey)
+      }
+    }
+
+    const lastBucketPing = this.minimapAttackPingBucketMs.get(key) ?? -Infinity
+    if (now - this.lastMinimapAttackPingMs < globalCooldownMs) return
+    if (now - lastBucketPing < bucketCooldownMs) return
+
+    this.lastMinimapAttackPingMs = now
+    this.minimapAttackPingBucketMs.set(key, now)
+    const hud = this.scene.get('HUDScene')
+    if (hud) hud.events.emit('minimapAttackPing', { x: worldX, y: worldY })
   }
 
   // ── Economy event wiring ─────────────────────────────────────

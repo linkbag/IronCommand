@@ -6,7 +6,7 @@
 
 import Phaser from 'phaser'
 import type { UnitDef, Order, TileCoord, Position } from '../types'
-import { TILE_SIZE, HARVESTER_CAPACITY, ORE_PER_LOAD, GEMS_PER_LOAD, ORE_HARVEST_RATE, REFINERY_PROCESS_RATE } from '../types'
+import { TILE_SIZE, HARVESTER_CAPACITY, ORE_PER_LOAD, GEMS_PER_LOAD, ORE_HARVEST_RATE, REFINERY_PROCESS_RATE, DamageType } from '../types'
 import { cartToScreen } from '../engine/IsoUtils'
 
 export type UnitState = 'idle' | 'moving' | 'attacking' | 'harvesting' | 'dying'
@@ -246,10 +246,16 @@ export class Unit extends Phaser.GameObjects.Container {
     }
   }
 
-  takeDamage(amount: number, _sourcePlayerId: number): void {
+  takeDamage(amount: number, sourcePlayerId: number): void {
     if (this.state === 'dying') return
     if (this.invulnerable) return  // Iron Curtain — skip all damage
+    if (amount <= 0) return
+    const hpBefore = this.hp
     this.hp = Math.max(0, this.hp - amount)
+    const dealt = hpBefore - this.hp
+    if (dealt > 0) {
+      this.emit('unit_damaged', { unit: this, sourcePlayerId, amount: dealt })
+    }
     this.drawHealthBar()
     if (this.hp <= 0) {
       this.die()
@@ -1235,17 +1241,35 @@ export class Unit extends Phaser.GameObjects.Container {
     const muzzleY = this.def.category === 'aircraft' ? -8 : 0
     const dx = targetX - this.x
     const dy = targetY - this.y
-    const len = Math.min(18, Math.hypot(dx, dy) * 0.15)
-    const dirX = Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 ? 1 : dx / Math.hypot(dx, dy)
-    const dirY = Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 ? 0 : dy / Math.hypot(dx, dy)
+    const distance = Math.hypot(dx, dy)
+    const len = Math.min(24, distance * 0.18)
+    const dirX = Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 ? 1 : dx / distance
+    const dirY = Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 ? 0 : dy / distance
+    const damageType = this.def.attack?.damageType
+    const flashColors: Record<DamageType, number> = {
+      [DamageType.BULLET]: 0xffee66,
+      [DamageType.EXPLOSIVE]: 0xff9a55,
+      [DamageType.HE]: 0xff7a33,
+      [DamageType.AP]: 0xffd899,
+      [DamageType.MISSILE]: 0xa7d9ff,
+      [DamageType.FIRE]: 0xff6622,
+      [DamageType.ELECTRIC]: 0x8cc7ff,
+      [DamageType.RADIATION]: 0xb4ff66,
+    }
+    const coreColor = damageType ? (flashColors[damageType] ?? 0xffee66) : 0xffee66
 
     this.muzzleFlash.clear()
     this.muzzleFlash.setVisible(true)
-    this.muzzleFlash.lineStyle(2, 0xfff06a, 0.95)
+    // Layered tracer for readability in busy fights.
+    this.muzzleFlash.lineStyle(3, coreColor, 0.28)
     this.muzzleFlash.lineBetween(muzzleX, muzzleY, muzzleX + dirX * len, muzzleY + dirY * len)
-    this.muzzleFlash.fillStyle(0xffee66, 0.95)
-    this.muzzleFlash.fillCircle(muzzleX, muzzleY, 3)
-    this.weaponFxTimer = 80
+    this.muzzleFlash.lineStyle(1.5, 0xffffff, 0.9)
+    this.muzzleFlash.lineBetween(muzzleX, muzzleY, muzzleX + dirX * (len * 0.7), muzzleY + dirY * (len * 0.7))
+    this.muzzleFlash.fillStyle(coreColor, 0.95)
+    this.muzzleFlash.fillCircle(muzzleX, muzzleY, 3.6)
+    this.muzzleFlash.fillStyle(0xffffff, 0.95)
+    this.muzzleFlash.fillCircle(muzzleX, muzzleY, 1.5)
+    this.weaponFxTimer = 100
   }
 
   private playHarvestScoopFx(isGems: boolean): void {
