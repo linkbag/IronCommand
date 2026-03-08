@@ -48,6 +48,16 @@ type TargetChoice = {
   entityId?: string
 }
 
+type AIStrategicDoctrine = 'economy' | 'power' | 'production' | 'collapse'
+
+type EnemyMacroIntel = {
+  combatUnits: number
+  productionBuildings: number
+  refineries: number
+  powerBuildings: number
+  lowPowerPlayers: number
+}
+
 // ── Constants ──────────────────────────────────────────────────
 
 const TICK_INTERVAL: Record<AIDifficulty, number> = {
@@ -139,6 +149,23 @@ const DANGER_ZONE_TTL_MS = 120000
 const DANGER_ZONE_DECAY_PER_TICK = 0.93
 const FOCUS_FIRE_INTERVAL_MS = 900
 const MAP_CONTROL_INTERVAL_MS = 15000
+const SCOUT_REVISIT_MS = 90000
+const OPPORTUNISTIC_FORCE_RATIO = 1.28
+const OPPORTUNISTIC_MIN_ARMY: Record<AIDifficulty, number> = {
+  easy: 8,
+  medium: 7,
+  hard: 6,
+}
+const MIN_HOME_GARRISON: Record<AIDifficulty, number> = {
+  easy: 1,
+  medium: 3,
+  hard: 5,
+}
+const MAX_DEFENDER_COMMIT: Record<AIDifficulty, number> = {
+  easy: 4,
+  medium: 8,
+  hard: 12,
+}
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -200,6 +227,8 @@ export class AI {
   private enemyHasAirSuperiority: boolean
   private enemyIsTurtling: boolean
   private enemyIsRushing: boolean
+  private strategicDoctrine: AIStrategicDoctrine
+  private enemyMacroIntel: EnemyMacroIntel
   private lastCredits: number
   private economySampleMs: number
   private incomeAccum: number
@@ -214,6 +243,7 @@ export class AI {
   private unitKiteUntilMs: Map<string, number>
   private antiAirEmergencyUntilMs: number
   private lastEmergencySellMs: number
+  private scoutVisitMs: Map<string, number>
 
   private static readonly SW_COOLDOWNS: Record<string, number> = {
     nuclear_silo: 300000,
@@ -267,6 +297,14 @@ export class AI {
     this.enemyHasAirSuperiority = false
     this.enemyIsTurtling = false
     this.enemyIsRushing = false
+    this.strategicDoctrine = 'economy'
+    this.enemyMacroIntel = {
+      combatUnits: 0,
+      productionBuildings: 0,
+      refineries: 0,
+      powerBuildings: 0,
+      lowPowerPlayers: 0,
+    }
     this.lastCredits = this.economy.getCredits(this.playerId)
     this.economySampleMs = 0
     this.incomeAccum = 0
@@ -281,6 +319,7 @@ export class AI {
     this.unitKiteUntilMs = new Map()
     this.antiAirEmergencyUntilMs = 0
     this.lastEmergencySellMs = -EMERGENCY_SELL_COOLDOWN_MS
+    this.scoutVisitMs = new Map()
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -322,6 +361,8 @@ export class AI {
     this.updatePhase()
     this.updateBattlefieldIntel(gameState)
     this.assessEnemyComposition(gameState)
+    this.updateStrategicDoctrine(gameState)
+    this.ensureHarvesting(gameState)
     this.protectHarvesters(gameState)
     this.microSpecialUnits(gameState)
     this.handleAntiAirResponse(gameState)
@@ -566,6 +607,57 @@ export class AI {
     this.enemyIsRushing = this.matchTimer < 240000 && aggressionNearBase >= (this.difficulty === 'easy' ? 3 : 5)
     this.enemyHasAirSuperiority = aircraft >= Math.max(4, vehicles + 1)
 
+  }
+
+  private updateStrategicDoctrine(gameState: GameState): void {
+    let enemyCombat = 0
+    let enemyProd = 0
+    let enemyRef = 0
+    let enemyPower = 0
+    let enemyLowPowerPlayers = 0
+
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      const ps = this.economy.getPowerState(p.id)
+      const powerRatio = ps.generated <= 0 ? 0 : ps.generated / Math.max(1, ps.generated + ps.consumed)
+      if (ps.isLow || powerRatio < 0.62) enemyLowPowerPlayers++
+
+      enemyCombat += this.em.getUnitsForPlayer(p.id).filter(u => u.state !== 'dying' && !!u.def.attack).length
+      for (const b of this.em.getBuildingsForPlayer(p.id)) {
+        if (b.state === 'dying') continue
+        if (b.def.category === 'production') enemyProd++
+        if (b.def.category === 'power') enemyPower++
+        if (b.def.id === 'ore_refinery') enemyRef++
+      }
+    }
+
+    this.enemyMacroIntel = {
+      combatUnits: enemyCombat,
+      productionBuildings: enemyProd,
+      refineries: enemyRef,
+      powerBuildings: enemyPower,
+      lowPowerPlayers: enemyLowPowerPlayers,
+    }
+
+    const ownCombat = this.getCombatUnits().length
+    const forceRatio = ownCombat / Math.max(1, enemyCombat)
+
+    let doctrine: AIStrategicDoctrine = 'production'
+    if (enemyLowPowerPlayers > 0 && enemyPower >= 2 && forceRatio >= 0.9) {
+      doctrine = 'power'
+    } else if ((enemyRef >= 2 && this.phase !== 'late') || (this.phase === 'early' && enemyRef > 0)) {
+      doctrine = 'economy'
+    } else if (this.enemyIsTurtling || enemyProd >= 3) {
+      doctrine = 'production'
+    } else if (forceRatio >= OPPORTUNISTIC_FORCE_RATIO || this.matchTimer >= 9 * 60000) {
+      doctrine = 'collapse'
+    }
+
+    if (this.enemyIsRushing && this.phase === 'early' && doctrine === 'collapse') {
+      doctrine = 'economy'
+    }
+
+    this.strategicDoctrine = doctrine
   }
 
   // ── Economy / harvesting ─────────────────────────────────────
@@ -901,7 +993,8 @@ export class AI {
       })[0]
 
     const threatPos = { x: prioritized.enemy.x, y: prioritized.enemy.y }
-    const defenders = this.getCombatUnits().filter(u => !this.isUnitInRetreatingGroup(u.id))
+    const defenders = this.selectDefendersForThreat(threatPos, threatened.length)
+    if (defenders.length === 0) return
     this.issueFormationApproach(defenders, threatPos)
 
     const enemyStrength = threatened.length
@@ -912,6 +1005,51 @@ export class AI {
     }
 
     console.log(`[AI] Player ${this.playerId} defending base with ${defenders.length} units`)
+  }
+
+  private selectDefendersForThreat(threatPos: { x: number; y: number }, threatStrength: number): Unit[] {
+    const combat = this.getCombatUnits().filter(u => !this.isUnitInRetreatingGroup(u.id))
+    if (combat.length === 0) return []
+
+    const committed = this.getCommittedAttackUnitIds()
+    const nearThreatRadius = 8 * TILE_SIZE
+    let pool = combat.filter(u =>
+      !committed.has(u.id) || dist(u.x, u.y, threatPos.x, threatPos.y) <= nearThreatRadius,
+    )
+    if (pool.length === 0) {
+      pool = combat
+    }
+
+    pool.sort((a, b) =>
+      dist(a.x, a.y, threatPos.x, threatPos.y) - dist(b.x, b.y, threatPos.x, threatPos.y),
+    )
+
+    const baselineNeed = clamp(
+      threatStrength + (this.enemyIsRushing ? 2 : 1),
+      2,
+      MAX_DEFENDER_COMMIT[this.difficulty],
+    )
+    let desired = Math.min(pool.length, baselineNeed)
+    const keepReserve = MIN_HOME_GARRISON[this.difficulty]
+    const maxCommit = Math.max(1, combat.length - keepReserve)
+    if (threatStrength <= combat.length && desired > maxCommit) {
+      desired = maxCommit
+    }
+    return pool.slice(0, desired)
+  }
+
+  private getCommittedAttackUnitIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const group of this.activeAttackGroups) {
+      if (group.retreating) continue
+      for (const id of group.unitIds) ids.add(id)
+    }
+    if (this.pendingWave) {
+      for (const group of this.pendingWave.groups) {
+        for (const id of group.unitIds) ids.add(id)
+      }
+    }
+    return ids
   }
 
   // ── Army building ────────────────────────────────────────────
@@ -1183,9 +1321,35 @@ export class AI {
   }
 
   private findHarassTarget(gameState: GameState): { x: number; y: number } | null {
-    if (this.difficulty === 'hard') {
+    if (this.difficulty === 'hard' || this.strategicDoctrine === 'economy') {
       const hunted = this.findEnemyHarvesterTarget(gameState)
       if (hunted) return hunted
+    }
+
+    if (this.strategicDoctrine === 'power') {
+      for (const p of gameState.players) {
+        if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+        const powerBuildings = this.em.getBuildingsForPlayer(p.id).filter(
+          b => b.def.category === 'power' && b.state !== 'dying',
+        )
+        if (powerBuildings.length > 0) {
+          const target = powerBuildings[randomInt(0, powerBuildings.length - 1)]
+          return { x: target.x, y: target.y }
+        }
+      }
+    }
+
+    if (this.strategicDoctrine === 'production' || this.strategicDoctrine === 'collapse') {
+      for (const p of gameState.players) {
+        if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+        const producers = this.em.getBuildingsForPlayer(p.id).filter(
+          b => b.def.category === 'production' && b.state !== 'dying',
+        )
+        if (producers.length > 0) {
+          const target = producers[randomInt(0, producers.length - 1)]
+          return { x: target.x, y: target.y }
+        }
+      }
     }
 
     for (const p of gameState.players) {
@@ -1224,20 +1388,21 @@ export class AI {
       return
     }
 
-    if (this.matchTimer < FIRST_ATTACK_MS[this.difficulty]) return
-    if (this.matchTimer < this.rebuildUntilMs) return
-    if (this.attackTimer < this.nextAttackWindowMs) return
+    const opportunistic = this.shouldLaunchOpportunisticAttack(combatUnits.length)
+    if (!opportunistic && this.matchTimer < FIRST_ATTACK_MS[this.difficulty]) return
+    if (!opportunistic && this.matchTimer < this.rebuildUntilMs) return
+    if (!opportunistic && this.attackTimer < this.nextAttackWindowMs) return
 
     const target = this.findAttackTarget(gameState)
     if (!target) return
 
-    const waveSizeTarget = this.getScaledWaveSize(combatUnits.length)
+    const waveSizeTarget = this.getScaledWaveSize(combatUnits.length, opportunistic)
     if (waveSizeTarget <= 0) return
 
     const waveUnits = this.pickWaveUnits(combatUnits, waveSizeTarget)
     if (waveUnits.length === 0) return
     const fallback = this.getFallbackPosition()
-    if (fallback && waveUnits.length < 7 && this.isRouteHighRisk(fallback, target)) {
+    if (fallback && waveUnits.length < 7 && this.isRouteHighRisk(fallback, target) && !opportunistic) {
       return
     }
 
@@ -1272,7 +1437,12 @@ export class AI {
     this.isAttacking = true
     this.attackTimer = 0
     this.waveCount++
-    this.nextAttackWindowMs = this.nextAttackWindow()
+    this.nextAttackWindowMs = opportunistic
+      ? randomInt(
+        Math.floor(ATTACK_INTERVAL_MS[this.difficulty].min * 0.85),
+        ATTACK_INTERVAL_MS[this.difficulty].max,
+      )
+      : this.nextAttackWindow()
 
     console.log(
       `[AI] Player ${this.playerId} staged attack (${waveUnits.length} units, ${groups.length} prong(s), wave ${waveId})`,
@@ -1299,8 +1469,24 @@ export class AI {
     this.isAttacking = sent > 0
   }
 
-  private getScaledWaveSize(available: number): number {
+  private shouldLaunchOpportunisticAttack(ownCombatUnits: number): boolean {
+    if (ownCombatUnits < OPPORTUNISTIC_MIN_ARMY[this.difficulty]) return false
+
+    const enemyCombat = this.enemyMacroIntel.combatUnits
+    const forceRatio = ownCombatUnits / Math.max(1, enemyCombat)
+    if (this.enemyMacroIntel.lowPowerPlayers > 0 && forceRatio >= 0.9) return true
+    if (forceRatio >= OPPORTUNISTIC_FORCE_RATIO) return true
+    if (this.strategicDoctrine === 'economy' && this.enemyMacroIntel.refineries >= 2 && forceRatio >= 1.05) return true
+    return false
+  }
+
+  private getScaledWaveSize(available: number, opportunistic = false): number {
     const cfg = ATTACK_WAVE_SIZE[this.difficulty]
+    if (opportunistic) {
+      const burstMin = Math.max(4, cfg.min - (this.difficulty === 'hard' ? 2 : 1))
+      const burstMax = Math.max(burstMin + 1, Math.floor(cfg.max * 0.65))
+      return Math.min(available, randomInt(burstMin, burstMax))
+    }
     const elapsedMinutes = this.matchTimer / 60000
     const timeScale = Math.min(1, elapsedMinutes / 10)
     const waveScale = Math.min(1, this.waveCount / 6)
@@ -1407,7 +1593,51 @@ export class AI {
       addRandom(fallback, desiredSize - selected.length)
     }
 
-    return selected
+    return this.stabilizeWaveComposition(selected, units, desiredSize)
+  }
+
+  private stabilizeWaveComposition(selected: Unit[], allUnits: Unit[], desiredSize: number): Unit[] {
+    const out = [...selected]
+    const used = new Set(out.map(u => u.id))
+
+    const replaceForCapability = (
+      need: (u: Unit) => boolean,
+      replaceable: (u: Unit) => boolean,
+    ): void => {
+      if (out.some(need)) return
+      const candidate = allUnits.find(u => !used.has(u.id) && need(u))
+      if (!candidate) return
+
+      const replaceIdx = out.findIndex(replaceable)
+      if (replaceIdx >= 0) {
+        used.delete(out[replaceIdx].id)
+        out[replaceIdx] = candidate
+        used.add(candidate.id)
+        return
+      }
+
+      if (out.length < desiredSize) {
+        out.push(candidate)
+        used.add(candidate.id)
+      }
+    }
+
+    const hasAntiAir = (u: Unit) => !!u.def.attack?.canAttackAir
+    const hasSiege = (u: Unit) => (u.def.attack?.range ?? 0) >= 8 || u.def.id === 'v3_launcher' || u.def.id === 'prism_tank'
+    const isFrontline = (u: Unit) => u.def.category === 'vehicle' && (u.def.attack?.range ?? 0) <= 6
+    const lightInfantry = (u: Unit) => u.def.category === 'infantry'
+
+    if (this.enemyComposition.aircraft >= 3 || this.enemyHasAirSuperiority) {
+      replaceForCapability(hasAntiAir, lightInfantry)
+    }
+    if (this.enemyIsTurtling || this.strategicDoctrine === 'production') {
+      replaceForCapability(hasSiege, lightInfantry)
+    }
+    if (desiredSize >= 7) {
+      replaceForCapability(isFrontline, lightInfantry)
+    }
+
+    return out.slice(0, desiredSize)
   }
 
   private computeStagingPoint(
@@ -1464,8 +1694,10 @@ export class AI {
       )
     }
 
-    // Economy starvation: harvesters first when available.
-    if (enemyHarvesters.length > 0 && this.difficulty !== 'easy') {
+    // Economy doctrine: starve harvest income first, unless we're explicitly power-sniping.
+    const economyPressure =
+      this.strategicDoctrine === 'economy' || (this.phase === 'early' && this.difficulty !== 'easy')
+    if (enemyHarvesters.length > 0 && economyPressure && this.strategicDoctrine !== 'power') {
       const sortedHarvesters = enemyHarvesters
         .slice()
         .sort((a, b) => this.getDangerScore(a.x, a.y) - this.getDangerScore(b.x, b.y))
@@ -1481,6 +1713,7 @@ export class AI {
 
     for (const b of allEnemyBuildings) {
       let score = this.getBuildingStrategicValue(b)
+      score += this.getDoctrineScoreBonus(b)
       if (ownAnchor) {
         const travelPenalty = dist(ownAnchor.x, ownAnchor.y, b.x, b.y) / (20 * TILE_SIZE)
         score -= travelPenalty
@@ -1498,6 +1731,30 @@ export class AI {
 
     if (!best) return null
     return { x: best.x, y: best.y, entityId: best.id }
+  }
+
+  private getDoctrineScoreBonus(b: Building): number {
+    switch (this.strategicDoctrine) {
+      case 'economy':
+        if (b.def.id === 'ore_refinery') return 8
+        if (b.def.category === 'production') return 2
+        return 0
+      case 'power':
+        if (b.def.category === 'power') return 10
+        if (b.def.category === 'production') return 2
+        return 0
+      case 'production':
+        if (b.def.category === 'production') return 9
+        if (b.def.id === 'construction_yard') return 5
+        return 0
+      case 'collapse':
+        if (b.def.id === 'construction_yard') return 10
+        if (b.def.category === 'tech') return 6
+        if (b.def.category === 'production') return 4
+        return 0
+      default:
+        return 0
+    }
   }
 
   private getBuildingStrategicValue(b: Building): number {
@@ -2030,17 +2287,62 @@ export class AI {
     )
     if (!fastUnit) return
 
+    const targets = this.buildScoutTargets(gameState)
+    if (targets.length === 0) return
+
+    targets.sort((a, b) => this.getScoutTargetScore(b) - this.getScoutTargetScore(a))
+    const topN = Math.min(3, targets.length)
+    const target = targets[randomInt(0, topN - 1)]
+    fastUnit.giveOrder({ type: 'move', target })
+    this.scoutVisitMs.set(this.getScoutTargetKey(target), this.matchTimer)
+  }
+
+  private buildScoutTargets(gameState: GameState): Array<{ x: number; y: number }> {
+    const targets: Array<{ x: number; y: number }> = []
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      const highValue = this.em.getBuildingsForPlayer(p.id).filter(
+        b =>
+          b.state !== 'dying' &&
+          (b.def.id === 'construction_yard' || b.def.id === 'ore_refinery' || b.def.category === 'production'),
+      )
+      for (const b of highValue) targets.push({ x: b.x, y: b.y })
+    }
+
+    targets.push(...this.getOreFieldAnchors(gameState, 4))
+
     const mapW = gameState.map.width * TILE_SIZE
     const mapH = gameState.map.height * TILE_SIZE
-    const corners = [
+    targets.push(
       { x: TILE_SIZE, y: TILE_SIZE },
       { x: mapW - TILE_SIZE, y: TILE_SIZE },
       { x: TILE_SIZE, y: mapH - TILE_SIZE },
       { x: mapW - TILE_SIZE, y: mapH - TILE_SIZE },
-    ]
+      { x: mapW * 0.5, y: mapH * 0.5 },
+    )
 
-    const target = corners[randomInt(0, corners.length - 1)]
-    fastUnit.giveOrder({ type: 'move', target })
+    const deduped: Array<{ x: number; y: number }> = []
+    for (const point of targets) {
+      if (deduped.some(d => dist(d.x, d.y, point.x, point.y) <= 3 * TILE_SIZE)) continue
+      deduped.push(point)
+    }
+    return deduped
+  }
+
+  private getScoutTargetKey(target: { x: number; y: number }): string {
+    const tx = Math.round(target.x / TILE_SIZE)
+    const ty = Math.round(target.y / TILE_SIZE)
+    return `${tx}:${ty}`
+  }
+
+  private getScoutTargetScore(target: { x: number; y: number }): number {
+    const key = this.getScoutTargetKey(target)
+    const lastSeenMs = this.scoutVisitMs.get(key) ?? -SCOUT_REVISIT_MS
+    const sinceLastScout = this.matchTimer - lastSeenMs
+    let score = sinceLastScout
+    if (this.isPointContested(target.x, target.y)) score += 25000
+    score -= this.getDangerScore(target.x, target.y) * 12000
+    return score
   }
 
   // ── Hard-mode multi-prong ────────────────────────────────────
