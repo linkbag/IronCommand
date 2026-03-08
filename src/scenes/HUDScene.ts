@@ -24,6 +24,12 @@ const BTN_GAP         = 4
 const BTN_PAD         = 6
 const SELECTED_H      = 90
 const ACTION_H        = 30
+const UNIT_SHORTCUT_BAR_H = 54
+const UNIT_SHORTCUT_BTN_H = 42
+const UNIT_SHORTCUT_BTN_MIN_W = 24
+const UNIT_SHORTCUT_BTN_MAX_W = 54
+const UNIT_SHORTCUT_BTN_GAP = 4
+const UNIT_SHORTCUT_BTN_PAD = 8
 const MAX_ALERTS      = 3
 const ALERT_SPACING   = 34
 
@@ -79,6 +85,16 @@ interface BuildBtn extends Phaser.GameObjects.Container {
   _hotkeyTxt: Phaser.GameObjects.Text
   _hotkey: string
   _hoverTween?: Phaser.Tweens.Tween
+}
+
+interface UnitShortcutBtn extends Phaser.GameObjects.Container {
+  _defId: string
+  _bg: Phaser.GameObjects.Graphics
+  _countTxt: Phaser.GameObjects.Text
+  _labelTxt: Phaser.GameObjects.Text
+  _btnW: number
+  _btnH: number
+  _isHovered: boolean
 }
 
 // ── Dynamic build catalogue based on faction side ──────────────────────
@@ -198,6 +214,13 @@ export class HUDScene extends Phaser.Scene {
   // ── Selection groups ──────────────────────────────────────────────
   private selGroups: Map<number, string[]> = new Map()
   private tabHotkeys: string[] = ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O']
+  private unitShortcutBg!: Phaser.GameObjects.Graphics
+  private unitShortcutBtns: UnitShortcutBtn[] = []
+  private unitShortcutZones: Phaser.GameObjects.Zone[] = []
+  private localUnitTypeCounts: Map<string, number> = new Map()
+  private localUnitTypeCountsVersion = -1
+  private activeUnitShortcutDefId: string | null = null
+  private unitShortcutOverflowTxt?: Phaser.GameObjects.Text
 
   constructor() {
     super({ key: 'HUDScene' })
@@ -233,6 +256,7 @@ export class HUDScene extends Phaser.Scene {
     this.buildTabs()
     this.buildSelectedPanel()
     this.buildActionButtons()
+    this.buildUnitTypeShortcutBar()
     this.buildAlertSystem()
     this.buildGhost()
     this.setupKeys()
@@ -259,6 +283,7 @@ export class HUDScene extends Phaser.Scene {
     this.tickMinimap()
     this.tickBuildProgress(delta)
     this.tickSuperweapons(delta)
+    this.tickUnitTypeShortcutBar()
     this.tickSelectedInfo()
     this.tickGhost()
   }
@@ -1429,6 +1454,219 @@ export class HUDScene extends Phaser.Scene {
     })
   }
 
+  private buildUnitTypeShortcutBar() {
+    const barW = this.sidebarX - 8
+    if (barW <= 0) return
+
+    const barX = 4
+    const barY = this.scale.height - UNIT_SHORTCUT_BAR_H - 4
+    this.unitShortcutBg = this.add.graphics().setDepth(118)
+    this.unitShortcutBg.fillStyle(0x0a1222, 0.88)
+    this.unitShortcutBg.fillRect(barX, barY, barW, UNIT_SHORTCUT_BAR_H)
+    this.unitShortcutBg.lineStyle(1, HUD_BORDER, 0.75)
+    this.unitShortcutBg.strokeRect(barX, barY, barW, UNIT_SHORTCUT_BAR_H)
+    this.unitShortcutBg.lineStyle(1, HUD_ACCENT, 0.22)
+    this.unitShortcutBg.lineBetween(barX + 1, barY + 1, barX + barW - 1, barY + 1)
+
+    this.add.text(barX + 6, barY + 2, 'UNIT TYPES', {
+      fontFamily: 'monospace',
+      fontSize: '8px',
+      color: '#6f87aa',
+    }).setDepth(119)
+  }
+
+  private tickUnitTypeShortcutBar() {
+    const version = this.registry.get('playerUnitTypeCountsVersion') as number | undefined
+    const rawCounts = this.registry.get('playerUnitTypeCounts') as Record<string, number> | undefined
+    let countsChanged = false
+
+    if (typeof version === 'number' && version !== this.localUnitTypeCountsVersion) {
+      this.localUnitTypeCountsVersion = version
+      this.localUnitTypeCounts.clear()
+      if (rawCounts) {
+        for (const [defId, count] of Object.entries(rawCounts)) {
+          if (!UNIT_DEFS[defId] || count <= 0) continue
+          this.localUnitTypeCounts.set(defId, Math.floor(count))
+        }
+      }
+      countsChanged = true
+    }
+
+    if (countsChanged) {
+      this.rebuildUnitTypeShortcutButtons()
+    }
+
+    const selectedIds = (this.registry.get('selectedIds') as string[]) ?? []
+    const activeDefId = this.getActiveUnitShortcutDefId(selectedIds)
+    if (activeDefId !== this.activeUnitShortcutDefId) {
+      this.activeUnitShortcutDefId = activeDefId
+      this.unitShortcutBtns.forEach(btn => this.drawUnitTypeShortcutButton(btn))
+    }
+  }
+
+  private getActiveUnitShortcutDefId(selectedIds: string[]): string | null {
+    if (selectedIds.length === 0) return null
+    type SelEntity = { type: string; defId: string; playerId: number }
+    const em = this.registry.get('entityMgr') as { getEntity(id: string): SelEntity | undefined } | undefined
+    if (!em) return null
+
+    let selectedDefId: string | null = null
+    for (const id of selectedIds) {
+      const entity = em.getEntity(id)
+      if (!entity || entity.type !== 'unit' || entity.playerId !== 0) return null
+      if (selectedDefId === null) {
+        selectedDefId = entity.defId
+      } else if (selectedDefId !== entity.defId) {
+        return null
+      }
+    }
+    if (!selectedDefId) return null
+    const totalOwned = this.localUnitTypeCounts.get(selectedDefId) ?? 0
+    if (totalOwned <= 0) return null
+    return selectedIds.length === totalOwned ? selectedDefId : null
+  }
+
+  private rebuildUnitTypeShortcutButtons() {
+    this.unitShortcutBtns.forEach(btn => btn.destroy())
+    this.unitShortcutZones.forEach(zone => zone.destroy())
+    this.unitShortcutOverflowTxt?.destroy()
+    this.unitShortcutBtns = []
+    this.unitShortcutZones = []
+    this.unitShortcutOverflowTxt = undefined
+
+    const entries = this.getSortedUnitTypeCounts()
+    if (entries.length === 0) return
+
+    const barX = 4
+    const barY = this.scale.height - UNIT_SHORTCUT_BAR_H - 4
+    const barW = this.sidebarX - 8
+    const innerW = Math.max(1, barW - UNIT_SHORTCUT_BTN_PAD * 2)
+
+    let btnW = Math.floor((innerW - UNIT_SHORTCUT_BTN_GAP * Math.max(0, entries.length - 1)) / entries.length)
+    btnW = Phaser.Math.Clamp(btnW, UNIT_SHORTCUT_BTN_MIN_W, UNIT_SHORTCUT_BTN_MAX_W)
+    const capacity = Math.max(1, Math.floor((innerW + UNIT_SHORTCUT_BTN_GAP) / (btnW + UNIT_SHORTCUT_BTN_GAP)))
+    const visibleEntries = entries.slice(0, capacity)
+
+    visibleEntries.forEach((entry, idx) => {
+      const cx = barX + UNIT_SHORTCUT_BTN_PAD + idx * (btnW + UNIT_SHORTCUT_BTN_GAP) + btnW / 2
+      const cy = barY + UNIT_SHORTCUT_BAR_H / 2 + 2
+      const ctr = this.add.container(cx, cy).setDepth(120) as UnitShortcutBtn
+      const bg = this.add.graphics()
+      const icon = this.add.graphics()
+      const iconScale = btnW <= 28 ? 0.55 : btnW <= 34 ? 0.72 : btnW <= 42 ? 0.86 : 1
+      icon.setScale(iconScale)
+      this.drawBuildIcon(icon, entry.defId, this.getBuildTabForUnitShortcut(entry.defId))
+
+      const maxChars = Math.max(2, Math.floor((btnW - 6) / 5))
+      const shortLabel = this.getShortName(entry.defId).slice(0, maxChars)
+      const labelTxt = this.add.text(0, -UNIT_SHORTCUT_BTN_H / 2 + 9, shortLabel, {
+        fontFamily: 'monospace',
+        fontSize: btnW <= 30 ? '6px' : '7px',
+        color: '#9bb0cc',
+      }).setOrigin(0.5)
+      const countTxt = this.add.text(0, UNIT_SHORTCUT_BTN_H / 2 - 9, `${entry.count}`, {
+        fontFamily: 'monospace',
+        fontSize: '8px',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 2,
+      }).setOrigin(0.5)
+
+      ctr.add([bg, icon, labelTxt, countTxt])
+      ctr._defId = entry.defId
+      ctr._bg = bg
+      ctr._countTxt = countTxt
+      ctr._labelTxt = labelTxt
+      ctr._btnW = btnW
+      ctr._btnH = UNIT_SHORTCUT_BTN_H
+      ctr._isHovered = false
+      this.drawUnitTypeShortcutButton(ctr)
+      this.unitShortcutBtns.push(ctr)
+
+      const zone = this.add.zone(cx, cy, btnW, UNIT_SHORTCUT_BTN_H).setInteractive({ cursor: 'pointer' })
+      zone.setDepth(121)
+      zone.on('pointerover', () => {
+        ctr._isHovered = true
+        this.drawUnitTypeShortcutButton(ctr)
+      })
+      zone.on('pointerout', () => {
+        ctr._isHovered = false
+        this.drawUnitTypeShortcutButton(ctr)
+      })
+      zone.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
+        if ((ptr.button ?? 0) !== 0) return
+        const gs = this.scene.get('GameScene')
+        if (gs) gs.events.emit('quickSelectUnitType', { defId: entry.defId })
+      })
+      this.unitShortcutZones.push(zone)
+    })
+
+    if (entries.length > capacity) {
+      const hiddenCount = entries.length - capacity
+      this.unitShortcutOverflowTxt = this.add.text(
+        barX + barW - 6,
+        barY + UNIT_SHORTCUT_BAR_H - 10,
+        `+${hiddenCount}`,
+        {
+          fontFamily: 'monospace',
+          fontSize: '8px',
+          color: '#6f87aa',
+        },
+      ).setOrigin(1, 0.5).setDepth(119)
+    }
+  }
+
+  private getSortedUnitTypeCounts(): Array<{ defId: string; count: number }> {
+    const categoryOrder: Record<string, number> = {
+      infantry: 0,
+      vehicle: 1,
+      harvester: 2,
+      aircraft: 3,
+      naval: 4,
+    }
+
+    return Array.from(this.localUnitTypeCounts.entries())
+      .filter(([defId, count]) => count > 0 && !!UNIT_DEFS[defId])
+      .map(([defId, count]) => ({ defId, count }))
+      .sort((a, b) => {
+        const aDef = UNIT_DEFS[a.defId]
+        const bDef = UNIT_DEFS[b.defId]
+        const aCat = categoryOrder[aDef.category] ?? 99
+        const bCat = categoryOrder[bDef.category] ?? 99
+        if (aCat !== bCat) return aCat - bCat
+        return aDef.name.localeCompare(bDef.name)
+      })
+  }
+
+  private drawUnitTypeShortcutButton(btn: UnitShortcutBtn) {
+    const active = btn._defId === this.activeUnitShortcutDefId
+    const hover = btn._isHovered
+    const g = btn._bg
+    const w = btn._btnW
+    const h = btn._btnH
+    g.clear()
+
+    const fill = active ? 0x123626 : hover ? 0x223a63 : 0x111f36
+    const border = active ? 0x4ade80 : hover ? 0x8cb2ff : HUD_BORDER
+    g.fillStyle(fill, active ? 0.98 : 0.9)
+    g.fillRect(-w / 2, -h / 2, w, h)
+    g.fillStyle(0xffffff, active ? 0.1 : 0.05)
+    g.fillRect(-w / 2 + 1, -h / 2 + 1, w - 2, 8)
+    g.lineStyle(active ? 2 : 1, border, 0.95)
+    g.strokeRect(-w / 2, -h / 2, w, h)
+
+    btn._labelTxt.setColor(active ? '#c5ffd9' : '#9bb0cc')
+    btn._countTxt.setColor(active ? '#4ade80' : '#ffffff')
+  }
+
+  private getBuildTabForUnitShortcut(defId: string): BuildTab {
+    const def = UNIT_DEFS[defId]
+    if (!def) return 'vehicles'
+    if (def.category === 'infantry') return 'infantry'
+    if (def.category === 'aircraft') return 'aircraft'
+    return 'vehicles'
+  }
+
   // ── EVA alerts ───────────────────────────────────────────────────────
   private buildAlertSystem() {
     // Alerts created dynamically in showAlert()
@@ -1739,7 +1977,9 @@ export class HUDScene extends Phaser.Scene {
             const now = Date.now()
             const lastTap = lastGroupTap.get(n) ?? 0
 
-            this.registry.set('selectedIds', [...group])
+            const gs = this.scene.get('GameScene')
+            if (gs) gs.events.emit('setSelection', { ids: [...group] })
+            else this.registry.set('selectedIds', [...group])
 
             // Double-tap: center camera on group
             if (now - lastTap < 400) {
