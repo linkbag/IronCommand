@@ -227,7 +227,8 @@ export const GEMS_TILE_MAX = 3000       // max gems amount per tile
 export const ORE_HARVEST_VALUE = ORE_PER_LOAD
 export const GEMS_HARVEST_VALUE = GEMS_PER_LOAD
 export const ORE_HARVEST_RATE = 100     // ore units extracted per load
-export const ORE_REGEN_RATE = 10        // ore units regenerated per tick (10% of mining speed)
+export const ORE_RECOVERY_RATIO = 0.01  // hard-lock ore recovery to 1% of ore miner mining speed
+export const ORE_REGEN_RATE = ORE_HARVEST_RATE * ORE_RECOVERY_RATIO
 export const NEUTRAL_PLAYER_ID = -1     // neutral/capturable buildings
 
 export type MapTemplate = 'continental' | 'islands' | 'desert' | 'arctic' | 'urban' | 'random'
