@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-07 22:39*
+*Last updated: 2026-03-08 04:06*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -126,3 +126,7 @@ Clean implementation. TypeScript passes (exit 0). Two transient Graphics objects
 ### Update: 2026-03-07 22:39
 ### codex-ic-bldg-symbols — 2026-03-07 22:39
 One issue found and fixed: a leftover console.log in updateCombat() that fired every time grand_cannon attacked. Removed the 8-line debug block. All other checks passed — no per-frame drawBody calls, no TypeScript errors (tsc --noEmit clean), getBuildingFunction() is called only on state changes (not per-frame), drawing primitives are correct, overlay z-order is correct (drawn after drawBuildingDetails in the same bodyGraphic pass), unknown building categories fall back to factory safely. Build passes cleanly.
+
+### Update: 2026-03-08 04:06
+### codex-ic-combat-anim-minimap-alert — 2026-03-08 04:06
+All 5 changed files reviewed. TypeScript and Vite build pass clean. unit_damaged event pipeline is correct, isEnemy guard exists, minimap ping rendering has all variables in scope, Graphics objects are destroyed in tween onComplete (no leaks), muzzle flash correctly fires for both hitscan and projectile paths, prevX/prevY tracer motion-alignment is correct. building_damaged handler correctly uses localPlayerId instead of hardcoded 0.
