@@ -7,6 +7,7 @@ import Phaser from 'phaser'
 import type { Player, GameState, FactionSide } from '../types'
 import { FogState, TILE_SIZE } from '../types'
 import { FACTIONS } from '../data/factions'
+import { getPlayerSlotColor } from '../data/playerSlots'
 import { UNIT_DEFS, getAvailableUnitIds } from '../entities/UnitDefs'
 import { BUILDING_DEFS, getAvailableBuildingIds, NEUTRAL_BUILDING_IDS, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
 import { cartToScreen, screenToCart, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from '../engine/IsoUtils'
@@ -1922,6 +1923,11 @@ export class HUDScene extends Phaser.Scene {
     } | undefined
     if (em) {
       const localId = this.gameState?.localPlayerId ?? 0
+      const playerColors = new Map<number, number>(
+        (this.gameState?.players ?? []).map((p) => [p.id, p.color])
+      )
+      const getMinimapPlayerColor = (playerId: number): number =>
+        playerColors.get(playerId) ?? getPlayerSlotColor(playerId)
       em.getAllEntities().forEach(e => {
         if (!e.isAlive) return
 
@@ -1934,8 +1940,7 @@ export class HUDScene extends Phaser.Scene {
           if (fog === FogState.HIDDEN) return
         }
 
-        const isEnemy = em.isEnemy(localId, e.playerId)
-        const color = isEnemy ? MINIMAP_ENEMY_COLOR : MINIMAP_ALLY_COLOR
+        const color = getMinimapPlayerColor(e.playerId)
         const tc = Phaser.Math.Clamp(e.x / TILE_SIZE, 0, map.width)
         const tr = Phaser.Math.Clamp(e.y / TILE_SIZE, 0, map.height)
         const mx = ox + (tc / map.width) * this.mmW
@@ -1956,21 +1961,20 @@ export class HUDScene extends Phaser.Scene {
       // Explicitly render building footprints as tinted rectangles for readability.
       for (const b of em.getAllBuildings()) {
         if (!b.isAlive) continue
-        const isOwn = b.playerId === localId
-        const isEnemy = em.isEnemy(localId, b.playerId)
-        if (!isOwn && map.tiles) {
+        if (b.playerId !== localId && map.tiles) {
           const tc = Math.floor(b.x / TILE_SIZE)
           const tr = Math.floor(b.y / TILE_SIZE)
           const fog = map.tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
           if (fog === FogState.HIDDEN) continue
         }
+        const color = getMinimapPlayerColor(b.playerId)
         const tc = Phaser.Math.Clamp(b.x / TILE_SIZE, 0, map.width)
         const tr = Phaser.Math.Clamp(b.y / TILE_SIZE, 0, map.height)
         const mx = ox + (tc / map.width) * this.mmW
         const my = oy + (tr / map.height) * this.mmH
         const fw = Math.max(2, ((b.def?.footprint?.w ?? 2) / map.width) * this.mmW)
         const fh = Math.max(2, ((b.def?.footprint?.h ?? 2) / map.height) * this.mmH)
-        g.lineStyle(1, isEnemy ? MINIMAP_ENEMY_OUTLINE : MINIMAP_ALLY_OUTLINE, 0.9)
+        g.lineStyle(1, color, 0.9)
         g.strokeRect(mx - fw / 2, my - fh / 2, fw, fh)
       }
     }

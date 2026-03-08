@@ -18,6 +18,7 @@ import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, Fact
 import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL_PLAYER_ID } from '../types'
 import { cartToScreen, screenToCart, getIsoWorldBounds } from '../engine/IsoUtils'
 import { FACTIONS } from '../data/factions'
+import { MAX_AI_PLAYERS, getPlayerSlotColor } from '../data/playerSlots'
 import type { SkirmishConfig } from './skirmishConfig'
 import { createDefaultSkirmishConfig, isMapRevealEnabled } from './skirmishConfig'
 
@@ -28,8 +29,6 @@ const ACK_LINES: Record<string, string[]> = {
   aircraft: ['Airborne!', 'Wilco', 'Roger that'],
   harvester: ['Returning', 'Harvesting', 'On my way'],
 }
-const PLAYER_TINT = 0x4488ff
-const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff, 0x44cc44, 0xffdd00, 0x44dddd, 0xff66aa] // red, orange, purple, green, yellow, cyan, pink
 const PRODUCER_BUILDING_IDS = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery'] as const
 const HUD_SIDEBAR_W = 220
 const DEFAULT_CURSOR = 'default'
@@ -259,19 +258,20 @@ export class GameScene extends Phaser.Scene {
     const playerFaction = cfg.playerFaction
     const factionKeys = Object.keys(FACTIONS) as FactionId[]
 
+    const aiCount = Phaser.Math.Clamp(Math.floor(cfg.aiCount || 1), 1, MAX_AI_PLAYERS)
     const humanPlayer: Player = {
       id: 0, name: 'Commander', faction: playerFaction,
-      color: PLAYER_TINT, credits: cfg.startingCredits,
+      color: getPlayerSlotColor(0), credits: cfg.startingCredits,
       power: 0, powerGenerated: 0, powerConsumed: 0,
       isAI: false, isDefeated: false, entities: [], buildQueue: [],
     }
 
     aiPlayers = []
-    for (let i = 0; i < cfg.aiCount; i++) {
+    for (let i = 0; i < aiCount; i++) {
       const fac = factionKeys[(factionKeys.indexOf(playerFaction) + i + 1) % factionKeys.length]
       aiPlayers.push({
         id: i + 1, name: `AI ${i + 1}`, faction: fac,
-        color: AI_TINTS[i] ?? 0xff4444, credits: cfg.startingCredits,
+        color: getPlayerSlotColor(i + 1), credits: cfg.startingCredits,
         power: 0, powerGenerated: 0, powerConsumed: 0,
         isAI: true, isDefeated: false, entities: [], buildQueue: [],
       })

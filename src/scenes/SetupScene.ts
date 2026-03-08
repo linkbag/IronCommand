@@ -7,6 +7,7 @@ import Phaser from 'phaser'
 import type { FactionId } from '../types'
 import { TILE_SIZE } from '../types'
 import { FACTIONS, FACTION_IDS } from '../data/factions'
+import { MAX_AI_PLAYERS, getPlayerSlotColor, playerColorToCss } from '../data/playerSlots'
 import { generatePreviewData, PREVIEW_COLORS } from '../engine/GameMap'
 import { MAP_VISIBILITY_OPTIONS, createDefaultSkirmishConfig } from './skirmishConfig'
 import type { SkirmishConfig, MapVisibility } from './skirmishConfig'
@@ -86,6 +87,8 @@ export class SetupScene extends Phaser.Scene {
   }
 
   create() {
+    this.config.aiCount = Phaser.Math.Clamp(Math.floor(this.config.aiCount || 1), 1, MAX_AI_PLAYERS)
+    this.sanitizeAllyPlayerIds()
     const { width, height } = this.scale
 
     this.createBackground(width, height)
@@ -457,7 +460,7 @@ export class SetupScene extends Phaser.Scene {
       this.regeneratePreview()
     })
     plusZone.on('pointerdown', () => {
-      this.config.aiCount = Math.min(3, this.config.aiCount + 1)
+      this.config.aiCount = Math.min(MAX_AI_PLAYERS, this.config.aiCount + 1)
       this.aiCountText.setText(`${this.config.aiCount}`)
       this.sanitizeAllyPlayerIds()
       this.refreshAllianceRows()
@@ -478,24 +481,30 @@ export class SetupScene extends Phaser.Scene {
     })
     cy += 20
 
-    const rowH = 32
-    for (let aiId = 1; aiId <= 3; aiId++) {
-      const rowX = settingsX + 8
-      const rowY = cy + (aiId - 1) * (rowH + 4)
-      const rowW = stepperW - 16
+    const rowH = 24
+    const rowGap = 4
+    const colGap = 8
+    const cols = 2
+    const colW = Math.floor((stepperW - colGap) / cols)
+    const toggleW = 74
+    for (let aiId = 1; aiId <= MAX_AI_PLAYERS; aiId++) {
+      const idx = aiId - 1
+      const col = idx % cols
+      const row = Math.floor(idx / cols)
+      const rowX = panelX + 10 + col * (colW + colGap)
+      const rowY = cy + row * (rowH + rowGap)
       const rowBg = this.add.graphics()
       const label = this.add.text(rowX + 8, rowY + rowH / 2, `AI ${aiId}`, {
         fontFamily: 'monospace',
-        fontSize: '11px',
-        color: '#bbbbbb',
+        fontSize: '10px',
+        color: playerColorToCss(getPlayerSlotColor(aiId)),
       }).setOrigin(0, 0.5)
 
-      const toggleW = Math.max(84, Math.min(100, rowW - 84))
-      const toggleX = rowX + rowW - toggleW - 8
+      const toggleX = rowX + colW - toggleW - 4
       const toggleBg = this.add.graphics()
       const toggleText = this.add.text(toggleX + toggleW / 2, rowY + rowH / 2, '', {
         fontFamily: 'monospace',
-        fontSize: '11px',
+        fontSize: '10px',
         color: '#ffffff',
       }).setOrigin(0.5)
 
@@ -522,7 +531,7 @@ export class SetupScene extends Phaser.Scene {
         zone,
         rowX,
         rowY,
-        rowW,
+        rowW: colW,
         rowH,
         toggleX,
         toggleW,
@@ -532,6 +541,7 @@ export class SetupScene extends Phaser.Scene {
   }
 
   private sanitizeAllyPlayerIds() {
+    this.config.aiCount = Phaser.Math.Clamp(Math.floor(this.config.aiCount || 1), 1, MAX_AI_PLAYERS)
     const maxAllies = Math.max(0, this.config.aiCount - 1)
     this.config.allyPlayerIds = this.config.allyPlayerIds
       .filter(id => Number.isInteger(id) && id >= 1 && id <= this.config.aiCount)
@@ -541,29 +551,31 @@ export class SetupScene extends Phaser.Scene {
 
   private refreshAllianceRows() {
     this.sanitizeAllyPlayerIds()
-    for (let aiId = 1; aiId <= 3; aiId++) {
+    for (let aiId = 1; aiId <= MAX_AI_PLAYERS; aiId++) {
       const row = this.allianceRows.get(aiId)
       if (!row) continue
 
       const visible = aiId <= this.config.aiCount
       const isAlly = this.config.allyPlayerIds.includes(aiId)
+      const slotColor = getPlayerSlotColor(aiId)
       row.rowBg.clear()
       row.toggleBg.clear()
 
       if (visible) {
         row.rowBg.fillStyle(STYLE.btnNormal, 1)
         row.rowBg.fillRect(row.rowX, row.rowY, row.rowW, row.rowH)
-        row.rowBg.lineStyle(1, STYLE.panelBorder, 1)
+        row.rowBg.lineStyle(1, slotColor, 0.5)
         row.rowBg.strokeRect(row.rowX, row.rowY, row.rowW, row.rowH)
 
         row.toggleBg.fillStyle(isAlly ? STYLE.selectedBg : STYLE.btnNormal, 1)
         row.toggleBg.fillRect(row.toggleX, row.rowY, row.toggleW, row.rowH)
-        row.toggleBg.lineStyle(1, isAlly ? STYLE.selected : STYLE.panelBorder, 1)
+        row.toggleBg.lineStyle(1, isAlly ? STYLE.selected : slotColor, isAlly ? 1 : 0.7)
         row.toggleBg.strokeRect(row.toggleX, row.rowY, row.toggleW, row.rowH)
       }
 
       row.toggleText.setText(isAlly ? 'ALLY' : 'ENEMY')
-      row.toggleText.setColor(isAlly ? '#e94560' : '#778899')
+      row.label.setColor(playerColorToCss(slotColor))
+      row.toggleText.setColor(isAlly ? '#e94560' : playerColorToCss(slotColor))
 
       row.rowBg.setVisible(visible)
       row.label.setVisible(visible)
@@ -821,13 +833,13 @@ export class SetupScene extends Phaser.Scene {
       const sx = pw + (sp.x / (mapSize * TILE_SIZE)) * previewSize
       const sy = ph + (sp.y / (mapSize * TILE_SIZE)) * previewSize
       const isSelected = this.config.playerSpawn === i
-      const isRandom = this.config.playerSpawn === -1
+      const slotColor = playerColorToCss(getPlayerSlotColor(i))
 
       const marker = this.add.text(sx, sy, `${i + 1}`, {
         fontFamily: 'monospace',
         fontSize: '12px',
-        color: isSelected ? '#e94560' : (isRandom ? '#ffffff' : '#778899'),
-        stroke: '#000000',
+        color: slotColor,
+        stroke: isSelected ? '#ffffff' : '#000000',
         strokeThickness: 3,
       }).setOrigin(0.5)
 
