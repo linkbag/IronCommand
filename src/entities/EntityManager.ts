@@ -417,6 +417,9 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     unit.on('unit_ready_to_remove', (u: Unit) => {
       this.removeEntity(u.id)
     })
+    unit.on('unit_damaged', (payload: { unit: Unit; sourcePlayerId: number; amount: number }) => {
+      this.emit('unit_damaged', payload)
+    })
 
     // Provide nearby enemy resolution
     unit.on('find_enemy', (
