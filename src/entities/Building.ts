@@ -628,6 +628,10 @@ export class Building extends Phaser.GameObjects.Container {
     dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
     visualType: FacilityVisualType,
   ): void {
+    if (this.state === 'constructing') {
+      this.statusText.setVisible(false)
+      return
+    }
     const label = this.getFacilityLabel(visualType)
     const fontSize = Math.max(12, Math.min(30, Math.round(dims.halfW * 0.45)))
     this.statusText.setText(label)
