@@ -18,6 +18,77 @@ function adjustBrightness(color: number, amount: number): number {
   return (r << 16) | (g << 8) | b
 }
 
+type BuildingFunction = 'factory' | 'barracks' | 'power' | 'refinery' | 'radar' | 'lab' | 'defense'
+
+interface BuildingSymbolSchema {
+  plateMix: number
+  ringMix: number
+  iconMix: number
+  iconScale: number
+  yOffset: number
+}
+
+const BUILDING_FUNCTION_BY_ID: Record<string, BuildingFunction> = {
+  war_factory: 'factory',
+  naval_shipyard: 'factory',
+  air_force_command: 'factory',
+  construction_yard: 'factory',
+
+  barracks: 'barracks',
+  cloning_vats: 'barracks',
+
+  power_plant: 'power',
+  tesla_reactor: 'power',
+  nuclear_reactor: 'power',
+
+  ore_refinery: 'refinery',
+  ore_purifier: 'refinery',
+  oil_derrick: 'refinery',
+
+  radar_tower: 'radar',
+  spy_satellite: 'radar',
+  psychic_sensor: 'radar',
+  gap_generator: 'radar',
+
+  battle_lab: 'lab',
+  tech_center: 'lab',
+  neutral_hospital: 'lab',
+  neutral_repair_depot: 'lab',
+  service_depot: 'lab',
+
+  fortress_wall: 'defense',
+  pillbox: 'defense',
+  sentry_gun: 'defense',
+  prism_tower: 'defense',
+  patriot_missile: 'defense',
+  grand_cannon: 'defense',
+  tesla_coil: 'defense',
+  flak_cannon: 'defense',
+  nuclear_silo: 'defense',
+  weather_device: 'defense',
+  iron_curtain: 'defense',
+  chronosphere: 'defense',
+}
+
+const BUILDING_FUNCTION_KEYWORDS: Array<{ pattern: RegExp; fn: BuildingFunction }> = [
+  { pattern: /barracks|cloning/i, fn: 'barracks' },
+  { pattern: /refinery|ore|derrick/i, fn: 'refinery' },
+  { pattern: /radar|sensor|satellite|gap/i, fn: 'radar' },
+  { pattern: /lab|tech|hospital|repair|depot/i, fn: 'lab' },
+  { pattern: /power|reactor/i, fn: 'power' },
+  { pattern: /factory|yard|air_force/i, fn: 'factory' },
+]
+
+const BUILDING_SYMBOL_SCHEMAS: Record<BuildingFunction, BuildingSymbolSchema> = {
+  factory: { plateMix: 0.18, ringMix: 0.58, iconMix: 0.68, iconScale: 1, yOffset: -0.18 },
+  barracks: { plateMix: 0.14, ringMix: 0.64, iconMix: 0.72, iconScale: 1.02, yOffset: -0.2 },
+  power: { plateMix: 0.16, ringMix: 0.62, iconMix: 0.76, iconScale: 1, yOffset: -0.2 },
+  refinery: { plateMix: 0.18, ringMix: 0.56, iconMix: 0.7, iconScale: 1, yOffset: -0.18 },
+  radar: { plateMix: 0.14, ringMix: 0.66, iconMix: 0.74, iconScale: 1.08, yOffset: -0.22 },
+  lab: { plateMix: 0.16, ringMix: 0.6, iconMix: 0.74, iconScale: 0.98, yOffset: -0.2 },
+  defense: { plateMix: 0.2, ringMix: 0.52, iconMix: 0.66, iconScale: 1.03, yOffset: -0.18 },
+}
+
 export class Building extends Phaser.GameObjects.Container {
   readonly id: string
   readonly playerId: number
@@ -370,22 +441,13 @@ export class Building extends Phaser.GameObjects.Container {
     const g = this.bodyGraphic
     g.clear()
     const dims = this.getIsoDims()
-    console.log('[Building.drawBody] iso box coords', {
-      id: this.def.id,
-      halfW: dims.halfW,
-      halfH: dims.halfH,
-      wallH: dims.wallH,
-      baseY: dims.baseY,
-      topY: dims.topY,
-      northTop: { x: 0, y: dims.topY - dims.halfH },
-      southBottom: { x: 0, y: dims.baseY + dims.halfH },
-    })
     this.drawDropShadow(dims)
     const pct = this.hp / this.def.stats.maxHp
     const palette = this.getBuildingPalette(pct)
 
     this.drawIsoBox(g, dims, palette)
     this.drawBuildingDetails(g, dims)
+    this.drawFunctionOverlay(g, dims, pct)
     this.drawDamageOverlay(pct)
 
     if (this.state === 'low_power') {
@@ -574,6 +636,167 @@ export class Building extends Phaser.GameObjects.Container {
     if (this.def.id === 'tesla_coil' || this.def.id === 'prism_tower') {
       g.fillStyle(0x9fd2ff, 0.92)
       g.fillRect(-3, roofY - hh * 1.2, 6, 12)
+    }
+  }
+
+  private getBuildingFunction(): BuildingFunction {
+    const id = this.def.id
+    const mapped = BUILDING_FUNCTION_BY_ID[id]
+    if (mapped) return mapped
+
+    for (const rule of BUILDING_FUNCTION_KEYWORDS) {
+      if (rule.pattern.test(id)) return rule.fn
+    }
+
+    if (this.def.attack || this.def.category === 'defense' || this.def.category === 'superweapon') return 'defense'
+    switch (this.def.category) {
+      case 'power':
+        return 'power'
+      case 'production':
+        return 'factory'
+      case 'tech':
+        return 'lab'
+      default:
+        return 'factory'
+    }
+  }
+
+  private drawFunctionOverlay(
+    g: Phaser.GameObjects.Graphics,
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    healthPct: number,
+  ): void {
+    const fn = this.getBuildingFunction()
+    const schema = BUILDING_SYMBOL_SCHEMAS[fn]
+    const size = Phaser.Math.Clamp(dims.halfH * 0.95 * schema.iconScale, 10, 16)
+    const centerX = 0
+    const centerY = dims.topY + dims.halfH * schema.yOffset
+    const plateHalfW = size * 0.95
+    const plateHalfH = size * 0.56
+
+    let plateColor = this.blendColors(0x101216, this.factionColor, schema.plateMix)
+    let ringColor = this.blendColors(this.factionColor, 0xffffff, schema.ringMix)
+    let iconColor = this.blendColors(this.factionColor, 0xffffff, schema.iconMix)
+    if (this.state === 'low_power') {
+      plateColor = this.blendColors(plateColor, 0x584e3f, 0.35)
+      ringColor = adjustBrightness(ringColor, -26)
+      iconColor = adjustBrightness(iconColor, -18)
+    }
+    if (healthPct < 0.5) {
+      plateColor = adjustBrightness(plateColor, -20)
+      ringColor = adjustBrightness(ringColor, -18)
+      iconColor = adjustBrightness(iconColor, -18)
+    }
+
+    const plate = [
+      new Phaser.Geom.Point(centerX, centerY - plateHalfH),
+      new Phaser.Geom.Point(centerX + plateHalfW, centerY),
+      new Phaser.Geom.Point(centerX, centerY + plateHalfH),
+      new Phaser.Geom.Point(centerX - plateHalfW, centerY),
+    ]
+    g.fillStyle(0x000000, 0.28)
+    g.fillPoints(
+      plate.map((p) => new Phaser.Geom.Point(p.x, p.y + 1.4)),
+      true,
+    )
+    g.fillStyle(plateColor, 0.94)
+    g.fillPoints(plate, true)
+    g.lineStyle(1.4, ringColor, 0.95)
+    g.lineBetween(centerX, centerY - plateHalfH, centerX + plateHalfW, centerY)
+    g.lineBetween(centerX + plateHalfW, centerY, centerX, centerY + plateHalfH)
+    g.lineBetween(centerX, centerY + plateHalfH, centerX - plateHalfW, centerY)
+    g.lineBetween(centerX - plateHalfW, centerY, centerX, centerY - plateHalfH)
+
+    const strokeColor = adjustBrightness(plateColor, -44)
+    this.drawFunctionIcon(g, fn, centerX, centerY, size, iconColor, strokeColor)
+  }
+
+  private drawFunctionIcon(
+    g: Phaser.GameObjects.Graphics,
+    fn: BuildingFunction,
+    cx: number,
+    cy: number,
+    size: number,
+    iconColor: number,
+    strokeColor: number,
+  ): void {
+    switch (fn) {
+      case 'factory': {
+        const w = size * 0.22
+        g.fillStyle(iconColor, 0.94)
+        g.fillRect(cx - size * 0.45, cy - size * 0.14, w, size * 0.46)
+        g.fillRect(cx - w * 0.5, cy - size * 0.26, w, size * 0.58)
+        g.fillRect(cx + size * 0.23, cy - size * 0.06, w, size * 0.38)
+        g.lineStyle(1.2, strokeColor, 0.85)
+        g.lineBetween(cx - size * 0.5, cy + size * 0.34, cx + size * 0.5, cy + size * 0.34)
+        break
+      }
+      case 'barracks': {
+        g.lineStyle(1.8, iconColor, 0.95)
+        g.lineBetween(cx - size * 0.5, cy + size * 0.22, cx, cy - size * 0.4)
+        g.lineBetween(cx, cy - size * 0.4, cx + size * 0.5, cy + size * 0.22)
+        g.strokeRect(cx - size * 0.33, cy - size * 0.04, size * 0.66, size * 0.34)
+        g.fillStyle(strokeColor, 0.88)
+        g.fillRect(cx - size * 0.07, cy + size * 0.1, size * 0.14, size * 0.2)
+        break
+      }
+      case 'power': {
+        const bolt = [
+          new Phaser.Geom.Point(cx - size * 0.12, cy - size * 0.46),
+          new Phaser.Geom.Point(cx + size * 0.12, cy - size * 0.46),
+          new Phaser.Geom.Point(cx - size * 0.02, cy - size * 0.08),
+          new Phaser.Geom.Point(cx + size * 0.2, cy - size * 0.08),
+          new Phaser.Geom.Point(cx - size * 0.15, cy + size * 0.5),
+          new Phaser.Geom.Point(cx - size * 0.05, cy + size * 0.11),
+          new Phaser.Geom.Point(cx - size * 0.26, cy + size * 0.11),
+        ]
+        g.fillStyle(iconColor, 0.95)
+        g.fillPoints(bolt, true)
+        g.lineStyle(1.1, strokeColor, 0.85)
+        g.lineBetween(cx - size * 0.12, cy - size * 0.46, cx - size * 0.15, cy + size * 0.5)
+        break
+      }
+      case 'refinery': {
+        g.fillStyle(iconColor, 0.9)
+        g.fillRect(cx - size * 0.46, cy - size * 0.16, size * 0.56, size * 0.38)
+        g.fillCircle(cx + size * 0.24, cy + size * 0.02, size * 0.2)
+        g.lineStyle(1.5, strokeColor, 0.9)
+        g.lineBetween(cx + size * 0.02, cy + size * 0.18, cx + size * 0.46, cy + size * 0.18)
+        g.lineBetween(cx + size * 0.46, cy + size * 0.18, cx + size * 0.46, cy - size * 0.24)
+        break
+      }
+      case 'radar': {
+        g.lineStyle(1.6, iconColor, 0.95)
+        g.strokeEllipse(cx, cy + size * 0.08, size * 0.72, size * 0.48)
+        g.strokeEllipse(cx, cy + size * 0.08, size * 1.02, size * 0.68)
+        g.lineBetween(cx, cy + size * 0.08, cx + size * 0.4, cy - size * 0.28)
+        g.fillStyle(iconColor, 0.95)
+        g.fillCircle(cx, cy + size * 0.08, size * 0.09)
+        break
+      }
+      case 'lab': {
+        g.fillStyle(iconColor, 0.94)
+        g.fillRect(cx - size * 0.09, cy - size * 0.44, size * 0.18, size * 0.16)
+        const flask = [
+          new Phaser.Geom.Point(cx - size * 0.28, cy - size * 0.24),
+          new Phaser.Geom.Point(cx + size * 0.28, cy - size * 0.24),
+          new Phaser.Geom.Point(cx + size * 0.17, cy + size * 0.38),
+          new Phaser.Geom.Point(cx - size * 0.17, cy + size * 0.38),
+        ]
+        g.fillPoints(flask, true)
+        g.fillStyle(strokeColor, 0.88)
+        g.fillRect(cx - size * 0.18, cy + size * 0.08, size * 0.36, size * 0.12)
+        break
+      }
+      case 'defense': {
+        g.lineStyle(1.7, iconColor, 0.95)
+        g.strokeEllipse(cx, cy, size * 0.8, size * 0.56)
+        g.lineBetween(cx - size * 0.44, cy, cx + size * 0.44, cy)
+        g.lineBetween(cx, cy - size * 0.3, cx, cy + size * 0.3)
+        g.fillStyle(iconColor, 0.95)
+        g.fillCircle(cx, cy, size * 0.1)
+        break
+      }
     }
   }
 
