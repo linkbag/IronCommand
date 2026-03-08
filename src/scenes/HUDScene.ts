@@ -47,6 +47,10 @@ const HUD_GOLD    = 0xffd700
 const POWER_GREEN  = 0x44cc44
 const POWER_YELLOW = 0xcccc44
 const POWER_RED    = 0xcc4444
+const MINIMAP_ALLY_COLOR = 0x39d97a
+const MINIMAP_ENEMY_COLOR = 0xe94560
+const MINIMAP_ALLY_OUTLINE = 0x88ffb0
+const MINIMAP_ENEMY_OUTLINE = 0xff9ab0
 
 // ── Types ──────────────────────────────────────────────────────────────
 type BuildTab   = 'buildings' | 'defenses' | 'infantry' | 'vehicles' | 'aircraft'
@@ -67,6 +71,13 @@ interface AlertEntry {
   container: Phaser.GameObjects.Container
   tween?: Phaser.Tweens.Tween
   createdAt: number
+}
+
+interface MinimapAttackPing {
+  worldX: number
+  worldY: number
+  startedAt: number
+  expiresAt: number
 }
 
 // Extended container reference
@@ -184,6 +195,7 @@ export class HUDScene extends Phaser.Scene {
   private mmTerrainGfx!: Phaser.GameObjects.Graphics
   private mmW = SIDEBAR_W - 8
   private mmH = MINIMAP_H
+  private minimapAttackPings: MinimapAttackPing[] = []
 
   // ── Dynamic build catalogue ──────────────────────────────────────
   private buildItems: BuildableItem[] = []
@@ -228,6 +240,7 @@ export class HUDScene extends Phaser.Scene {
 
     this.buildSidebarBg(width, height)
     this.buildMinimap()
+    this.minimapAttackPings = []
     this.buildPlayerInfo()
     this.buildPowerBar()
     this.buildTabs()
@@ -1648,6 +1661,9 @@ export class HUDScene extends Phaser.Scene {
     this.events.on('underAttack', () => {
       this.showAlert('Our base is under attack!', 'danger')
     })
+    this.events.on('minimapAttackPing', (d: { x: number; y: number }) => {
+      this.addMinimapAttackPing(d.x, d.y)
+    })
   }
 
   private setupKeys() {
@@ -1879,6 +1895,7 @@ export class HUDScene extends Phaser.Scene {
     const em = this.registry.get('entityMgr') as {
       getAllEntities(): E[]
       getAllBuildings(): E[]
+      isEnemy(playerA: number, playerB: number): boolean
     } | undefined
     if (em) {
       const localId = this.gameState?.localPlayerId ?? 0
@@ -1894,8 +1911,8 @@ export class HUDScene extends Phaser.Scene {
           if (fog === FogState.HIDDEN) return
         }
 
-        // RA2 minimap colors: own blue, enemy red.
-        const color = isOwn ? 0x4488ff : 0xe94560
+        const isEnemy = em.isEnemy(localId, e.playerId)
+        const color = isEnemy ? MINIMAP_ENEMY_COLOR : MINIMAP_ALLY_COLOR
         const tc = Phaser.Math.Clamp(e.x / TILE_SIZE, 0, map.width)
         const tr = Phaser.Math.Clamp(e.y / TILE_SIZE, 0, map.height)
         const mx = ox + (tc / map.width) * this.mmW
@@ -1917,6 +1934,7 @@ export class HUDScene extends Phaser.Scene {
       for (const b of em.getAllBuildings()) {
         if (!b.isAlive) continue
         const isOwn = b.playerId === localId
+        const isEnemy = em.isEnemy(localId, b.playerId)
         if (!isOwn && map.tiles) {
           const tc = Math.floor(b.x / TILE_SIZE)
           const tr = Math.floor(b.y / TILE_SIZE)
@@ -1929,8 +1947,32 @@ export class HUDScene extends Phaser.Scene {
         const my = oy + (tr / map.height) * this.mmH
         const fw = Math.max(2, ((b.def?.footprint?.w ?? 2) / map.width) * this.mmW)
         const fh = Math.max(2, ((b.def?.footprint?.h ?? 2) / map.height) * this.mmH)
-        g.lineStyle(1, isOwn ? 0x77aaff : 0xff8899, 0.9)
+        g.lineStyle(1, isEnemy ? MINIMAP_ENEMY_OUTLINE : MINIMAP_ALLY_OUTLINE, 0.9)
         g.strokeRect(mx - fw / 2, my - fh / 2, fw, fh)
+      }
+    }
+
+    const now = this.time.now
+    this.minimapAttackPings = this.minimapAttackPings.filter(p => p.expiresAt > now)
+    for (const ping of this.minimapAttackPings) {
+      const life = Math.max(1, ping.expiresAt - ping.startedAt)
+      const t = Phaser.Math.Clamp((now - ping.startedAt) / life, 0, 1)
+      const alpha = 1 - t
+      const px = Phaser.Math.Clamp(ping.worldX, 0, mapW)
+      const py = Phaser.Math.Clamp(ping.worldY, 0, mapH)
+      const mx = ox + (px / mapW) * this.mmW
+      const my = oy + (py / mapH) * this.mmH
+      const outerRadius = 2 + t * 8
+
+      g.lineStyle(1.4, 0xff7744, alpha * 0.95)
+      g.strokeCircle(mx, my, outerRadius)
+      g.fillStyle(0xffaa66, alpha * 0.28)
+      g.fillCircle(mx, my, 1.2 + t * 0.3)
+
+      if (t < 0.62) {
+        const t2 = t / 0.62
+        g.lineStyle(1, 0xffcc88, (1 - t2) * 0.55)
+        g.strokeCircle(mx, my, 1.2 + t2 * 5.2)
       }
     }
 
@@ -1950,6 +1992,35 @@ export class HUDScene extends Phaser.Scene {
     const vh = Math.max(1, ((bottomCart - topCart) / mapH) * this.mmH)
     g.lineStyle(1, 0xffffff, 0.6)
     g.strokeRect(vx, vy, vw, vh)
+  }
+
+  private addMinimapAttackPing(worldX: number, worldY: number): void {
+    const now = this.time.now
+    const mergeWindowMs = 240
+    const mergeRadiusPx = TILE_SIZE * 2.5
+    const existing = this.minimapAttackPings.find(p =>
+      now - p.startedAt < mergeWindowMs &&
+      Phaser.Math.Distance.Between(p.worldX, p.worldY, worldX, worldY) <= mergeRadiusPx
+    )
+
+    if (existing) {
+      existing.worldX = (existing.worldX + worldX) * 0.5
+      existing.worldY = (existing.worldY + worldY) * 0.5
+      existing.startedAt = now
+      existing.expiresAt = now + 900
+      return
+    }
+
+    if (this.minimapAttackPings.length >= 10) {
+      this.minimapAttackPings.shift()
+    }
+
+    this.minimapAttackPings.push({
+      worldX,
+      worldY,
+      startedAt: now,
+      expiresAt: now + 900,
+    })
   }
 
   private tickBuildProgress(delta: number) {

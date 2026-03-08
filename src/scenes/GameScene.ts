@@ -31,6 +31,28 @@ const ACK_LINES: Record<string, string[]> = {
 const PLAYER_TINT = 0x4488ff
 const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff, 0x44cc44, 0xffdd00, 0x44dddd, 0xff66aa] // red, orange, purple, green, yellow, cyan, pink
 const PRODUCER_BUILDING_IDS = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery'] as const
+const HUD_SIDEBAR_W = 220
+const DEFAULT_CURSOR = 'default'
+const ENEMY_HOVER_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Ccircle cx='10' cy='10' r='6.5' fill='none' stroke='%23ff3b3b' stroke-width='2'/%3E%3Cpath d='M10 1v4M10 15v4M1 10h4M15 10h4' stroke='%23ff3b3b' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") 10 10, auto`
+const MOVE_TRAJECTORY_DURATION_MS = 1400
+const MOVE_TRAJECTORY_MAX_LINES = 64
+const MOVE_MARKER_DURATION_MS = 640
+const MOVE_FEEDBACK_DEDUPE_MS = 100
+const MOVE_MARKER_RING_COLOR = 0x66f6ff
+const MOVE_MARKER_CROSS_COLOR = 0xd9fdff
+
+type MoveTrajectoryLine = {
+  unitId: string
+  target: Position
+  createdAtMs: number
+  durationMs: number
+}
+
+type MoveOrderMarker = {
+  target: Position
+  createdAtMs: number
+  durationMs: number
+}
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
@@ -75,12 +97,19 @@ export class GameScene extends Phaser.Scene {
   // ── Selection ───────────────────────────────────────────────
   private selectionRect!: Phaser.GameObjects.Graphics
   private rallyOverlay!: Phaser.GameObjects.Graphics
+  private moveTrajectoryOverlay?: Phaser.GameObjects.Graphics
+  private moveTrajectoryLines: MoveTrajectoryLine[] = []
+  private moveOrderMarker: MoveOrderMarker | null = null
+  private lastMoveFeedbackSignature = ''
+  private lastMoveFeedbackAtMs = -Infinity
   private selectedIds: Set<string> = new Set()
   private selectionPulseTweens: Map<string, Phaser.Tweens.Tween> = new Map()
 
   // ── Last alert position (for Space key) ────────────────────
   private lastAlertPos: Position | null = null
   private lastUnderAttackAlertMs = 0
+  private lastMinimapAttackPingMs = 0
+  private minimapAttackPingBucketMs: Map<string, number> = new Map()
   private fogAnchorSources: Array<{ pos: TileCoord; range: number }> = []
   private playerSpawnIndexById: Map<number, number> = new Map()
   private waypointMode = false
@@ -96,6 +125,7 @@ export class GameScene extends Phaser.Scene {
   private pauseText?: Phaser.GameObjects.Text
   private blockerNudgeCooldownMs: Map<string, number> = new Map()
   private forceFullMapReveal = false
+  private enemyHoverCursorActive = false
 
   constructor() {
     super({ key: 'GameScene' })
@@ -119,6 +149,8 @@ export class GameScene extends Phaser.Scene {
     this.selectionPulseTweens = new Map()
     this.lastAlertPos = null
     this.lastUnderAttackAlertMs = 0
+    this.lastMinimapAttackPingMs = 0
+    this.minimapAttackPingBucketMs = new Map()
     this.fogAnchorSources = []
     this.playerSpawnIndexById = new Map()
     this.waypointMode = false
@@ -135,8 +167,15 @@ export class GameScene extends Phaser.Scene {
     this.pauseText?.destroy()
     this.pauseText = undefined
     this.rallyOverlay?.destroy()
+    this.moveTrajectoryOverlay?.destroy()
+    this.moveTrajectoryOverlay = undefined
+    this.moveTrajectoryLines = []
+    this.moveOrderMarker = null
+    this.lastMoveFeedbackSignature = ''
+    this.lastMoveFeedbackAtMs = -Infinity
     this.blockerNudgeCooldownMs = new Map()
     this.forceFullMapReveal = false
+    this.enemyHoverCursorActive = false
   }
 
   create() {
@@ -440,6 +479,8 @@ export class GameScene extends Phaser.Scene {
     this.selectionRect.setScrollFactor(0).setDepth(200)
     this.rallyOverlay = this.add.graphics()
     this.rallyOverlay.setScrollFactor(0).setDepth(190)
+    this.moveTrajectoryOverlay = this.add.graphics()
+    this.moveTrajectoryOverlay.setScrollFactor(0).setDepth(191)
     this.edgeFadeOverlay = this.add.graphics().setScrollFactor(0).setDepth(189)
 
     this.pauseOverlay = this.add.rectangle(
@@ -533,6 +574,10 @@ export class GameScene extends Phaser.Scene {
 
     // Prevent browser context menu on the game canvas
     this.game.canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault())
+    this.game.canvas.style.cursor = DEFAULT_CURSOR
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.game.canvas.style.cursor = DEFAULT_CURSOR
+    })
 
     this.cameras.main.fadeIn(500)
   }
@@ -571,6 +616,7 @@ export class GameScene extends Phaser.Scene {
     if (Math.abs(this.camY - this.camTargetY) < 0.4) this.camY = this.camTargetY
     this.cameras.main.setScroll(this.camX, this.camY)
     this.drawRallyOverlay()
+    this.drawMoveTrajectoryOverlay()
     this.drawEdgeBoundaryFade(Math.max(0, maxX), Math.max(0, maxY))
 
     // Pathfinder cache maintenance
@@ -610,6 +656,7 @@ export class GameScene extends Phaser.Scene {
 
     // Hide enemy entities in fog
     this.updateEntityVisibility()
+    this.updateHoverCursor()
 
     // Win/loss check (every 120 ticks ≈ 2s)
     if (this.gameState.tick % 120 === 0) {
@@ -720,17 +767,58 @@ export class GameScene extends Phaser.Scene {
       }
     })
 
+    this.entityMgr.on('unit_damaged', (payload: { unit: { playerId: number; x: number; y: number }; sourcePlayerId: number; amount: number }) => {
+      const u = payload.unit
+      if (u.playerId !== this.gameState.localPlayerId || payload.amount <= 0) return
+      this.handleLocalPlayerUnderAttack(u.x, u.y, payload.sourcePlayerId)
+    })
+
     // Building under attack — alert on damage with cooldown.
     this.entityMgr.on('building_damaged', (payload: { building: { playerId: number; x: number; y: number }; sourcePlayerId: number; amount: number }) => {
       const b = payload.building
-      if (b.playerId !== 0 || payload.amount <= 0) return
-      this.lastAlertPos = { x: b.x, y: b.y }
-      this.registry.set('lastAlertPos', this.lastAlertPos)
-      if (this.time.now - this.lastUnderAttackAlertMs < 3000) return
-      this.lastUnderAttackAlertMs = this.time.now
-      const hud = this.scene.get('HUDScene')
-      if (hud) hud.events.emit('underAttack')
+      if (b.playerId !== this.gameState.localPlayerId || payload.amount <= 0) return
+      this.handleLocalPlayerUnderAttack(b.x, b.y, payload.sourcePlayerId)
     })
+  }
+
+  private handleLocalPlayerUnderAttack(worldX: number, worldY: number, sourcePlayerId: number): void {
+    const localPlayerId = this.gameState.localPlayerId
+    if (!this.entityMgr.isEnemy(sourcePlayerId, localPlayerId)) return
+
+    this.lastAlertPos = { x: worldX, y: worldY }
+    this.registry.set('lastAlertPos', this.lastAlertPos)
+    this.emitMinimapAttackPing(worldX, worldY)
+
+    if (this.time.now - this.lastUnderAttackAlertMs < 3000) return
+    this.lastUnderAttackAlertMs = this.time.now
+    const hud = this.scene.get('HUDScene')
+    if (hud) hud.events.emit('underAttack')
+  }
+
+  private emitMinimapAttackPing(worldX: number, worldY: number): void {
+    const now = this.time.now
+    const globalCooldownMs = 300
+    const bucketCooldownMs = 1400
+    const staleBucketMs = 5500
+    const bucketSizePx = TILE_SIZE * 3
+    const bx = Math.floor(worldX / bucketSizePx)
+    const by = Math.floor(worldY / bucketSizePx)
+    const key = `${bx},${by}`
+
+    for (const [bucketKey, ts] of this.minimapAttackPingBucketMs.entries()) {
+      if (now - ts > staleBucketMs) {
+        this.minimapAttackPingBucketMs.delete(bucketKey)
+      }
+    }
+
+    const lastBucketPing = this.minimapAttackPingBucketMs.get(key) ?? -Infinity
+    if (now - this.lastMinimapAttackPingMs < globalCooldownMs) return
+    if (now - lastBucketPing < bucketCooldownMs) return
+
+    this.lastMinimapAttackPingMs = now
+    this.minimapAttackPingBucketMs.set(key, now)
+    const hud = this.scene.get('HUDScene')
+    if (hud) hud.events.emit('minimapAttackPing', { x: worldX, y: worldY })
   }
 
   // ── Economy event wiring ─────────────────────────────────────
@@ -889,10 +977,15 @@ export class GameScene extends Phaser.Scene {
 
     // Issue order from HUD (guard, stop, etc.)
     this.events.on('issueOrder', (data: { ids: string[]; type: string; target?: Position }) => {
+      const movedUnitIds: string[] = []
       for (const id of data.ids) {
         const unit = this.entityMgr.getUnit(id)
         if (!unit || unit.playerId !== 0) continue
         unit.giveOrder({ type: data.type as any, target: data.target })
+        if (data.type === 'move') movedUnitIds.push(unit.id)
+      }
+      if (data.type === 'move' && data.target && movedUnitIds.length > 0) {
+        this.triggerMoveFeedback(data.target, movedUnitIds)
       }
     })
 
@@ -1730,6 +1823,60 @@ export class GameScene extends Phaser.Scene {
     return screenToCart(ptr.worldX, ptr.worldY)
   }
 
+  private updateHoverCursor(): void {
+    const ptr = this.input.activePointer
+    const isInsideCanvas = !!ptr
+      && ptr.x >= 0
+      && ptr.y >= 0
+      && ptr.x < this.scale.width
+      && ptr.y < this.scale.height
+    if (!isInsideCanvas) {
+      this.setEnemyHoverCursor(false)
+      return
+    }
+
+    const isOverWorldView = ptr.x < this.scale.width - HUD_SIDEBAR_W
+    if (!isOverWorldView || this.cursorMode !== 'normal') {
+      this.setEnemyHoverCursor(false)
+      return
+    }
+
+    const { x, y } = this.ptrToCart(ptr)
+    this.setEnemyHoverCursor(this.isHoveringEnemyEntity(x, y))
+  }
+
+  private setEnemyHoverCursor(active: boolean): void {
+    if (this.enemyHoverCursorActive === active) return
+    this.enemyHoverCursorActive = active
+    this.game.canvas.style.cursor = active ? ENEMY_HOVER_CURSOR : DEFAULT_CURSOR
+  }
+
+  private isHoveringEnemyEntity(worldX: number, worldY: number): boolean {
+    const localId = this.gameState.localPlayerId ?? 0
+    const unitHitRadius = TILE_SIZE * 0.75
+
+    for (const unit of this.entityMgr.getAllUnits()) {
+      if (unit.state === 'dying' || !unit.visible) continue
+      if (!this.entityMgr.isEnemy(localId, unit.playerId)) continue
+      const dist = Phaser.Math.Distance.Between(worldX, worldY, unit.x, unit.y)
+      if (dist <= unitHitRadius) return true
+    }
+
+    for (const building of this.entityMgr.getAllBuildings()) {
+      if (building.state === 'dying' || !building.visible) continue
+      if (!this.entityMgr.isEnemy(localId, building.playerId)) continue
+      const bx = building.x
+      const by = building.y
+      const bw = building.def.footprint.w * TILE_SIZE
+      const bh = building.def.footprint.h * TILE_SIZE
+      if (worldX >= bx && worldX <= bx + bw && worldY >= by && worldY <= by + bh) {
+        return true
+      }
+    }
+
+    return false
+  }
+
   // ── Ctrl+click force fire ──────────────────────────────────────
 
   private handleForceAttack(ptr: Phaser.Input.Pointer): void {
@@ -1909,6 +2056,83 @@ export class GameScene extends Phaser.Scene {
     })
   }
 
+  private drawSegmentedMoveRing(
+    g: Phaser.GameObjects.Graphics,
+    cx: number,
+    cy: number,
+    radius: number,
+    alpha: number,
+  ): void {
+    const segments = 16
+    g.lineStyle(2, MOVE_MARKER_RING_COLOR, alpha)
+    for (let i = 0; i < segments; i += 2) {
+      const a0 = (i / segments) * Math.PI * 2
+      const a1 = ((i + 1) / segments) * Math.PI * 2
+      g.beginPath()
+      g.moveTo(cx + Math.cos(a0) * radius, cy + Math.sin(a0) * radius * 0.58)
+      g.lineTo(cx + Math.cos(a1) * radius, cy + Math.sin(a1) * radius * 0.58)
+      g.strokePath()
+    }
+  }
+
+  private drawMoveCrosshair(
+    g: Phaser.GameObjects.Graphics,
+    cx: number,
+    cy: number,
+    size: number,
+    alpha: number,
+  ): void {
+    const outer = size
+    const inner = size * 0.35
+    g.lineStyle(2, MOVE_MARKER_CROSS_COLOR, alpha)
+    g.lineBetween(cx - outer, cy, cx - inner, cy)
+    g.lineBetween(cx + inner, cy, cx + outer, cy)
+    g.lineBetween(cx, cy - outer, cx, cy - inner)
+    g.lineBetween(cx, cy + inner, cx, cy + outer)
+    g.lineStyle(1, MOVE_MARKER_CROSS_COLOR, alpha * 0.95)
+    g.strokeTriangle(cx, cy - outer - 4, cx - 3, cy - inner - 2, cx + 3, cy - inner - 2)
+    g.strokeTriangle(cx + outer + 4, cy, cx + inner + 2, cy - 3, cx + inner + 2, cy + 3)
+    g.strokeTriangle(cx, cy + outer + 4, cx - 3, cy + inner + 2, cx + 3, cy + inner + 2)
+    g.strokeTriangle(cx - outer - 4, cy, cx - inner - 2, cy - 3, cx - inner - 2, cy + 3)
+  }
+
+  private showMoveOrderMarker(targetX: number, targetY: number): void {
+    const clampedX = Phaser.Math.Clamp(targetX, TILE_SIZE * 0.5, this.gameMap.worldWidth - TILE_SIZE * 0.5)
+    const clampedY = Phaser.Math.Clamp(targetY, TILE_SIZE * 0.5, this.gameMap.worldHeight - TILE_SIZE * 0.5)
+    this.moveOrderMarker = {
+      target: { x: clampedX, y: clampedY },
+      createdAtMs: this.time.now,
+      durationMs: MOVE_MARKER_DURATION_MS,
+    }
+  }
+
+  private triggerMoveFeedback(target: Position, movedUnitIds: string[]): void {
+    if (movedUnitIds.length === 0) return
+
+    const validUnitIds: string[] = []
+    const seenIds = new Set<string>()
+    for (const id of movedUnitIds) {
+      if (seenIds.has(id)) continue
+      seenIds.add(id)
+      const unit = this.entityMgr.getUnit(id)
+      if (!unit || unit.playerId !== 0 || unit.state === 'dying') continue
+      validUnitIds.push(id)
+    }
+    if (validUnitIds.length === 0) return
+
+    const sortedIds = [...validUnitIds].sort()
+    const signature = `${Math.round(target.x)}:${Math.round(target.y)}|${sortedIds.join(',')}`
+    const now = this.time.now
+    if (signature === this.lastMoveFeedbackSignature && now - this.lastMoveFeedbackAtMs < MOVE_FEEDBACK_DEDUPE_MS) {
+      return
+    }
+    this.lastMoveFeedbackSignature = signature
+    this.lastMoveFeedbackAtMs = now
+
+    this.queueMoveTrajectoryLines(target, validUnitIds)
+    this.showMoveOrderMarker(target.x, target.y)
+  }
+
   private startDragSelect(ptr: Phaser.Input.Pointer): void {
     this.isLeftPointerActive = true
     this.isDragging = false
@@ -2050,6 +2274,7 @@ export class GameScene extends Phaser.Scene {
     const appendOrder = this.waypointMode
     let harvestIssued = false
     let moveIssued = false
+    const movedUnitIds: string[] = []
 
     // Compute formation offsets so units spread out around the target
     const unitIds = Array.from(this.selectedIds)
@@ -2070,9 +2295,11 @@ export class GameScene extends Phaser.Scene {
       } else {
         unit.giveOrder({ type: 'move', target: { x: worldX + offset.dx, y: worldY + offset.dy } }, appendOrder)
         moveIssued = true
+        movedUnitIds.push(unit.id)
       }
     })
 
+    if (moveIssued) this.triggerMoveFeedback({ x: worldX, y: worldY }, movedUnitIds)
     if (harvestIssued && !moveIssued) this.showUnitAck('Harvesting')
     else this.showUnitAck('Moving out')
   }
@@ -2169,6 +2396,95 @@ export class GameScene extends Phaser.Scene {
       g.lineStyle(1, 0xdaf5ff, alpha)
       g.strokeCircle(toX, toY, 6 + pulse * 2)
     }
+  }
+
+  private queueMoveTrajectoryLines(target: Position, unitIds: string[]): void {
+    if (unitIds.length === 0) return
+
+    const now = this.time.now
+    const newLines: MoveTrajectoryLine[] = []
+    for (const unitId of unitIds) {
+      const unit = this.entityMgr.getUnit(unitId)
+      if (!unit || unit.playerId !== 0) continue
+      newLines.push({
+        unitId,
+        target: { x: target.x, y: target.y },
+        createdAtMs: now,
+        durationMs: MOVE_TRAJECTORY_DURATION_MS,
+      })
+      if (newLines.length >= MOVE_TRAJECTORY_MAX_LINES) break
+    }
+    if (newLines.length === 0) return
+
+    this.moveTrajectoryLines.push(...newLines)
+    if (this.moveTrajectoryLines.length > MOVE_TRAJECTORY_MAX_LINES) {
+      this.moveTrajectoryLines.splice(0, this.moveTrajectoryLines.length - MOVE_TRAJECTORY_MAX_LINES)
+    }
+  }
+
+  private drawMoveTrajectoryOverlay(): void {
+    const g = this.moveTrajectoryOverlay
+    if (!g) return
+    g.clear()
+
+    const now = this.time.now
+    if (this.moveTrajectoryLines.length > 0) {
+      const activeLines: MoveTrajectoryLine[] = []
+      for (const line of this.moveTrajectoryLines) {
+        const ageMs = now - line.createdAtMs
+        if (ageMs >= line.durationMs) continue
+        const unit = this.entityMgr.getUnit(line.unitId)
+        if (!unit || unit.playerId !== 0 || unit.state === 'dying') continue
+        if (!this.selectedIds.has(line.unitId)) continue
+        activeLines.push(line)
+
+        const fade = 1 - ageMs / line.durationMs
+        const alpha = 0.08 + (fade * fade) * 0.25
+        const fromIso = cartToScreen(unit.x, unit.y)
+        const toIso = cartToScreen(line.target.x, line.target.y)
+        const fromX = fromIso.x - this.camX
+        const fromY = fromIso.y - this.camY
+        const toX = toIso.x - this.camX
+        const toY = toIso.y - this.camY
+
+        g.lineStyle(1, 0xd7f3ff, alpha)
+        g.beginPath()
+        g.moveTo(fromX, fromY)
+        g.lineTo(toX, toY)
+        g.strokePath()
+        g.fillStyle(0xd7f3ff, alpha * 0.6)
+        g.fillCircle(toX, toY, 1.5 + fade)
+      }
+      this.moveTrajectoryLines = activeLines
+    }
+
+    const marker = this.moveOrderMarker
+    if (!marker) return
+
+    const markerAgeMs = now - marker.createdAtMs
+    if (markerAgeMs >= marker.durationMs) {
+      this.moveOrderMarker = null
+      return
+    }
+
+    const progress = Phaser.Math.Clamp(markerAgeMs / marker.durationMs, 0, 1)
+    const fade = 1 - progress
+    const iso = cartToScreen(marker.target.x, marker.target.y)
+    const cx = iso.x - this.camX
+    const cy = iso.y - this.camY
+
+    const ringRadius = 10 + 18 * Phaser.Math.Easing.Cubic.Out(progress)
+    const ringAlpha = 0.15 + (fade * fade) * 0.75
+    this.drawSegmentedMoveRing(g, cx, cy, ringRadius, ringAlpha)
+
+    const crossAlpha = progress < 0.25
+      ? Phaser.Math.Clamp(progress / 0.25, 0, 1)
+      : Phaser.Math.Clamp(1 - ((progress - 0.25) / 0.75), 0, 1)
+    const crossSize = 8 + 5 * (1 - progress * 0.5)
+    this.drawMoveCrosshair(g, cx, cy, crossSize, crossAlpha)
+
+    g.fillStyle(MOVE_MARKER_RING_COLOR, fade * 0.2)
+    g.fillCircle(cx, cy, 2 + 3 * fade)
   }
 
   private updateSelectionPulse(): void {
