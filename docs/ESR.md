@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 05:09*
+*Last updated: 2026-03-08 10:45*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -162,3 +162,8 @@ Two issues found and fixed: (1) dead abbrev field in BuildableItem removed — i
 ### Update: 2026-03-08 05:09
 ### codex-ic-mcv-deploy-undeploy — 2026-03-08 05:09
 All changes compile cleanly (tsc --noEmit: zero errors). Deploy/pack loop is logically sound: footprint validation, unit-blocking check, tile occupancy management, entity despawn/create, selection sync, and construction-workflow guards all implemented correctly. One harmless redundancy found: setBuildingTileOccupancy is called twice in deployMCV and placeBuilding paths (once via building_placed event listener, once directly) — setOccupied is idempotent so no functional impact. No dead code, missing imports, security issues, or memory leaks identified.
+
+### Update: 2026-03-08 10:45
+### Integration Review — 2026-03-08 10:45
+**Subteams:** codex-ic-visual-building-rollback-symbols codex-ic-map-continent-allvisible-ore-regen codex-ic-combat-ux-cursor-trajectory-warnings codex-ic-controls-mcv-autoattack-engineers codex-ic-ai-grand-strategy-v2
+**Result:** All 5 feature branches merged into integration-review-round1. Three syntactic conflicts resolved: (1) Unit.ts import line — combined DamageType (combat-ux) and ORE_TILE_MAX (controls-mcv) into one import; (2) GameScene.ts field declarations — kept both enemyHoverCursorActive (combat-ux) and silentDespawnIds (controls-mcv); (3) package.json vitest version — kept newer ^4.0.18 from ore-regen branch over ^3.2.4 from ai-grand-strategy-v2. No semantic/logic cross-team conflicts found. All auto-merges of HUDScene.ts, SetupScene.ts, EntityManager.ts, GameMap.ts, and AI.ts were clean. Build passes (tsc + Vite), only pre-existing chunk-size warning remains.
