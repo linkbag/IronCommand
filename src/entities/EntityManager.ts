@@ -12,9 +12,7 @@ import { BUILDING_DEFS } from './BuildingDefs'
 import type { UnitDef, BuildingDef, Position, FactionId } from '../types'
 import { TILE_SIZE } from '../types'
 import { FACTIONS } from '../data/factions'
-
-const PLAYER_TINT = 0x4488ff
-const ENEMY_TINT = 0xff4444
+import { getPlayerSlotColor } from '../data/playerSlots'
 
 export class EntityManager extends Phaser.Events.EventEmitter {
   private scene: Phaser.Scene
@@ -392,14 +390,12 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     const fromGameState = players?.find(p => p.id === playerId)?.color
     if (typeof fromGameState === 'number') return fromGameState
 
-    // Default to clear friendly/enemy contrast if gameState is unavailable.
-    if (playerId === 0) return PLAYER_TINT
-    if (playerId > 0) return ENEMY_TINT
+    if (playerId >= 0) return getPlayerSlotColor(playerId)
 
     // Fallback for unexpected ids.
     const factionIds = Object.keys(FACTIONS) as FactionId[]
     const factionId = factionIds[Math.abs(playerId) % factionIds.length]
-    return FACTIONS[factionId]?.color ?? PLAYER_TINT
+    return FACTIONS[factionId]?.color ?? getPlayerSlotColor(0)
   }
 
   private applyEntityTint(entity: Phaser.GameObjects.Container, color: number): void {
