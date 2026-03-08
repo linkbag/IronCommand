@@ -14,8 +14,18 @@ import { BUILDING_DEFS, NEUTRAL_BUILDING_IDS, getPowerBuildingDefId } from '../e
 import { FACTIONS } from '../data/factions'
 import { Unit } from '../entities/Unit'
 import type { Building } from '../entities/Building'
+import {
+  SMART_HARD_TUNING,
+  evaluateCellularState,
+  followsRuleOfThreeSpacing,
+  pickBestPotentialFieldCandidate,
+  shouldActivateOverdrive,
+  type OccupiedRect,
+  type SmartHardCellularState,
+  type PotentialFieldCandidate,
+} from './smartHard'
 
-export type AIDifficulty = 'easy' | 'medium' | 'hard'
+export type AIDifficulty = 'easy' | 'medium' | 'hard' | 'smart_hard'
 
 type AIPhase = 'early' | 'mid' | 'late'
 
@@ -47,24 +57,35 @@ type TargetChoice = {
   entityId?: string
 }
 
+type SmartHardTelemetry = {
+  overdriveTriggers: number
+  cellularTransitions: number
+  potentialReroutes: number
+  metabolicActions: number
+  ruleOfThreeFallbacks: number
+}
+
 // ── Constants ──────────────────────────────────────────────────
 
 const TICK_INTERVAL: Record<AIDifficulty, number> = {
   easy: 3000,
   medium: 2000,
   hard: 1200,
+  smart_hard: 1100,
 }
 
 const INFANTRY_BEFORE_WAR_FACTORY: Record<AIDifficulty, number> = {
   easy: 2,
   medium: 4,
   hard: 6,
+  smart_hard: 7,
 }
 
 const ATTACK_INTERVAL_MS: Record<AIDifficulty, { min: number; max: number }> = {
   easy: { min: 120000, max: 170000 },
   medium: { min: 75000, max: 120000 },
   hard: { min: 40000, max: 70000 },     // faster attacks on hard (was 55-90s)
+  smart_hard: { min: 28000, max: 52000 },
 }
 
 // Hard: first attack comes at 2 minutes
@@ -72,12 +93,14 @@ const FIRST_ATTACK_MS: Record<AIDifficulty, number> = {
   easy: 300000,
   medium: 180000,
   hard: 120000,
+  smart_hard: 90000,
 }
 
 const ATTACK_WAVE_SIZE: Record<AIDifficulty, { min: number; max: number }> = {
   easy: { min: 4, max: 8 },
   medium: { min: 6, max: 12 },
   hard: { min: 8, max: 20 },
+  smart_hard: { min: 10, max: 24 },
 }
 
 const STAGING_HOLD_MS = 5000
@@ -86,30 +109,35 @@ const HARASS_INTERVAL_MS: Record<AIDifficulty, number> = {
   easy: 100000,
   medium: 60000,
   hard: 25000,                           // more frequent harassment (was 35s)
+  smart_hard: 18000,
 }
 
 const DEFENSE_TARGET: Record<AIDifficulty, number> = {
   easy: 1,
   medium: 2,
   hard: 3,
+  smart_hard: 4,
 }
 
 const MAX_ARMY: Record<AIDifficulty, number> = {
   easy: 18,
   medium: 28,
   hard: 50,                              // bigger army cap (was 40)
+  smart_hard: 60,
 }
 
 const BASE_DEFENSE_RADIUS: Record<AIDifficulty, number> = {
   easy: 8,
   medium: 12,
   hard: 15,
+  smart_hard: 17,
 }
 
 const DEFENDER_RESPONSE_RADIUS: Record<AIDifficulty, number> = {
   easy: 15,
   medium: 25,
   hard: 40,
+  smart_hard: 48,
 }
 
 const RETREAT_HEALTH_PCT = 0.35
@@ -132,12 +160,14 @@ const REBUILD_RECOVERY_MS: Record<AIDifficulty, number> = {
   easy: 70000,
   medium: 50000,
   hard: 40000,
+  smart_hard: 30000,
 }
 const DANGER_ZONE_RADIUS = 5 * TILE_SIZE
 const DANGER_ZONE_TTL_MS = 120000
 const DANGER_ZONE_DECAY_PER_TICK = 0.93
 const FOCUS_FIRE_INTERVAL_MS = 900
 const MAP_CONTROL_INTERVAL_MS = 15000
+const SMART_HARD_LOG_INTERVAL_MS = 30000
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -213,6 +243,16 @@ export class AI {
   private unitKiteUntilMs: Map<string, number>
   private antiAirEmergencyUntilMs: number
   private lastEmergencySellMs: number
+  private cellularTimer: number
+  private cellularStateByUnit: Map<string, SmartHardCellularState>
+  private enemySuperweaponTimers: Map<string, number>
+  private baseHealthTimeline: Array<{ t: number; hp: number }>
+  private overdriveUntilMs: number
+  private overdriveReason: 'superweapon' | 'base_damage' | null
+  private lastOverdriveFloodMs: number
+  private smartHardTelemetry: SmartHardTelemetry
+  private lastSmartHardLogMs: number
+  private latestGameState: GameState | null
 
   private static readonly SW_COOLDOWNS: Record<string, number> = {
     nuclear_silo: 300000,
@@ -280,6 +320,22 @@ export class AI {
     this.unitKiteUntilMs = new Map()
     this.antiAirEmergencyUntilMs = 0
     this.lastEmergencySellMs = -EMERGENCY_SELL_COOLDOWN_MS
+    this.cellularTimer = 0
+    this.cellularStateByUnit = new Map()
+    this.enemySuperweaponTimers = new Map()
+    this.baseHealthTimeline = []
+    this.overdriveUntilMs = 0
+    this.overdriveReason = null
+    this.lastOverdriveFloodMs = -SMART_HARD_TUNING.overdriveFloodIntervalMs
+    this.smartHardTelemetry = {
+      overdriveTriggers: 0,
+      cellularTransitions: 0,
+      potentialReroutes: 0,
+      metabolicActions: 0,
+      ruleOfThreeFallbacks: 0,
+    }
+    this.lastSmartHardLogMs = 0
+    this.latestGameState = null
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -292,6 +348,7 @@ export class AI {
 
     this.mapWidthTiles = gameState.map.width
     this.mapHeightTiles = gameState.map.height
+    this.latestGameState = gameState
 
     this.tickTimer += delta
     this.attackTimer += delta
@@ -300,14 +357,27 @@ export class AI {
     this.focusFireTimer += delta
     this.mapControlTimer += delta
     this.matchTimer += delta
+    if (this.isSmartHard()) {
+      this.cellularTimer += delta
+    }
     this.updateEconomyTelemetry(delta)
 
     this.updatePendingWave(delta)
+
+    if (this.isSmartHard() && this.cellularTimer >= SMART_HARD_TUNING.cellularCheckIntervalMs) {
+      this.cellularTimer = 0
+      this.applyCellularUnitLogic(gameState)
+    }
 
     const interval = TICK_INTERVAL[this.difficulty]
     if (this.tickTimer >= interval) {
       this.tickTimer = 0
       this.tick(gameState)
+    }
+
+    if (this.isSmartHard() && this.matchTimer - this.lastSmartHardLogMs >= SMART_HARD_LOG_INTERVAL_MS) {
+      this.lastSmartHardLogMs = this.matchTimer
+      this.logSmartHardTelemetry()
     }
   }
 
@@ -317,10 +387,15 @@ export class AI {
     const buildings = this.em.getBuildingsForPlayer(this.playerId)
     if (buildings.length === 0) return
     this.trackBaseLossState(buildings.length)
+    this.updateBaseHealthTimeline(buildings)
 
     this.updatePhase()
     this.updateBattlefieldIntel(gameState)
     this.assessEnemyComposition(gameState)
+    if (this.isSmartHard()) {
+      this.updateEnemySuperweaponIntel(gameState)
+      this.evaluateOverdriveMode()
+    }
     this.ensureHarvesting(gameState)
     this.protectHarvesters(gameState)
     this.microSpecialUnits(gameState)
@@ -331,12 +406,18 @@ export class AI {
     this.updateAttackGroups()
     this.retreatDamagedUnits()
     this.defendBase(gameState)
-    this.followTechTree(gameState)
+    const metabolicAction = this.isSmartHard() ? this.runSmartHardMetabolicLoop(gameState) : false
+    if (!metabolicAction) {
+      this.followTechTree(gameState)
+    }
     this.expandEconomy(gameState)
     this.buildDefenses()
     this.buildArmy(gameState)
     this.considerHarassment(gameState)
     this.considerAttacking(gameState)
+    if (this.isSmartHard()) {
+      this.runOverdriveFlood(gameState)
+    }
     this.contestMapControl(gameState)
     this.rebuildDestroyedBuildings(gameState)
 
@@ -458,7 +539,7 @@ export class AI {
       b => b.def.id === 'ore_refinery' && b.state === 'active',
     )
 
-    const perRefTarget = this.difficulty === 'hard' ? 3 : 2
+    const perRefTarget = this.isHardLike() ? 3 : 2
     const desiredHarvesters = Math.max(2, refineries.length * perRefTarget)
     const openingNeedsSecondHarvester =
       this.matchTimer <= OPENING_SECOND_HARVESTER_DEADLINE_MS &&
@@ -490,11 +571,11 @@ export class AI {
   private expandEconomy(gameState: GameState): void {
     const credits = this.economy.getCredits(this.playerId)
     const refCount = this.countBuildings('ore_refinery')
-    const baseMaxRef = this.difficulty === 'hard' ? 5 : this.difficulty === 'medium' ? 4 : 3
+    const baseMaxRef = this.isSmartHard() ? 6 : this.isHardLike() ? 5 : this.difficulty === 'medium' ? 4 : 3
     const maxRef = this.enemyIsTurtling ? baseMaxRef + 1 : baseMaxRef
     if (refCount >= maxRef || !this.hasActiveBuilding('construction_yard')) return
 
-    const armyReady = this.getCombatUnits().length >= (this.difficulty === 'hard' ? 8 : 6)
+    const armyReady = this.getCombatUnits().length >= (this.isHardLike() ? 8 : 6)
     const baseOreDepleted = this.isBaseOreRunningLow()
     const timedExpansion = this.shouldExpandByTime()
     const ecoFloating = this.incomePerMinute > this.spendingPerMinute && credits > 2500
@@ -525,7 +606,11 @@ export class AI {
   }
 
   private tryBuildRefineryExpansion(gameState: GameState): boolean {
-    const placement = this.findOreExpansionPlacement(gameState)
+    let placement = this.findOreExpansionPlacement(gameState, this.isSmartHard())
+    if (!placement && this.isSmartHard()) {
+      this.smartHardTelemetry.ruleOfThreeFallbacks++
+      placement = this.findOreExpansionPlacement(gameState, false)
+    }
     if (!placement) return false
     return this.tryBuildBuildingAt('ore_refinery', placement.col, placement.row)
   }
@@ -546,7 +631,7 @@ export class AI {
     for (const point of keyPoints) {
       if (!this.isPointContested(point.x, point.y)) continue
       if (this.getDangerScore(point.x, point.y) > 2.2) continue
-      const squadSize = this.difficulty === 'hard' ? 4 : 3
+      const squadSize = this.isHardLike() ? 4 : 3
       const squad = idle.splice(0, Math.min(idle.length, squadSize))
       if (squad.length < 2) break
       for (const u of squad) {
@@ -562,7 +647,7 @@ export class AI {
     const powerId = getPowerBuildingDefId(this.side)
     const basicInfantry = getBasicInfantryDefId(this.side)
     const underEarlyPressure = this.isUnderEarlyPressure(gameState)
-    const hardOpening = this.difficulty === 'hard' && this.matchTimer < 210000
+    const hardOpening = this.isHardLike() && this.matchTimer < 210000
 
     // 1. Power first
     if (!this.hasBuildingPlacedOrConstructing(powerId)) {
@@ -595,7 +680,7 @@ export class AI {
 
     // 5. Early pressure response: infantry and defense first
     if (underEarlyPressure) {
-      const rushInfantryTarget = this.difficulty === 'hard' ? 10 : 7
+      const rushInfantryTarget = this.isHardLike() ? 10 : 7
       if (this.getCombatInfantryCount() < rushInfantryTarget) {
         this.queueUnitIfPossible(basicInfantry, gameState)
         return
@@ -630,8 +715,8 @@ export class AI {
 
     // 9. Opportunistic second production lines when economy is strong
     if (this.shouldAddProductionStructures()) {
-      const barracksTarget = this.difficulty === 'hard' ? 2 : 1
-      const warFactoryTarget = this.difficulty === 'hard' ? 2 : 1
+      const barracksTarget = this.isHardLike() ? 2 : 1
+      const warFactoryTarget = this.isHardLike() ? 2 : 1
       if (this.countBuildings('barracks') < barracksTarget) {
         this.tryBuildBuilding('barracks', true)
         return
@@ -679,7 +764,7 @@ export class AI {
     }
 
     // 10. Hard mode: build superweapons aggressively once battle lab is up
-    if (this.difficulty === 'hard' && this.hasActiveBuilding('battle_lab')) {
+    if (this.isHardLike() && this.hasActiveBuilding('battle_lab')) {
       for (const swId of AI.SW_IDS) {
         const swDef = BUILDING_DEFS[swId]
         if (!swDef) continue
@@ -800,8 +885,8 @@ export class AI {
     // AI should continuously build and spend credits — queue multiple units per tick
     // Queue units from all available production buildings simultaneously
     const maxQueuePerTick = emergencySpend
-      ? (this.difficulty === 'hard' ? 8 : 6)
-      : this.difficulty === 'hard' ? 5 : this.difficulty === 'medium' ? 3 : 2
+      ? (this.isSmartHard() ? 9 : this.isHardLike() ? 8 : 6)
+      : this.isSmartHard() ? 6 : this.isHardLike() ? 5 : this.difficulty === 'medium' ? 3 : 2
     let queued = 0
 
     for (let i = 0; i < maxQueuePerTick; i++) {
@@ -888,7 +973,7 @@ export class AI {
       const def = UNIT_DEFS[id]
       if (def?.attack && this.canProduceUnit(id)) {
         pool.push(id)
-        if (this.difficulty === 'hard') pool.push(id) // double weight on hard
+        if (this.isHardLike()) pool.push(id) // double weight on hard+
       }
     }
 
@@ -1026,11 +1111,11 @@ export class AI {
     this.harassTimer = 0
 
     // Need enough army before diverting units (lower threshold on hard)
-    const armyThreshold = this.difficulty === 'hard' ? 3 : 5
+    const armyThreshold = this.isHardLike() ? 3 : 5
     if (this.getCombatUnits().length < armyThreshold) return
 
     // Find fast idle units for raiding (lower speed threshold on hard)
-    const speedReq = this.difficulty === 'hard' ? 2.5 : 3
+    const speedReq = this.isHardLike() ? 2.5 : 3
     const fastUnits = this.getCombatUnits().filter(
       u => u.state === 'idle' && u.def.stats.speed >= speedReq,
     )
@@ -1044,22 +1129,30 @@ export class AI {
     if (!target) return
 
     const raidSize = clamp(
-      this.difficulty === 'hard' ? 5 : this.difficulty === 'medium' ? 3 : 2,
+      this.isSmartHard() ? 6 : this.isHardLike() ? 5 : this.difficulty === 'medium' ? 3 : 2,
       2,
       fastUnits.length,
     )
     const fallback = this.getFallbackPosition()
-    if (fallback && raidSize <= 3 && this.isRouteHighRisk(fallback, target)) return
+    if (!this.isOverdriveActive() && fallback && raidSize <= 3 && this.isRouteHighRisk(fallback, target)) return
 
     for (let i = 0; i < raidSize; i++) {
-      fastUnits[i].giveOrder({ type: 'attackMove', target })
+      const unit = fastUnits[i]
+      const waypoint = this.isSmartHard() ? this.computeSmartHardPotentialWaypoint(unit, target, target) : null
+      if (waypoint && dist(waypoint.x, waypoint.y, unit.x, unit.y) > TILE_SIZE * 1.2) {
+        this.smartHardTelemetry.potentialReroutes++
+        unit.giveOrder({ type: 'move', target: waypoint })
+        unit.giveOrder({ type: 'attackMove', target }, true)
+      } else {
+        unit.giveOrder({ type: 'attackMove', target })
+      }
     }
 
     console.log(`[AI] Player ${this.playerId} sending ${raidSize}-unit harassment raid`)
   }
 
   private findHarassTarget(gameState: GameState): { x: number; y: number } | null {
-    if (this.difficulty === 'hard') {
+    if (this.isHardLike()) {
       const hunted = this.findEnemyHarvesterTarget(gameState)
       if (hunted) return hunted
     }
@@ -1113,7 +1206,7 @@ export class AI {
     const waveUnits = this.pickWaveUnits(combatUnits, waveSizeTarget)
     if (waveUnits.length === 0) return
     const fallback = this.getFallbackPosition()
-    if (fallback && waveUnits.length < 7 && this.isRouteHighRisk(fallback, target)) {
+    if (!this.isOverdriveActive() && fallback && waveUnits.length < 7 && this.isRouteHighRisk(fallback, target)) {
       return
     }
 
@@ -1192,7 +1285,7 @@ export class AI {
     target: TargetChoice,
     gameState: GameState,
   ): Array<{ units: Unit[]; target: { x: number; y: number } }> {
-    if (this.difficulty !== 'hard' || waveUnits.length < 10) {
+    if (!this.isHardLike() || waveUnits.length < 10) {
       return [{ units: waveUnits, target: { x: target.x, y: target.y } }]
     }
 
@@ -1363,9 +1456,9 @@ export class AI {
       }
       const zonePenalty = this.getDangerScore(b.x, b.y) * 0.8
       score -= zonePenalty
-      if (this.difficulty === 'hard' && b.def.id === 'war_factory') score += 5
-      if (this.difficulty === 'hard' && b.def.id === 'ore_refinery') score += 4
-      if (this.difficulty === 'hard' && b.def.category === 'production') score += 2
+      if (this.isHardLike() && b.def.id === 'war_factory') score += 5
+      if (this.isHardLike() && b.def.id === 'ore_refinery') score += 4
+      if (this.isHardLike() && b.def.category === 'production') score += 2
       if (score > bestScore) {
         bestScore = score
         best = b
@@ -1505,6 +1598,7 @@ export class AI {
   }
 
   private retreatDamagedUnits(): void {
+    if (this.isOverdriveActive()) return
     const fallback = this.getFallbackPosition()
     if (!fallback) return
     for (const u of this.getCombatUnits()) {
@@ -1724,7 +1818,17 @@ export class AI {
         x: target.x - nx * roleDepth * TILE_SIZE + px * lateral,
         y: target.y - ny * roleDepth * TILE_SIZE + py * lateral,
       }
-      u.giveOrder({ type: 'attackMove', target: this.clampToMap(approach) })
+      const finalApproach = this.clampToMap(approach)
+      const waypoint = this.isSmartHard()
+        ? this.computeSmartHardPotentialWaypoint(u, finalApproach, target)
+        : null
+      if (waypoint && dist(waypoint.x, waypoint.y, u.x, u.y) > TILE_SIZE * 1.4) {
+        this.smartHardTelemetry.potentialReroutes++
+        u.giveOrder({ type: 'move', target: waypoint })
+        u.giveOrder({ type: 'attackMove', target: finalApproach }, true)
+      } else {
+        u.giveOrder({ type: 'attackMove', target: finalApproach })
+      }
     }
   }
 
@@ -1833,16 +1937,16 @@ export class AI {
   // ── Scouting ─────────────────────────────────────────────────
 
   private considerScouting(gameState: GameState): void {
-    const scoutInterval = this.difficulty === 'hard' ? 12000 : 20000
+    const scoutInterval = this.isSmartHard() ? 9000 : this.isHardLike() ? 12000 : 20000
     if (this.scoutTimer < scoutInterval) return
     this.scoutTimer = 0
 
     const units = this.em.getUnitsForPlayer(this.playerId)
     // Hard: also use fast infantry for scouting
-    const speedReq = this.difficulty === 'hard' ? 2.5 : 3.5
+    const speedReq = this.isHardLike() ? 2.5 : 3.5
     const fastUnit = units.find(
       u => u.state === 'idle' && u.def.stats.speed >= speedReq &&
-        (u.def.category === 'vehicle' || (this.difficulty === 'hard' && u.def.category === 'infantry')),
+        (u.def.category === 'vehicle' || (this.isHardLike() && u.def.category === 'infantry')),
     )
     if (!fastUnit) return
 
@@ -1862,10 +1966,10 @@ export class AI {
   // ── Hard-mode multi-prong ────────────────────────────────────
 
   private considerMultiProng(gameState: GameState): void {
-    if (this.difficulty !== 'hard') return
+    if (!this.isHardLike()) return
 
     const units = this.getCombatUnits().filter(u => u.state === 'idle')
-    if (units.length < ATTACK_WAVE_SIZE.hard.min) return
+    if (units.length < ATTACK_WAVE_SIZE[this.difficulty].min) return
 
     const target = this.findAttackTarget(gameState)
     if (!target) return
@@ -1925,7 +2029,12 @@ export class AI {
     if (!this.production.checkPrerequisites(this.playerId, defId)) return false
     if (this.economy.getCredits(this.playerId) < def.stats.cost) return false
 
-    const placeTile = this.findBuildingPlacement(defId)
+    const enforceRuleOfThree = this.isSmartHard() && this.isMetabolicOrganBuilding(defId)
+    let placeTile = this.findBuildingPlacement(defId, enforceRuleOfThree)
+    if (!placeTile && enforceRuleOfThree) {
+      this.smartHardTelemetry.ruleOfThreeFallbacks++
+      placeTile = this.findBuildingPlacement(defId, false)
+    }
     if (!placeTile) return false
 
     // Deduct credits and place
@@ -1944,7 +2053,7 @@ export class AI {
     return false
   }
 
-  private findOreExpansionPlacement(gameState: GameState): { col: number; row: number } | null {
+  private findOreExpansionPlacement(gameState: GameState, enforceRuleOfThree = false): { col: number; row: number } | null {
     const def = BUILDING_DEFS.ore_refinery
     if (!def) return null
     const fields = this.getOreFieldAnchors(gameState, 6)
@@ -1968,6 +2077,7 @@ export class AI {
           const row = tileRow + r
           if (!this.isPlacementWithinMap(col, row, def.footprint.w, def.footprint.h)) continue
           if (!this.isTileFree(col, row, def.footprint.w, def.footprint.h)) continue
+          if (enforceRuleOfThree && !this.passesRuleOfThreePlacement(col, row, def.footprint.w, def.footprint.h)) continue
           if (this.getDangerScore((col + 1) * TILE_SIZE, (row + 1) * TILE_SIZE) > 1.6) continue
           return { col, row }
         }
@@ -2027,17 +2137,17 @@ export class AI {
     return enemyPresence > ownPresence + 1
   }
 
-  private findBuildingPlacement(defId: string): { col: number; row: number } | null {
+  private findBuildingPlacement(defId: string, enforceRuleOfThree = false): { col: number; row: number } | null {
     const def = BUILDING_DEFS[defId]
     if (!def) return null
 
     if (defId === 'ore_refinery') {
-      const orePlacement = this.findRefineryPlacementNearOre(def)
+      const orePlacement = this.findRefineryPlacementNearOre(def, enforceRuleOfThree)
       if (orePlacement) return orePlacement
     }
 
     if (def.category === 'defense') {
-      const defensePlacement = this.findDefensePlacement(def)
+      const defensePlacement = this.findDefensePlacement(def, enforceRuleOfThree)
       if (defensePlacement) return defensePlacement
     }
 
@@ -2061,6 +2171,7 @@ export class AI {
           if (this.mapHeightTiles > 0 && row + def.footprint.h > this.mapHeightTiles) continue
 
           if (this.isTileFree(col, row, def.footprint.w, def.footprint.h)) {
+            if (enforceRuleOfThree && !this.passesRuleOfThreePlacement(col, row, def.footprint.w, def.footprint.h)) continue
             return { col, row }
           }
         }
@@ -2070,7 +2181,7 @@ export class AI {
     return null
   }
 
-  private findRefineryPlacementNearOre(def: Building['def']): { col: number; row: number } | null {
+  private findRefineryPlacementNearOre(def: Building['def'], enforceRuleOfThree = false): { col: number; row: number } | null {
     const anchors: Array<{ x: number; y: number }> = []
     if (this.expansionAnchor) anchors.push(this.expansionAnchor)
 
@@ -2101,6 +2212,7 @@ export class AI {
             const row = oreRow + dr
             if (!this.isPlacementWithinMap(col, row, def.footprint.w, def.footprint.h)) continue
             if (!this.isTileFree(col, row, def.footprint.w, def.footprint.h)) continue
+            if (enforceRuleOfThree && !this.passesRuleOfThreePlacement(col, row, def.footprint.w, def.footprint.h)) continue
 
             const placementCenter = {
               x: (col + def.footprint.w / 2) * TILE_SIZE,
@@ -2116,7 +2228,7 @@ export class AI {
     return null
   }
 
-  private findDefensePlacement(def: Building['def']): { col: number; row: number } | null {
+  private findDefensePlacement(def: Building['def'], enforceRuleOfThree = false): { col: number; row: number } | null {
     const ownBuildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state !== 'dying')
     const cy = ownBuildings.find(b => b.def.id === 'construction_yard' && b.state === 'active') ?? ownBuildings[0]
     if (!cy) return null
@@ -2142,6 +2254,7 @@ export class AI {
       const row = Math.floor(wy / TILE_SIZE - def.footprint.h / 2)
       if (!this.isPlacementWithinMap(col, row, def.footprint.w, def.footprint.h)) continue
       if (this.isTileFree(col, row, def.footprint.w, def.footprint.h)) {
+        if (enforceRuleOfThree && !this.passesRuleOfThreePlacement(col, row, def.footprint.w, def.footprint.h)) continue
         return { col, row }
       }
     }
@@ -2179,6 +2292,18 @@ export class AI {
       }
     }
     return true
+  }
+
+  private passesRuleOfThreePlacement(col: number, row: number, w: number, h: number): boolean {
+    const occupied: OccupiedRect[] = this.em.getBuildingsForPlayer(this.playerId)
+      .filter(b => b.state !== 'dying')
+      .map(b => ({
+        col: Math.floor((b.x - b.def.footprint.w * TILE_SIZE / 2) / TILE_SIZE),
+        row: Math.floor((b.y - b.def.footprint.h * TILE_SIZE / 2) / TILE_SIZE),
+        w: b.def.footprint.w,
+        h: b.def.footprint.h,
+      }))
+    return followsRuleOfThreeSpacing({ col, row, w, h }, occupied)
   }
 
   private queueUnitIfPossible(defId: string, gameState: GameState): boolean {
@@ -2250,7 +2375,7 @@ export class AI {
     }
 
     // Hard mode: also rebuild mid-tech and battle lab
-    if (this.difficulty === 'hard') {
+    if (this.isHardLike()) {
       const midTechId = this.side === 'alliance' ? 'air_force_command' : 'radar_tower'
       if (this.phase !== 'early' && !this.hasBuildingPlacedOrConstructing(midTechId)) {
         this.tryBuildBuilding(midTechId)
@@ -2260,6 +2385,315 @@ export class AI {
         this.tryBuildBuilding('battle_lab')
       }
     }
+  }
+
+  // ── Smart Hard systems ──────────────────────────────────────
+
+  private isSmartHard(): boolean {
+    return this.difficulty === 'smart_hard'
+  }
+
+  private isHardLike(): boolean {
+    return this.difficulty === 'hard' || this.isSmartHard()
+  }
+
+  private isOverdriveActive(): boolean {
+    return this.isSmartHard() && this.matchTimer < this.overdriveUntilMs
+  }
+
+  private runSmartHardMetabolicLoop(gameState: GameState): boolean {
+    if (!this.isSmartHard()) return false
+
+    const powerId = getPowerBuildingDefId(this.side)
+    if (this.needsMorePower() && this.tryBuildBuilding(powerId, true)) {
+      this.smartHardTelemetry.metabolicActions++
+      return true
+    }
+
+    if (!this.hasBuildingPlacedOrConstructing('ore_refinery') && this.tryBuildBuilding('ore_refinery')) {
+      this.smartHardTelemetry.metabolicActions++
+      return true
+    }
+
+    if (!this.hasBuildingPlacedOrConstructing('barracks') && this.tryBuildBuilding('barracks')) {
+      this.smartHardTelemetry.metabolicActions++
+      return true
+    }
+
+    if (!this.hasBuildingPlacedOrConstructing('war_factory') && this.tryBuildBuilding('war_factory')) {
+      this.smartHardTelemetry.metabolicActions++
+      return true
+    }
+
+    const refineryCount = this.countBuildings('ore_refinery')
+    const hasRemoteRefinery = this.hasRemoteRefinery()
+    const shouldExpand = refineryCount < 2 || !hasRemoteRefinery || this.shouldExpandByTime() || this.isBaseOreRunningLow()
+    if (shouldExpand) {
+      const expanded = this.tryBuildRefineryExpansion(gameState) || this.tryBuildBuilding('ore_refinery', true)
+      if (expanded) {
+        this.smartHardTelemetry.metabolicActions++
+        return true
+      }
+    }
+    return false
+  }
+
+  private hasRemoteRefinery(): boolean {
+    const cy = this.em.getBuildingsForPlayer(this.playerId).find(
+      b => b.def.id === 'construction_yard' && b.state !== 'dying',
+    )
+    if (!cy) return false
+    const minDist = SMART_HARD_TUNING.ruleOfThreeMinGapTiles * TILE_SIZE * 3
+    return this.em.getBuildingsForPlayer(this.playerId).some(
+      b => b.def.id === 'ore_refinery' && b.state !== 'dying' && dist(b.x, b.y, cy.x, cy.y) >= minDist,
+    )
+  }
+
+  private isMetabolicOrganBuilding(defId: string): boolean {
+    return defId === getPowerBuildingDefId(this.side)
+      || defId === 'ore_refinery'
+      || defId === 'barracks'
+      || defId === 'war_factory'
+      || defId === 'air_force_command'
+      || defId === 'radar_tower'
+  }
+
+  private applyCellularUnitLogic(gameState: GameState): void {
+    if (!this.isSmartHard()) return
+    const units = this.getCombatUnits()
+    if (units.length === 0) return
+
+    const enemies = this.getEnemyCombatUnits(gameState)
+    const fallback = this.getFallbackPosition()
+    const radiusPx = SMART_HARD_TUNING.cellularRadiusTiles * TILE_SIZE
+
+    for (const unit of units) {
+      const allyCount = units.filter(u => u.id !== unit.id && dist(u.x, u.y, unit.x, unit.y) <= radiusPx).length
+      const enemyCount = enemies.filter(e => dist(e.x, e.y, unit.x, unit.y) <= radiusPx).length
+      const hpRatio = unit.hp / Math.max(1, unit.def.stats.maxHp)
+      const nextState = evaluateCellularState({
+        allyCount,
+        enemyCount,
+        hpRatio,
+        overdrive: this.isOverdriveActive(),
+      })
+      const prevState = this.cellularStateByUnit.get(unit.id)
+      if (prevState && prevState !== nextState) {
+        this.smartHardTelemetry.cellularTransitions++
+      }
+      this.cellularStateByUnit.set(unit.id, nextState)
+
+      if (nextState === 'isolated_retreat' && fallback && !this.isOverdriveActive()) {
+        unit.giveOrder({ type: 'move', target: fallback })
+        continue
+      }
+      if (nextState !== 'pressure_overspill') continue
+      if (unit.state !== 'idle' && unit.state !== 'moving') continue
+      const nearestEnemy = enemies
+        .slice()
+        .sort((a, b) => dist(a.x, a.y, unit.x, unit.y) - dist(b.x, b.y, unit.x, unit.y))[0]
+      if (!nearestEnemy) continue
+      const overspillTarget = { x: nearestEnemy.x, y: nearestEnemy.y }
+      const waypoint = this.computeSmartHardPotentialWaypoint(unit, overspillTarget, overspillTarget)
+      if (waypoint && dist(waypoint.x, waypoint.y, unit.x, unit.y) > TILE_SIZE * 1.4) {
+        this.smartHardTelemetry.potentialReroutes++
+        unit.giveOrder({ type: 'move', target: waypoint })
+        unit.giveOrder({ type: 'attackMove', target: overspillTarget }, true)
+      } else {
+        unit.giveOrder({ type: 'attackMove', target: overspillTarget })
+      }
+    }
+  }
+
+  private computeSmartHardPotentialWaypoint(
+    unit: Unit,
+    approachTarget: { x: number; y: number },
+    finalTarget: { x: number; y: number },
+  ): { x: number; y: number } | null {
+    if (!this.isSmartHard()) return null
+
+    const dx = approachTarget.x - unit.x
+    const dy = approachTarget.y - unit.y
+    const routeLen = Math.max(TILE_SIZE, Math.sqrt(dx * dx + dy * dy))
+    const nx = dx / routeLen
+    const ny = dy / routeLen
+    const px = -ny
+    const py = nx
+
+    const forward = Math.max(TILE_SIZE * 2, routeLen * 0.52)
+    const candidates: PotentialFieldCandidate[] = []
+    const lateralTiles = [0, 2.2, -2.2, 4.2, -4.2]
+    for (const lateral of lateralTiles) {
+      const candidatePos = this.clampToMap({
+        x: unit.x + nx * forward + px * lateral * TILE_SIZE,
+        y: unit.y + ny * forward + py * lateral * TILE_SIZE,
+      })
+      candidates.push(this.buildPotentialCandidate(candidatePos, finalTarget, unit))
+    }
+
+    const best = pickBestPotentialFieldCandidate(candidates, this.isOverdriveActive())
+    if (!best) return null
+    return this.clampToMap({ x: best.x, y: best.y })
+  }
+
+  private buildPotentialCandidate(
+    pos: { x: number; y: number },
+    target: { x: number; y: number },
+    unit: Unit,
+  ): PotentialFieldCandidate {
+    const enemyBuildings = this.em.getAllBuildings().filter(b => this.isEnemyPlayer(b.playerId) && b.state !== 'dying')
+    const enemyMiners = this.em.getAllUnits().filter(
+      u => this.isEnemyPlayer(u.playerId) && u.state !== 'dying' && u.def.category === 'harvester',
+    )
+    const repairSites = this.em.getBuildingsForPlayer(this.playerId).filter(
+      b => b.state !== 'dying' && (b.def.id === 'service_depot' || b.def.id === 'neutral_repair_depot'),
+    )
+
+    const nearestMiner = enemyMiners
+      .map(h => ({ d: dist(pos.x, pos.y, h.x, h.y) / TILE_SIZE }))
+      .sort((a, b) => a.d - b.d)[0]
+    const nearestPower = enemyBuildings
+      .filter(b => b.def.category === 'power')
+      .map(b => ({ d: dist(pos.x, pos.y, b.x, b.y) / TILE_SIZE }))
+      .sort((a, b) => a.d - b.d)[0]
+    const nearestRepair = repairSites
+      .map(b => ({ d: dist(pos.x, pos.y, b.x, b.y) / TILE_SIZE }))
+      .sort((a, b) => a.d - b.d)[0]
+
+    let turretRepulsion = 0
+    let teslaNearby = false
+    for (const b of enemyBuildings) {
+      if (b.def.category !== 'defense' || !b.def.attack) continue
+      const dTiles = dist(pos.x, pos.y, b.x, b.y) / TILE_SIZE
+      if (dTiles > 13) continue
+      const rangeThreat = Math.max(0.2, 1 - dTiles / Math.max(1, b.def.attack.range + 4))
+      turretRepulsion += rangeThreat * (b.def.attack.damage * b.def.attack.fireRate) / 8
+      if (b.def.id === 'tesla_coil') teslaNearby = true
+    }
+
+    let fogRepulsion = 0
+    if (this.latestGameState) {
+      const col = Math.floor(pos.x / TILE_SIZE)
+      const row = Math.floor(pos.y / TILE_SIZE)
+      const tile = this.latestGameState.map.tiles[row]?.[col]
+      if (tile && tile.fogState < 2) {
+        fogRepulsion = tile.fogState === 0 ? 1 : 0.4
+      }
+    }
+
+    const hpRatio = unit.hp / Math.max(1, unit.def.stats.maxHp)
+    return {
+      x: pos.x,
+      y: pos.y,
+      distanceToTargetTiles: dist(pos.x, pos.y, target.x, target.y) / TILE_SIZE,
+      enemyMinerAttraction: nearestMiner ? 1 / Math.max(1, nearestMiner.d) : 0,
+      enemyPowerAttraction: nearestPower ? 1 / Math.max(1, nearestPower.d) : 0,
+      repairAttraction: hpRatio < 0.75 && nearestRepair ? 1 / Math.max(1, nearestRepair.d) : 0,
+      turretRepulsion,
+      fogRepulsion,
+      teslaNearby,
+    }
+  }
+
+  private updateEnemySuperweaponIntel(gameState: GameState): void {
+    const activeEnemySwIds = new Set<string>()
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      for (const b of this.em.getBuildingsForPlayer(p.id)) {
+        if (b.state !== 'active') continue
+        if (!AI.SW_COOLDOWNS[b.def.id]) continue
+        activeEnemySwIds.add(b.def.id)
+        if (!this.enemySuperweaponTimers.has(b.def.id)) {
+          this.enemySuperweaponTimers.set(b.def.id, AI.SW_COOLDOWNS[b.def.id])
+        }
+      }
+    }
+
+    for (const trackedId of [...this.enemySuperweaponTimers.keys()]) {
+      if (!activeEnemySwIds.has(trackedId)) {
+        this.enemySuperweaponTimers.delete(trackedId)
+      }
+    }
+
+    const interval = TICK_INTERVAL[this.difficulty]
+    for (const [swId, remaining] of this.enemySuperweaponTimers.entries()) {
+      this.enemySuperweaponTimers.set(swId, Math.max(0, remaining - interval))
+    }
+  }
+
+  private updateBaseHealthTimeline(buildings: Building[]): void {
+    if (!this.isSmartHard()) return
+    const hp = buildings
+      .filter(b => b.state !== 'dying')
+      .reduce((sum, b) => sum + Math.max(0, b.hp), 0)
+    this.baseHealthTimeline.push({ t: this.matchTimer, hp })
+    const cutoff = this.matchTimer - 60000
+    while (this.baseHealthTimeline.length > 1 && this.baseHealthTimeline[0].t < cutoff) {
+      this.baseHealthTimeline.shift()
+    }
+  }
+
+  private getBaseDamagePctLast60s(): number {
+    if (this.baseHealthTimeline.length < 2) return 0
+    const oldest = this.baseHealthTimeline[0]
+    const newest = this.baseHealthTimeline[this.baseHealthTimeline.length - 1]
+    if (oldest.hp <= 0) return 0
+    return clamp((oldest.hp - newest.hp) / oldest.hp, 0, 1)
+  }
+
+  private evaluateOverdriveMode(): void {
+    if (!this.isSmartHard()) return
+
+    const enemySwEta = this.enemySuperweaponTimers.size > 0
+      ? Math.min(...this.enemySuperweaponTimers.values())
+      : null
+    const baseDamagePct = this.getBaseDamagePctLast60s()
+    const shouldOverdrive = shouldActivateOverdrive({
+      enemySuperweaponEtaMs: enemySwEta,
+      baseDamagePctLast60s: baseDamagePct,
+    })
+    if (shouldOverdrive) {
+      if (!this.isOverdriveActive()) {
+        this.smartHardTelemetry.overdriveTriggers++
+        this.overdriveReason = enemySwEta !== null &&
+          enemySwEta <= SMART_HARD_TUNING.overdriveEnemySuperweaponMs
+          ? 'superweapon'
+          : 'base_damage'
+      }
+      this.overdriveUntilMs = Math.max(this.overdriveUntilMs, this.matchTimer + SMART_HARD_TUNING.overdriveMinDurationMs)
+      return
+    }
+    if (this.matchTimer >= this.overdriveUntilMs) {
+      this.overdriveReason = null
+    }
+  }
+
+  private runOverdriveFlood(gameState: GameState): void {
+    if (!this.isOverdriveActive()) return
+    if (this.matchTimer - this.lastOverdriveFloodMs < SMART_HARD_TUNING.overdriveFloodIntervalMs) return
+
+    const target = this.findAttackTarget(gameState)
+    if (!target) return
+    this.lastOverdriveFloodMs = this.matchTimer
+    this.setAggressiveFor(SMART_HARD_TUNING.overdriveMinDurationMs)
+    const attackers = this.getCombatUnits()
+    for (const unit of attackers) {
+      const floodTarget = { x: target.x, y: target.y }
+      const waypoint = this.computeSmartHardPotentialWaypoint(unit, floodTarget, floodTarget)
+      if (waypoint && dist(waypoint.x, waypoint.y, unit.x, unit.y) > TILE_SIZE * 1.2) {
+        unit.giveOrder({ type: 'move', target: waypoint })
+        unit.giveOrder({ type: 'attackMove', target: floodTarget }, true)
+      } else {
+        unit.giveOrder({ type: 'attackMove', target: floodTarget })
+      }
+    }
+  }
+
+  private logSmartHardTelemetry(): void {
+    console.log(
+      `[AI][SmartHard] p${this.playerId} overdrive=${this.isOverdriveActive()} reason=${this.overdriveReason ?? 'none'} ` +
+      `stats=${JSON.stringify(this.smartHardTelemetry)}`,
+    )
   }
 
   // ── Helpers ──────────────────────────────────────────────────
@@ -2315,7 +2749,7 @@ export class AI {
   }
 
   private shouldExpandByTime(): boolean {
-    const threshold = this.difficulty === 'hard' ? 180000 : this.difficulty === 'medium' ? 300000 : 420000
+    const threshold = this.isSmartHard() ? 150000 : this.isHardLike() ? 180000 : this.difficulty === 'medium' ? 300000 : 420000
     return this.matchTimer >= threshold
   }
 
@@ -2330,7 +2764,7 @@ export class AI {
   }
 
   private shouldAddProductionStructures(): boolean {
-    if (this.difficulty !== 'hard') return false
+    if (!this.isHardLike()) return false
     if (this.incomePerMinute <= 0) return false
     return this.economy.getCredits(this.playerId) > 3000 && this.incomePerMinute >= this.spendingPerMinute
   }
@@ -2468,7 +2902,7 @@ export class AI {
     if (this.matchTimer < this.aggressionUntilMs) {
       return randomInt(Math.floor(w.min * 0.55), Math.floor(w.max * 0.7))
     }
-    if (this.difficulty === 'hard') {
+    if (this.isHardLike()) {
       // Hard mode cadence alternates between pressure spikes and regroup lulls.
       const burstCycle = this.waveCount % 5
       if (burstCycle === 1 || burstCycle === 2) {
@@ -2671,7 +3105,7 @@ export class AI {
         ? enemyAnchor.hp / Math.max(1, this.getEntityMaxHp(enemyAnchor.id)) <= 0.2
         : false
 
-      if (!group.retreating && casualtyRatio >= GROUP_RETREAT_THRESHOLD && !enemyAlmostDead) {
+      if (!group.retreating && !this.isOverdriveActive() && casualtyRatio >= GROUP_RETREAT_THRESHOLD && !enemyAlmostDead) {
         group.retreating = true
         if (fallback) {
           for (const u of alive) {
