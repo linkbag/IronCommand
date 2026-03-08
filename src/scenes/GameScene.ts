@@ -82,6 +82,7 @@ export class GameScene extends Phaser.Scene {
   private lastUnderAttackAlertMs = 0
   private fogAnchorSources: Array<{ pos: TileCoord; range: number }> = []
   private playerSpawnIndexById: Map<number, number> = new Map()
+  private neutralBridgeTilesByBuildingId: Map<string, TileCoord[]> = new Map()
   private waypointMode = false
   private paratrooperCooldownMs: Map<number, number> = new Map()
   private gameOver = false
@@ -106,6 +107,7 @@ export class GameScene extends Phaser.Scene {
       mapSize: 'small',
       revealMap: false,
       mapTemplate: 'continental',
+      startDistanceMode: 'long_range',
       mapSeed: Math.floor(Math.random() * 99999) + 1,
       playerSpawn: -1,
       aiCount: 1,
@@ -128,6 +130,7 @@ export class GameScene extends Phaser.Scene {
     this.lastUnderAttackAlertMs = 0
     this.fogAnchorSources = []
     this.playerSpawnIndexById = new Map()
+    this.neutralBridgeTilesByBuildingId = new Map()
     this.waypointMode = false
     this.paratrooperCooldownMs = new Map()
     this.gameOver = false
@@ -165,7 +168,7 @@ export class GameScene extends Phaser.Scene {
     const mapDims: Record<string, number> = { small: 64, medium: 128, large: 256 }
     const mapSize = mapDims[cfg.mapSize] ?? 64
     const seed = cfg.mapSeed ?? Math.floor(Math.random() * 99999) + 1
-    this.gameMap = new GameMap(this, mapSize, mapSize, seed, cfg.mapTemplate)
+    this.gameMap = new GameMap(this, mapSize, mapSize, seed, cfg.mapTemplate, cfg.startDistanceMode)
     this.gameMap.renderTerrain()
     // NOTE: Don't pre-render fog as full black here. All tiles start HIDDEN.
     // updateFogOfWar() at the end of create() will reveal + render fog properly.
@@ -435,6 +438,9 @@ export class GameScene extends Phaser.Scene {
     try {
     this.spawnNeutralBuildings()
     } catch (e) { console.error('[IC] CRASH in section 11b (spawnNeutralBuildings):', e); throw e }
+    try {
+    this.spawnNeutralBridgeStructures()
+    } catch (e) { console.error('[IC] CRASH in section 11c (spawnNeutralBridgeStructures):', e); throw e }
 
     // ── 12. Input ─────────────────────────────────────────────
     try {
@@ -717,6 +723,10 @@ export class GameScene extends Phaser.Scene {
       this.staleMateBoostActive = false
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p) p.entities = p.entities.filter(id => id !== entityId)
+      const bridgeTiles = this.neutralBridgeTilesByBuildingId.get(entityId)
+      if (bridgeTiles) {
+        this.collapseBridgeTiles(bridgeTiles, entityId)
+      }
       if (this.selectedIds.delete(entityId)) this.syncSelectionState()
       if (playerId !== this.gameState.localPlayerId) {
         this.playerBuildingsDestroyed++
@@ -1292,6 +1302,95 @@ export class GameScene extends Phaser.Scene {
       }
     }
     console.log(`[Neutral] Map=${mapClass} target=${targetCount}, placed ${placed} neutral buildings`)
+  }
+
+  private spawnNeutralBridgeStructures(): void {
+    const { width, height, tiles } = this.gameMap.data
+    const visited = new Uint8Array(width * height)
+    const keyFor = (col: number, row: number) => row * width + col
+    const dirs: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+
+    let placed = 0
+    for (let row = 0; row < height; row++) {
+      for (let col = 0; col < width; col++) {
+        if (visited[keyFor(col, row)]) continue
+        if (tiles[row][col].terrain !== TerrainType.BRIDGE) continue
+
+        const queue: TileCoord[] = [{ col, row }]
+        const component: TileCoord[] = []
+        visited[keyFor(col, row)] = 1
+
+        while (queue.length > 0) {
+          const cur = queue.pop()!
+          component.push(cur)
+          for (const [dc, dr] of dirs) {
+            const nc = cur.col + dc
+            const nr = cur.row + dr
+            if (nc < 0 || nc >= width || nr < 0 || nr >= height) continue
+            const nk = keyFor(nc, nr)
+            if (visited[nk]) continue
+            visited[nk] = 1
+            if (tiles[nr][nc].terrain !== TerrainType.BRIDGE) continue
+            queue.push({ col: nc, row: nr })
+          }
+        }
+
+        if (component.length === 0) continue
+        const colSpan = Math.max(...component.map(t => t.col)) - Math.min(...component.map(t => t.col))
+        const rowSpan = Math.max(...component.map(t => t.row)) - Math.min(...component.map(t => t.row))
+        const sorted = [...component].sort((a, b) => {
+          if (colSpan >= rowSpan) return a.col === b.col ? a.row - b.row : a.col - b.col
+          return a.row === b.row ? a.col - b.col : a.row - b.row
+        })
+        const anchorCount = Math.max(1, Math.ceil(component.length / 10))
+        const usedAnchorKeys = new Set<number>()
+        for (let i = 0; i < anchorCount; i++) {
+          const idx = Math.min(sorted.length - 1, Math.floor(((i + 0.5) * sorted.length) / anchorCount))
+          const anchor = sorted[idx]
+          const anchorKey = keyFor(anchor.col, anchor.row)
+          if (usedAnchorKeys.has(anchorKey)) continue
+          usedAnchorKeys.add(anchorKey)
+
+          const bridge = this.entityMgr.createBuilding(NEUTRAL_PLAYER_ID, 'neutral_bridge', anchor.col, anchor.row)
+          if (!bridge) continue
+          bridge.state = 'active'
+          this.onBuildingActivated(bridge)
+          this.neutralBridgeTilesByBuildingId.set(bridge.id, component)
+          placed++
+        }
+      }
+    }
+
+    console.log(`[Neutral] Bridge components placed: ${placed}`)
+  }
+
+  private collapseBridgeTiles(componentTiles: TileCoord[], destroyedBridgeId: string): void {
+    const siblingBridgeIds: string[] = []
+    for (const [bridgeId, tiles] of this.neutralBridgeTilesByBuildingId.entries()) {
+      if (tiles !== componentTiles) continue
+      siblingBridgeIds.push(bridgeId)
+      this.neutralBridgeTilesByBuildingId.delete(bridgeId)
+    }
+
+    for (const t of componentTiles) {
+      const tile = this.gameMap.getTile(t.col, t.row)
+      if (!tile) continue
+      tile.terrain = TerrainType.WATER
+      tile.height = 0
+      tile.passable = false
+      tile.buildable = false
+      tile.oreAmount = 0
+      tile.occupiedBy = null
+      this.pathfinder.invalidateTile(t.col, t.row)
+    }
+
+    for (const bridgeId of siblingBridgeIds) {
+      if (bridgeId === destroyedBridgeId) continue
+      const sibling = this.entityMgr.getBuilding(bridgeId)
+      if (sibling && sibling.state !== 'dying') sibling.die()
+    }
+
+    this.gameMap.renderTerrain()
   }
 
   private buildNeutralSpawnList(

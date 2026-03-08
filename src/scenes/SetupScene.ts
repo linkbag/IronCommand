@@ -4,7 +4,7 @@
 // ============================================================
 
 import Phaser from 'phaser'
-import type { FactionId } from '../types'
+import type { FactionId, StartDistanceMode } from '../types'
 import { TILE_SIZE } from '../types'
 import { FACTIONS, FACTION_IDS } from '../data/factions'
 import { generatePreviewData, PREVIEW_COLORS } from '../engine/GameMap'
@@ -17,6 +17,7 @@ export interface SkirmishConfig {
   mapSize: 'small' | 'medium' | 'large'
   revealMap: boolean
   mapTemplate: MapTemplate
+  startDistanceMode: StartDistanceMode
   mapSeed: number
   playerSpawn: number           // -1 = random, 0-7 = specific spawn index
   aiCount: number
@@ -58,6 +59,10 @@ const MAP_VISIBILITY_OPTIONS: Array<{ label: string; value: boolean }> = [
   { label: 'FOG OF WAR', value: false },
   { label: 'REVEALED', value: true },
 ]
+const START_DISTANCE_OPTIONS: Array<{ label: string; value: StartDistanceMode }> = [
+  { label: 'CLOSE BATTLE', value: 'close_battle' },
+  { label: 'LONG RANGE', value: 'long_range' },
+]
 
 export class SetupScene extends Phaser.Scene {
   private config: SkirmishConfig = {
@@ -65,6 +70,7 @@ export class SetupScene extends Phaser.Scene {
     mapSize: 'medium',
     revealMap: false,
     mapTemplate: 'continental',
+    startDistanceMode: 'long_range',
     mapSeed: Math.floor(Math.random() * 99999) + 1,
     playerSpawn: -1,
     aiCount: 1,
@@ -80,6 +86,7 @@ export class SetupScene extends Phaser.Scene {
   private factionSWText!: Phaser.GameObjects.Text
 
   private mapSizeBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
+  private startDistanceBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private mapVisibilityBtns: Map<boolean, Phaser.GameObjects.Graphics> = new Map()
   private templateBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private diffBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
@@ -355,6 +362,21 @@ export class SetupScene extends Phaser.Scene {
         this.regeneratePreview()
       },
       this.templateBtns,
+    )
+
+    cy += 16
+
+    // Start Distance
+    cy = this.createRadioGroup(
+      panelX + 10, cy, panelW - 20,
+      'START DISTANCE',
+      START_DISTANCE_OPTIONS.map(m => ({ label: m.label, value: m.value })),
+      this.config.startDistanceMode,
+      (v) => {
+        this.config.startDistanceMode = v as StartDistanceMode
+        this.regeneratePreview()
+      },
+      this.startDistanceBtns,
     )
 
     cy += 16
@@ -772,7 +794,13 @@ export class SetupScene extends Phaser.Scene {
 
     const mapDims: Record<string, number> = { small: 64, medium: 128, large: 256 }
     const mapSize = mapDims[this.config.mapSize] ?? 64
-    const data = generatePreviewData(mapSize, mapSize, this.config.mapSeed, this.config.mapTemplate)
+    const data = generatePreviewData(
+      mapSize,
+      mapSize,
+      this.config.mapSeed,
+      this.config.mapTemplate,
+      this.config.startDistanceMode,
+    )
 
     const previewSize = 180
     const scale = previewSize / mapSize
