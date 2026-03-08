@@ -393,7 +393,7 @@ export class Building extends Phaser.GameObjects.Container {
   private getFacilityVisualType(): FacilityVisualType {
     const id = this.def.id
     if (this.def.category === 'defense') return 'defense'
-    if (id === 'barracks' || id.includes('barracks')) return 'barracks'
+    if (id.includes('barracks')) return 'barracks'
     if (id.includes('refinery') || id.includes('purifier')) return 'refinery'
     if (id.includes('power') || id.includes('reactor')) return 'power'
     if (id.includes('radar') || id.includes('sensor') || id.includes('satellite')) return 'radar'
@@ -789,7 +789,6 @@ export class Building extends Phaser.GameObjects.Container {
       this.emit('fire_at_target', this, nearest)
       this.playDefenseMuzzleFlash(nearest.x, nearest.y)
       this.attackCooldown = 1 / attack.fireRate
-
     })
   }
 
