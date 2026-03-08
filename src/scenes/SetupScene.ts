@@ -677,19 +677,9 @@ export class SetupScene extends Phaser.Scene {
         drawState(opt.value === current)
       })
       zone.on('pointerdown', () => {
-        // Deselect all
         store.forEach((g, key) => {
-          const isNowSelected = key === opt.value
-            g.clear()
-            if (isNowSelected) {
-              g.fillStyle(STYLE.accentDim, 1)
-              g.fillRect(bx - (options.indexOf(options.find(o => o.value === key)!) * (btnW + btnGap)), y, btnW, btnH)
-            }
-          })
-          // Simpler: just mark the right one
-          store.forEach((g, key) => {
-            const idx2 = options.findIndex(o => o.value === key)
-            const bx2 = x + idx2 * (btnW + btnGap)
+          const idx2 = options.findIndex(o => o.value === key)
+          const bx2 = x + idx2 * (btnW + btnGap)
           g.clear()
           if (key === opt.value) {
             g.fillStyle(STYLE.accentDim, 1)
