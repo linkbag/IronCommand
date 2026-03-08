@@ -34,8 +34,7 @@ const FOG_ALPHA: Record<FogState, number> = {
 }
 
 const ORE_MAX_AMOUNT = ORE_TILE_MAX
-const ORE_SPREAD_INTERVAL_MS = 30000
-const ORE_GROWTH_INTERVAL_MS = 6000  // regenerate every 6s (50 units/tick = ~500/min)
+const ORE_GROWTH_INTERVAL_MS = 6000  // apply ore recovery every 6s using the global 1% lock
 
 function scaleColor(color: number, factor: number): number {
   const r = Math.max(0, Math.min(255, Math.round(((color >> 16) & 0xff) * factor)))
@@ -1086,9 +1085,7 @@ export class GameMap {
   private waterTiles: { col: number; row: number }[] = []
   private oreTiles: { col: number; row: number }[] = []
   private animFrame = 0
-  private oreSpreadTimerMs = 0
   private oreGrowthTimerMs = 0
-  private depletedOreTiles: Set<number> = new Set()
   private debugGridEnabled = false
 
   constructor(scene: Phaser.Scene, width?: number, height?: number, seed?: number, template?: MapTemplate) {
@@ -1610,13 +1607,7 @@ export class GameMap {
 
   update(delta: number): void {
     this.renderTerrainVisible()
-    this.oreSpreadTimerMs += delta
     this.oreGrowthTimerMs += delta
-
-    if (this.oreSpreadTimerMs >= ORE_SPREAD_INTERVAL_MS) {
-      this.oreSpreadTimerMs -= ORE_SPREAD_INTERVAL_MS
-      this.regenerateDepletedOre()
-    }
 
     if (this.oreGrowthTimerMs >= ORE_GROWTH_INTERVAL_MS) {
       this.oreGrowthTimerMs -= ORE_GROWTH_INTERVAL_MS
@@ -1639,11 +1630,7 @@ export class GameMap {
       tile.oreAmount = 0
       tile.passable = true
       tile.buildable = true
-      // Don't add to depletedOreTiles — fully depleted tiles don't regen
       this.removeOreTile(col, row)
-    } else {
-      // Partially depleted — track for regeneration
-      this.depletedOreTiles.add(this.key(col, row))
     }
 
     this.redrawTile(col, row)
@@ -1670,46 +1657,6 @@ export class GameMap {
     this.renderTerrainVisible()
   }
 
-  private regenerateDepletedOre(): void {
-    if (this.depletedOreTiles.size === 0) return
-    const changed: Array<{ col: number; row: number }> = []
-    for (const key of [...this.depletedOreTiles]) {
-      const col = key % this.data.width
-      const row = Math.floor(key / this.data.width)
-      const tile = this.getTile(col, row)
-
-      // Only ore regenerates. Gems are finite like RA2.
-      if (!tile) {
-        this.depletedOreTiles.delete(key)
-        continue
-      }
-      if (tile.terrain !== TerrainType.ORE) {
-        this.depletedOreTiles.delete(key)
-        continue
-      }
-      if (tile.oreAmount <= 0) {
-        this.depletedOreTiles.delete(key)
-        continue
-      }
-
-      // Adjacent ore speeds up regen slightly
-      const adjacentBonus = this.hasAdjacentOre(col, row) ? 1.3 : 1.0
-      const maxAmt = ORE_TILE_MAX
-      const regenAmount = Math.floor(ORE_REGEN_RATE * adjacentBonus)
-      tile.oreAmount = Math.min(maxAmt, tile.oreAmount + regenAmount)
-
-      if (tile.oreAmount >= maxAmt) {
-        this.depletedOreTiles.delete(key)
-      }
-      changed.push({ col, row })
-    }
-
-    if (changed.length > 0) {
-      for (const c of changed) this.redrawTile(c.col, c.row)
-      this.renderAnimatedTiles()
-    }
-  }
-
   private regenerateExistingOre(): void {
     if (this.oreTiles.length === 0) return
     const changed: Array<{ col: number; row: number }> = []
@@ -1727,23 +1674,6 @@ export class GameMap {
       for (const c of changed) this.redrawTile(c.col, c.row)
       this.renderAnimatedTiles()
     }
-  }
-
-  private hasAdjacentOre(col: number, row: number): boolean {
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dc = -1; dc <= 1; dc++) {
-        if (dr === 0 && dc === 0) continue
-        const tile = this.getTile(col + dc, row + dr)
-        if (tile && (tile.terrain === TerrainType.ORE || tile.terrain === TerrainType.GEMS) && tile.oreAmount > 0) {
-          return true
-        }
-      }
-    }
-    return false
-  }
-
-  private key(col: number, row: number): number {
-    return row * this.data.width + col
   }
 
   private addOreTile(col: number, row: number): void {
