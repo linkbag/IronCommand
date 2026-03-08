@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 04:06*
+*Last updated: 2026-03-08 04:07*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -134,3 +134,7 @@ All 5 changed files reviewed. TypeScript and Vite build pass clean. unit_damaged
 ### Update: 2026-03-08 04:06
 ### codex-ic-map-continent-landmass — 2026-03-08 04:06
 One correctness bug fixed: carveMeanderingRiver was called with halfWidth=0 which produced a zero-width river immediately overwritten by its own bridge-placement loop, leaving 3 isolated BRIDGE tiles. Fixed to halfWidth=1 matching all other callers. All other new code (radial coastBand scoring, ocean-component BFS, fjord-trimming pass) is algorithmically correct. Build passes.
+
+### Update: 2026-03-08 04:07
+### codex-ic-bldg-box-symbols-v2 — 2026-03-08 04:07
+All changes are clean. Removed redundant barracks equality check and stray blank line from debug-log removal. TypeScript passes, build passes. Shadow z-order correct, palette all opaque, fallback logic sound.
