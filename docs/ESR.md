@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 13:27*
+*Last updated: 2026-03-08 13:28*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -176,3 +176,7 @@ All changes compile cleanly (tsc --noEmit: zero errors). Deploy/pack loop is log
 ### Update: 2026-03-08 13:27
 ### codex-ic-building-boxes-v3-symbol-labels-r2 — 2026-03-08 13:27
 One visual bug fixed: statusText label (FAC/BAR/etc.) was always shown via setVisible(true) in updateStatusOverlay() but lacks a construction mask, causing it to float above the building during the bottom-up reveal animation. Fixed by returning early with setVisible(false) when state is constructing. Build passes (tsc --noEmit clean). All new methods (getFacilitySizeProfile, getIsoDims, drawBuildingDetails, drawFacilitySymbol, updateStatusOverlay) compile cleanly and are logically sound. Visual type routing covers all 26 building IDs correctly; superweapon buildings (weather_device, chronosphere, nuclear_silo, iron_curtain) fall back to factory/FAC which is acceptable.
+
+### Update: 2026-03-08 13:28
+### codex-ic-ore-regen-1pct-and-8p-colors-r2 — 2026-03-08 13:28
+One logic bug fixed: getPlayerSlotColor(-1) was returning human-blue (0x4488ff) for neutral buildings (NEUTRAL_PLAYER_ID=-1), making them indistinguishable from the human player on the minimap. Fixed by adding NEUTRAL_SLOT_COLOR=0x888888 returned for all playerId<0. All other changes (ORE_REGEN_RATE 10->1, 8-player slot colors, MAX_AI_PLAYERS=7 cap, 2-column alliance layout, per-player minimap colors) are correct. Build passes clean.
