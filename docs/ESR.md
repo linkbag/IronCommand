@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 13:29*
+*Last updated: 2026-03-08 13:32*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -184,3 +184,7 @@ One logic bug fixed: getPlayerSlotColor(-1) was returning human-blue (0x4488ff) 
 ### Update: 2026-03-08 13:29
 ### codex-ic-ra2-ai-benchmark-and-upgrade-r2 — 2026-03-08 13:29
 Doctrine-driven strategic AI layer reviewed. TypeScript build passes clean. One cosmetic indentation fix applied (mis-indented superweapon comment in tick()). All new features (AIStrategicDoctrine, EnemyMacroIntel, opportunistic attack windows, reserve-aware defender selection, doctrine-weighted targeting/harassment, wave composition stabilization, intent-based scouting with revisit memory) are logically sound and correctly integrated. Removed autoEngageVisibleOrNearbyEnemies is covered by Unit.ts built-in auto-acquire. No logic bugs, memory leaks, or type errors found.
+
+### Update: 2026-03-08 13:32
+### codex-ic-pause-ui-quit-flow-r2 — 2026-03-08 13:32
+Pause menu and quit-flow implementation is correct. Full pause UI (pause panel, confirmation modal, Resume/Return-to-Setup/Return-to-Menu buttons) is cleanly implemented. All gameplay input handlers (pointer events, keyboard actions) guard on `this.paused`. `exitMatchTo` properly cleans up registry, HUD bridge listeners, and input listeners before scene transition. `onSceneShutdown` provides a safety net for any missed cleanup. `GamePhase` includes `paused` as a valid literal — `syncPauseUi()` sets it correctly. Build is tsc-clean.
