@@ -19,6 +19,16 @@ import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL
 import { cartToScreen, screenToCart, getIsoWorldBounds } from '../engine/IsoUtils'
 import { FACTIONS } from '../data/factions'
 import type { SkirmishConfig } from './SetupScene'
+import {
+  HOME_BASE_RADIUS_TILES,
+  MIN_OPPOSING_START_SEPARATION_TILES,
+  START_ZONE_SCAN_MARGIN_TILES,
+  isCrossTeamPlacementInEnemyHomeRadius,
+  pickBestSpawnCandidateIndex,
+  tileDistance,
+  validateOpposingStartZoneSeparation,
+} from './spawnSafety'
+import type { PlayerStartZone, SpawnCandidate } from './spawnSafety'
 
 // Unit acknowledgment lines
 const ACK_LINES: Record<string, string[]> = {
@@ -82,6 +92,7 @@ export class GameScene extends Phaser.Scene {
   private lastUnderAttackAlertMs = 0
   private fogAnchorSources: Array<{ pos: TileCoord; range: number }> = []
   private playerSpawnIndexById: Map<number, number> = new Map()
+  private playerSpawnTileById: Map<number, TileCoord> = new Map()
   private waypointMode = false
   private paratrooperCooldownMs: Map<number, number> = new Map()
   private gameOver = false
@@ -128,6 +139,7 @@ export class GameScene extends Phaser.Scene {
     this.lastUnderAttackAlertMs = 0
     this.fogAnchorSources = []
     this.playerSpawnIndexById = new Map()
+    this.playerSpawnTileById = new Map()
     this.waypointMode = false
     this.paratrooperCooldownMs = new Map()
     this.gameOver = false
@@ -1145,10 +1157,25 @@ export class GameScene extends Phaser.Scene {
     const { startPositions } = this.gameMap.data
     const { tiles, width, height } = this.gameMap.data
     const players = this.gameState.players
-    const spawnAssignment = this.computeSpawnAssignment(players.length, startPositions.length)
+    const spawnAssignment = this.computeSpawnAssignment(players)
+    const startZones = this.buildAssignedStartZones(players, spawnAssignment)
+    const startConflicts = validateOpposingStartZoneSeparation(
+      startZones,
+      (playerA, playerB) => this.entityMgr.isEnemy(playerA, playerB),
+      MIN_OPPOSING_START_SEPARATION_TILES,
+    )
+    if (startConflicts.length > 0) {
+      console.warn('[SpawnSafety] Unresolved opposing start-zone conflicts after relocation attempts', startConflicts)
+    }
+
+    this.playerSpawnTileById.clear()
+    for (const zone of startZones) this.playerSpawnTileById.set(zone.playerId, zone.tile)
 
     console.log('[IC] spawnStartingEntities:', players.length, 'players,',
       startPositions.length, 'start positions')
+
+    const reservedBuildingTiles = new Set<string>()
+    const reservedUnitTiles = new Set<string>()
 
     players.forEach((player, i) => {
       const spawnIdx = spawnAssignment[i] ?? 0
@@ -1159,8 +1186,13 @@ export class GameScene extends Phaser.Scene {
       console.log(`[IC] Player ${player.id} (${player.faction}/${side}) spawn[${spawnIdx}]: tile(${st.col},${st.row}) world(${spawnWorld.x},${spawnWorld.y})`)
 
       // Construction Yard — start active
-      const cy = this.entityMgr.createBuilding(player.id, 'construction_yard',
-        st.col - 1, st.row - 1)
+      const cy = this.createStartingBuildingSafe(
+        player.id,
+        'construction_yard',
+        { col: st.col - 1, row: st.row - 1 },
+        startZones,
+        reservedBuildingTiles,
+      )
       if (cy) {
         cy.state = 'active'
         this.onBuildingActivated(cy)
@@ -1169,16 +1201,26 @@ export class GameScene extends Phaser.Scene {
 
       // Side-appropriate Power Building — start active
       const powerDefId = getPowerBuildingDefId(side)
-      const pp = this.entityMgr.createBuilding(player.id, powerDefId,
-        st.col + 3, st.row - 1)
+      const pp = this.createStartingBuildingSafe(
+        player.id,
+        powerDefId,
+        { col: st.col + 3, row: st.row - 1 },
+        startZones,
+        reservedBuildingTiles,
+      )
       if (pp) {
         pp.state = 'active'
         this.onBuildingActivated(pp)
       }
 
       // Ore Refinery — start active
-      const ref = this.entityMgr.createBuilding(player.id, 'ore_refinery',
-        st.col - 1, st.row + 3)
+      const ref = this.createStartingBuildingSafe(
+        player.id,
+        'ore_refinery',
+        { col: st.col - 1, row: st.row + 3 },
+        startZones,
+        reservedBuildingTiles,
+      )
       if (ref) {
         ref.state = 'active'
         this.onBuildingActivated(ref)
@@ -1186,8 +1228,14 @@ export class GameScene extends Phaser.Scene {
 
       // Side-appropriate Harvester — find nearest ore and auto-send
       const harvesterDefId = getHarvesterDefId(side)
-      const hv = this.entityMgr.createUnit(player.id, harvesterDefId,
-        spawnWorld.x + TILE_SIZE * 2, spawnWorld.y + TILE_SIZE * 3)
+      const hv = this.createStartingUnitSafe(
+        player.id,
+        harvesterDefId,
+        { col: st.col + 2, row: st.row + 3 },
+        startZones,
+        reservedBuildingTiles,
+        reservedUnitTiles,
+      )
       if (hv) {
         if (ref) hv.setRefineryId(ref.id)
         // Find nearest ore tile and send harvester there immediately
@@ -1211,11 +1259,223 @@ export class GameScene extends Phaser.Scene {
       // 2 basic infantry flanking the base (side-appropriate)
       const infantryDefId = getBasicInfantryDefId(side)
       for (let j = 0; j < 2; j++) {
-        this.entityMgr.createUnit(player.id, infantryDefId,
-          spawnWorld.x - TILE_SIZE * 3 + j * TILE_SIZE * 2,
-          spawnWorld.y + TILE_SIZE)
+        this.createStartingUnitSafe(
+          player.id,
+          infantryDefId,
+          { col: st.col - 3 + j * 2, row: st.row + 1 },
+          startZones,
+          reservedBuildingTiles,
+          reservedUnitTiles,
+        )
       }
     })
+  }
+
+  private buildAssignedStartZones(players: Player[], assignments: number[]): PlayerStartZone[] {
+    const zones: PlayerStartZone[] = []
+    const starts = this.gameMap.data.startPositions
+    for (let i = 0; i < players.length; i++) {
+      const spawnIndex = assignments[i]
+      if (!Number.isInteger(spawnIndex) || spawnIndex < 0 || spawnIndex >= starts.length) continue
+      const world = starts[spawnIndex]
+      zones.push({
+        playerId: players[i].id,
+        tile: this.gameMap.worldToTile(world.x, world.y),
+        spawnIndex,
+      })
+    }
+    return zones
+  }
+
+  private createStartingBuildingSafe(
+    playerId: number,
+    defId: string,
+    preferredTopLeft: TileCoord,
+    startZones: PlayerStartZone[],
+    reservedBuildingTiles: Set<string>,
+  ): import('../entities/Building').Building | null {
+    const safeTopLeft = this.findSafeBuildingPlacement(playerId, defId, preferredTopLeft, startZones, reservedBuildingTiles)
+    if (!safeTopLeft) {
+      console.error('[SpawnSafety] Could not find safe building placement', { playerId, defId, preferredTopLeft })
+      return null
+    }
+    if (safeTopLeft.col !== preferredTopLeft.col || safeTopLeft.row !== preferredTopLeft.row) {
+      console.warn('[SpawnSafety] Relocated opening building', { playerId, defId, from: preferredTopLeft, to: safeTopLeft })
+    }
+
+    const building = this.entityMgr.createBuilding(playerId, defId, safeTopLeft.col, safeTopLeft.row)
+    if (!building) return null
+    for (const tile of building.occupiedTiles) {
+      reservedBuildingTiles.add(this.toTileKey(tile.col, tile.row))
+    }
+    return building
+  }
+
+  private createStartingUnitSafe(
+    playerId: number,
+    defId: string,
+    preferredTile: TileCoord,
+    startZones: PlayerStartZone[],
+    reservedBuildingTiles: Set<string>,
+    reservedUnitTiles: Set<string>,
+  ): import('../entities/Unit').Unit | null {
+    const safeTile = this.findSafeUnitPlacement(
+      playerId,
+      preferredTile,
+      startZones,
+      reservedBuildingTiles,
+      reservedUnitTiles,
+    )
+    if (!safeTile) {
+      console.error('[SpawnSafety] Could not find safe unit placement', { playerId, defId, preferredTile })
+      return null
+    }
+    if (safeTile.col !== preferredTile.col || safeTile.row !== preferredTile.row) {
+      console.warn('[SpawnSafety] Relocated opening unit', { playerId, defId, from: preferredTile, to: safeTile })
+    }
+
+    const world = this.gameMap.tileToWorld(safeTile.col, safeTile.row)
+    const unit = this.entityMgr.createUnit(playerId, defId, world.x, world.y)
+    if (unit) reservedUnitTiles.add(this.toTileKey(safeTile.col, safeTile.row))
+    return unit
+  }
+
+  private findSafeBuildingPlacement(
+    playerId: number,
+    defId: string,
+    preferredTopLeft: TileCoord,
+    startZones: PlayerStartZone[],
+    reservedBuildingTiles: Set<string>,
+  ): TileCoord | null {
+    const maxLocalRadius = HOME_BASE_RADIUS_TILES + 6
+    for (let radius = 0; radius <= maxLocalRadius; radius++) {
+      for (let dr = -radius; dr <= radius; dr++) {
+        for (let dc = -radius; dc <= radius; dc++) {
+          if (Math.max(Math.abs(dc), Math.abs(dr)) !== radius) continue
+          const candidate = { col: preferredTopLeft.col + dc, row: preferredTopLeft.row + dr }
+          if (!this.isValidStartingBuildingPlacement(playerId, defId, candidate, startZones, reservedBuildingTiles)) continue
+          return candidate
+        }
+      }
+    }
+
+    const { width, height } = this.gameMap.data
+    for (let row = START_ZONE_SCAN_MARGIN_TILES; row < height - START_ZONE_SCAN_MARGIN_TILES; row++) {
+      for (let col = START_ZONE_SCAN_MARGIN_TILES; col < width - START_ZONE_SCAN_MARGIN_TILES; col++) {
+        const candidate = { col, row }
+        if (!this.isValidStartingBuildingPlacement(playerId, defId, candidate, startZones, reservedBuildingTiles)) continue
+        return candidate
+      }
+    }
+    return null
+  }
+
+  private findSafeUnitPlacement(
+    playerId: number,
+    preferredTile: TileCoord,
+    startZones: PlayerStartZone[],
+    reservedBuildingTiles: Set<string>,
+    reservedUnitTiles: Set<string>,
+  ): TileCoord | null {
+    const maxLocalRadius = HOME_BASE_RADIUS_TILES + 8
+    for (let radius = 0; radius <= maxLocalRadius; radius++) {
+      for (let dr = -radius; dr <= radius; dr++) {
+        for (let dc = -radius; dc <= radius; dc++) {
+          if (Math.max(Math.abs(dc), Math.abs(dr)) !== radius) continue
+          const candidate = { col: preferredTile.col + dc, row: preferredTile.row + dr }
+          if (!this.isValidStartingUnitPlacement(playerId, candidate, startZones, reservedBuildingTiles, reservedUnitTiles)) continue
+          return candidate
+        }
+      }
+    }
+
+    const { width, height } = this.gameMap.data
+    for (let row = START_ZONE_SCAN_MARGIN_TILES; row < height - START_ZONE_SCAN_MARGIN_TILES; row++) {
+      for (let col = START_ZONE_SCAN_MARGIN_TILES; col < width - START_ZONE_SCAN_MARGIN_TILES; col++) {
+        const candidate = { col, row }
+        if (!this.isValidStartingUnitPlacement(playerId, candidate, startZones, reservedBuildingTiles, reservedUnitTiles)) continue
+        return candidate
+      }
+    }
+    return null
+  }
+
+  private isValidStartingBuildingPlacement(
+    playerId: number,
+    defId: string,
+    topLeft: TileCoord,
+    startZones: PlayerStartZone[],
+    reservedBuildingTiles: Set<string>,
+  ): boolean {
+    const def = BUILDING_DEFS[defId]
+    if (!def) return false
+    const footprintTiles = this.buildFootprintTiles(topLeft.col, topLeft.row, def.footprint.w, def.footprint.h)
+
+    if (isCrossTeamPlacementInEnemyHomeRadius(
+      playerId,
+      footprintTiles,
+      startZones,
+      (playerA, playerB) => this.entityMgr.isEnemy(playerA, playerB),
+      HOME_BASE_RADIUS_TILES,
+    )) return false
+
+    const ownHome = this.playerSpawnTileById.get(playerId)
+    if (ownHome) {
+      const center = {
+        col: topLeft.col + Math.floor(def.footprint.w / 2),
+        row: topLeft.row + Math.floor(def.footprint.h / 2),
+      }
+      if (tileDistance(center, ownHome) > HOME_BASE_RADIUS_TILES + 10) return false
+    }
+
+    for (const tile of footprintTiles) {
+      const mapTile = this.gameMap.getTile(tile.col, tile.row)
+      if (!mapTile) return false
+      if (!mapTile.passable || !mapTile.buildable || mapTile.occupiedBy !== null) return false
+      if (reservedBuildingTiles.has(this.toTileKey(tile.col, tile.row))) return false
+    }
+    return true
+  }
+
+  private isValidStartingUnitPlacement(
+    playerId: number,
+    tile: TileCoord,
+    startZones: PlayerStartZone[],
+    reservedBuildingTiles: Set<string>,
+    reservedUnitTiles: Set<string>,
+  ): boolean {
+    const mapTile = this.gameMap.getTile(tile.col, tile.row)
+    if (!mapTile || !mapTile.passable) return false
+    const key = this.toTileKey(tile.col, tile.row)
+    if (reservedBuildingTiles.has(key) || reservedUnitTiles.has(key)) return false
+
+    const blockedByEnemyHome = isCrossTeamPlacementInEnemyHomeRadius(
+      playerId,
+      [tile],
+      startZones,
+      (playerA, playerB) => this.entityMgr.isEnemy(playerA, playerB),
+      HOME_BASE_RADIUS_TILES,
+    )
+    if (blockedByEnemyHome) return false
+
+    const ownHome = this.playerSpawnTileById.get(playerId)
+    if (ownHome && tileDistance(tile, ownHome) > HOME_BASE_RADIUS_TILES + 14) return false
+
+    return true
+  }
+
+  private buildFootprintTiles(col: number, row: number, width: number, height: number): TileCoord[] {
+    const tiles: TileCoord[] = []
+    for (let r = 0; r < height; r++) {
+      for (let c = 0; c < width; c++) {
+        tiles.push({ col: col + c, row: row + r })
+      }
+    }
+    return tiles
+  }
+
+  private toTileKey(col: number, row: number): string {
+    return `${col},${row}`
   }
 
   // ── Neutral building spawning ───────────────────────────────
@@ -2510,28 +2770,203 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private computeSpawnAssignment(playerCount: number, spawnCount: number): number[] {
-    const assignments: number[] = []
-    if (spawnCount <= 0 || playerCount <= 0) return assignments
+  private computeSpawnAssignment(players: Player[]): number[] {
+    const assignments: number[] = new Array(players.length).fill(0)
+    const startPositions = this.gameMap.data.startPositions
+    if (players.length <= 0 || startPositions.length <= 0) return []
 
     const preferred = this.skirmishCfg.playerSpawn
-    const localSpawnIdx = Number.isInteger(preferred) && preferred >= 0 && preferred < spawnCount
+    const localSpawnIdx = Number.isInteger(preferred) && preferred >= 0 && preferred < startPositions.length
       ? preferred
       : 0
 
-    const used = new Set<number>()
-    assignments[0] = localSpawnIdx
-    used.add(localSpawnIdx)
+    assignments[0] = Phaser.Math.Clamp(localSpawnIdx, 0, startPositions.length - 1)
+    const used = new Set<number>([assignments[0]])
 
-    let cursor = 0
-    for (let i = 1; i < playerCount; i++) {
-      while (used.has(cursor) && cursor < spawnCount) cursor++
-      const idx = cursor < spawnCount ? cursor : localSpawnIdx
-      assignments[i] = idx
-      used.add(idx)
+    for (let i = 1; i < players.length; i++) {
+      const player = players[i]
+      const assignedZones = this.buildAssignedStartZones(players.slice(0, i), assignments.slice(0, i))
+      const availableCandidates = this.buildSpawnCandidates().filter((candidate) => !used.has(candidate.index))
+
+      let chosenIdx = pickBestSpawnCandidateIndex(
+        player.id,
+        availableCandidates,
+        assignedZones,
+        (playerA, playerB) => this.entityMgr.isEnemy(playerA, playerB),
+        this.gameState.localPlayerId,
+        MIN_OPPOSING_START_SEPARATION_TILES,
+      )
+
+      if (chosenIdx === null) {
+        const generated = this.generateAdditionalStartPositionForPlayer(player.id, assignedZones)
+        if (generated) {
+          startPositions.push(generated)
+          chosenIdx = startPositions.length - 1
+          console.warn('[SpawnSafety] Generated extra start position to satisfy spawn safety', {
+            playerId: player.id,
+            spawnIndex: chosenIdx,
+            tile: this.gameMap.worldToTile(generated.x, generated.y),
+          })
+        }
+      }
+
+      if (chosenIdx === null) {
+        chosenIdx = availableCandidates[0]?.index ?? assignments[0]
+        console.warn('[SpawnSafety] Falling back to best-effort spawn assignment', { playerId: player.id, chosenIdx })
+      }
+
+      assignments[i] = chosenIdx
+      used.add(chosenIdx)
     }
 
+    return this.ensureSpawnAssignmentSafety(players, assignments)
+  }
+
+  private ensureSpawnAssignmentSafety(players: Player[], assignments: number[]): number[] {
+    const maxPasses = Math.max(2, players.length * 3)
+    for (let pass = 0; pass < maxPasses; pass++) {
+      const zones = this.buildAssignedStartZones(players, assignments)
+      const conflicts = validateOpposingStartZoneSeparation(
+        zones,
+        (playerA, playerB) => this.entityMgr.isEnemy(playerA, playerB),
+        MIN_OPPOSING_START_SEPARATION_TILES,
+      )
+      if (conflicts.length === 0) return assignments
+
+      let changed = false
+      for (const conflict of conflicts) {
+        const relocateFirst = conflict.playerAId === this.gameState.localPlayerId
+          ? conflict.playerBId
+          : conflict.playerAId
+        if (this.tryRelocateStartZoneForPlayer(players, assignments, relocateFirst)) {
+          changed = true
+          continue
+        }
+
+        const relocateSecond = relocateFirst === conflict.playerAId ? conflict.playerBId : conflict.playerAId
+        if (relocateSecond !== this.gameState.localPlayerId &&
+          this.tryRelocateStartZoneForPlayer(players, assignments, relocateSecond)) {
+          changed = true
+        }
+      }
+
+      if (!changed) break
+    }
     return assignments
+  }
+
+  private tryRelocateStartZoneForPlayer(
+    players: Player[],
+    assignments: number[],
+    playerId: number,
+  ): boolean {
+    const playerIndex = players.findIndex((player) => player.id === playerId)
+    if (playerIndex <= 0) return false
+
+    const currentIdx = assignments[playerIndex]
+    const remainingPlayers = players.filter((_, i) => i !== playerIndex)
+    const remainingAssignments = assignments.filter((_, i) => i !== playerIndex)
+    const assignedZones = this.buildAssignedStartZones(remainingPlayers, remainingAssignments)
+    const usedByOthers = new Set(remainingAssignments)
+
+    const availableCandidates = this.buildSpawnCandidates().filter((candidate) => !usedByOthers.has(candidate.index))
+    let chosenIdx = pickBestSpawnCandidateIndex(
+      playerId,
+      availableCandidates,
+      assignedZones,
+      (playerA, playerB) => this.entityMgr.isEnemy(playerA, playerB),
+      this.gameState.localPlayerId,
+      MIN_OPPOSING_START_SEPARATION_TILES,
+    )
+
+    if (chosenIdx === null) {
+      const generated = this.generateAdditionalStartPositionForPlayer(playerId, assignedZones)
+      if (generated) {
+        this.gameMap.data.startPositions.push(generated)
+        chosenIdx = this.gameMap.data.startPositions.length - 1
+        console.warn('[SpawnSafety] Regenerated start position for relocation', {
+          playerId,
+          spawnIndex: chosenIdx,
+          tile: this.gameMap.worldToTile(generated.x, generated.y),
+        })
+      }
+    }
+
+    if (chosenIdx === null || chosenIdx === currentIdx) return false
+
+    assignments[playerIndex] = chosenIdx
+    console.warn('[SpawnSafety] Relocated player start zone', {
+      playerId,
+      fromIndex: currentIdx,
+      toIndex: chosenIdx,
+    })
+    return true
+  }
+
+  private buildSpawnCandidates(): SpawnCandidate[] {
+    return this.gameMap.data.startPositions.map((world, index) => ({
+      index,
+      tile: this.gameMap.worldToTile(world.x, world.y),
+    }))
+  }
+
+  private generateAdditionalStartPositionForPlayer(
+    playerId: number,
+    assignedZones: PlayerStartZone[],
+  ): Position | null {
+    const { width, height } = this.gameMap.data
+    const localPlayerId = this.gameState.localPlayerId
+    const localZone = assignedZones.find((zone) => zone.playerId === localPlayerId)
+    let bestTile: TileCoord | null = null
+    let bestScore = Number.NEGATIVE_INFINITY
+
+    for (let row = START_ZONE_SCAN_MARGIN_TILES; row < height - START_ZONE_SCAN_MARGIN_TILES; row++) {
+      for (let col = START_ZONE_SCAN_MARGIN_TILES; col < width - START_ZONE_SCAN_MARGIN_TILES; col++) {
+        const mapTile = this.gameMap.getTile(col, row)
+        if (!mapTile || !mapTile.passable || !mapTile.buildable || mapTile.occupiedBy !== null) continue
+
+        const candidate = { col, row }
+        let nearestEnemy = Number.POSITIVE_INFINITY
+        let nearestAny = Number.POSITIVE_INFINITY
+        let valid = true
+
+        for (const zone of assignedZones) {
+          const d = tileDistance(candidate, zone.tile)
+          nearestAny = Math.min(nearestAny, d)
+          if (this.entityMgr.isEnemy(playerId, zone.playerId)) {
+            nearestEnemy = Math.min(nearestEnemy, d)
+            if (d < MIN_OPPOSING_START_SEPARATION_TILES) {
+              valid = false
+              break
+            }
+          } else if (d < HOME_BASE_RADIUS_TILES + 2) {
+            valid = false
+            break
+          }
+        }
+        if (!valid) continue
+
+        const edgeDist = Math.min(col, row, width - 1 - col, height - 1 - row)
+        let score = (Number.isFinite(nearestEnemy) ? nearestEnemy : 40) * 16
+        score += (Number.isFinite(nearestAny) ? nearestAny : 0) * 2
+        score += edgeDist * 1.5
+
+        if (localZone && playerId !== localPlayerId) {
+          const localDist = tileDistance(candidate, localZone.tile)
+          score += this.entityMgr.isEnemy(playerId, localPlayerId)
+            ? localDist * 4
+            : Math.max(0, 70 - localDist * 2)
+        }
+
+        if (score > bestScore) {
+          bestScore = score
+          bestTile = candidate
+        }
+      }
+    }
+
+    if (!bestTile) return null
+    return { x: bestTile.col * TILE_SIZE, y: bestTile.row * TILE_SIZE }
   }
 
   private getSpawnPositionForPlayer(playerId: number): Position | null {
