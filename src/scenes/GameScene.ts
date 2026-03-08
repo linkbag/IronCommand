@@ -41,8 +41,8 @@ const MOVE_MARKER_RING_COLOR = 0x66f6ff
 const MOVE_MARKER_CROSS_COLOR = 0xd9fdff
 
 type MoveTrajectoryLine = {
-  from: Position
-  to: Position
+  unitId: string
+  target: Position
   createdAtMs: number
   durationMs: number
 }
@@ -2414,8 +2414,8 @@ export class GameScene extends Phaser.Scene {
       const unit = this.entityMgr.getUnit(unitId)
       if (!unit || unit.playerId !== 0) continue
       newLines.push({
-        from: { x: unit.x, y: unit.y },
-        to: { x: target.x, y: target.y },
+        unitId,
+        target: { x: target.x, y: target.y },
         createdAtMs: now,
         durationMs: MOVE_TRAJECTORY_DURATION_MS,
       })
@@ -2440,12 +2440,15 @@ export class GameScene extends Phaser.Scene {
       for (const line of this.moveTrajectoryLines) {
         const ageMs = now - line.createdAtMs
         if (ageMs >= line.durationMs) continue
+        const unit = this.entityMgr.getUnit(line.unitId)
+        if (!unit || unit.playerId !== 0 || unit.state === 'dying') continue
+        if (!this.selectedIds.has(line.unitId)) continue
         activeLines.push(line)
 
         const fade = 1 - ageMs / line.durationMs
         const alpha = 0.08 + (fade * fade) * 0.25
-        const fromIso = cartToScreen(line.from.x, line.from.y)
-        const toIso = cartToScreen(line.to.x, line.to.y)
+        const fromIso = cartToScreen(unit.x, unit.y)
+        const toIso = cartToScreen(line.target.x, line.target.y)
         const fromX = fromIso.x - this.camX
         const fromY = fromIso.y - this.camY
         const toX = toIso.x - this.camX
