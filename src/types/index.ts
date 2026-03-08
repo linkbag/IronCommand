@@ -23,6 +23,7 @@ export type FactionId =
   | 'iraq' | 'south_africa' | 'spain' | 'italy' | 'korea'
 
 export type FactionSide = 'alliance' | 'collective'
+export type TeamId = 'A' | 'B' | 'C' | 'D'
 
 export interface FactionDef {
   id: FactionId
@@ -156,6 +157,7 @@ export interface Player {
   id: number
   name: string
   faction: FactionId
+  teamId: TeamId
   color: number
   credits: number
   power: number           // current power balance

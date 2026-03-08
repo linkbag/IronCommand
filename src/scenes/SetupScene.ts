@@ -4,7 +4,7 @@
 // ============================================================
 
 import Phaser from 'phaser'
-import type { FactionId } from '../types'
+import type { FactionId, TeamId } from '../types'
 import { TILE_SIZE } from '../types'
 import { FACTIONS, FACTION_IDS } from '../data/factions'
 import { generatePreviewData, PREVIEW_COLORS } from '../engine/GameMap'
@@ -22,7 +22,7 @@ export interface SkirmishConfig {
   aiCount: number
   aiDifficulty: 'easy' | 'medium' | 'hard'
   startingCredits: number
-  allyPlayerIds: number[] // AI player IDs allied with human player (player 0)
+  playerTeams: TeamId[] // team assignment per slot (0..7)
 }
 
 const STYLE = {
@@ -58,6 +58,15 @@ const MAP_VISIBILITY_OPTIONS: Array<{ label: string; value: boolean }> = [
   { label: 'FOG OF WAR', value: false },
   { label: 'REVEALED', value: true },
 ]
+const TEAM_IDS: TeamId[] = ['A', 'B', 'C', 'D']
+const DEFAULT_SLOT_TEAMS: TeamId[] = ['A', 'B', 'C', 'D', 'A', 'B', 'C', 'D']
+const MAX_PLAYER_SLOTS = 8
+const TEAM_COLORS: Record<TeamId, string> = {
+  A: '#62d2ff',
+  B: '#ff6b6b',
+  C: '#8ef58e',
+  D: '#ffd166',
+}
 
 export class SetupScene extends Phaser.Scene {
   private config: SkirmishConfig = {
@@ -70,7 +79,7 @@ export class SetupScene extends Phaser.Scene {
     aiCount: 1,
     aiDifficulty: 'medium',
     startingCredits: 10000,
-    allyPlayerIds: [],
+    playerTeams: [...DEFAULT_SLOT_TEAMS],
   }
 
   // Graphic refs for redraws
@@ -88,7 +97,13 @@ export class SetupScene extends Phaser.Scene {
   private mapPreview!: Phaser.GameObjects.Graphics
   private spawnMarkers: Phaser.GameObjects.Text[] = []
   private spawnZones: Phaser.GameObjects.Zone[] = []
-  private allianceRows: Map<number, { rowBg: Phaser.GameObjects.Graphics; label: Phaser.GameObjects.Text; toggleBg: Phaser.GameObjects.Graphics; toggleText: Phaser.GameObjects.Text; zone: Phaser.GameObjects.Zone }> = new Map()
+  private teamRows: Map<number, {
+    rowBg: Phaser.GameObjects.Graphics
+    label: Phaser.GameObjects.Text
+    toggleBg: Phaser.GameObjects.Graphics
+    toggleText: Phaser.GameObjects.Text
+    zone: Phaser.GameObjects.Zone
+  }> = new Map()
 
   constructor() {
     super({ key: 'SetupScene' })
@@ -330,7 +345,13 @@ export class SetupScene extends Phaser.Scene {
       'MAP SIZE',
       MAP_SIZES.map(m => ({ label: `${m.label}\n${m.tiles}`, value: m.value })),
       this.config.mapSize,
-      (v) => { this.config.mapSize = v as SkirmishConfig['mapSize']; this.regeneratePreview() },
+      (v) => {
+        this.config.mapSize = v as SkirmishConfig['mapSize']
+        this.sanitizeAiCountForMapSize()
+        this.refreshTeamRows()
+        this.updateAiCountText()
+        this.regeneratePreview()
+      },
       this.mapSizeBtns,
     )
 
@@ -419,11 +440,12 @@ export class SetupScene extends Phaser.Scene {
     }).setOrigin(0.5)
 
     this.aiCountText = this.add.text(panelX + 10 + stepperW / 2, cy + 18,
-      `${this.config.aiCount}`, {
+      '', {
       fontFamily: 'monospace',
       fontSize: '18px',
       color: '#ffffff',
     }).setOrigin(0.5)
+    this.updateAiCountText()
 
     // Plus button
     const plusZone = this.add.zone(panelX + 10 + stepperW - 18, cy + 18, 32, 32).setInteractive({ cursor: 'pointer' })
@@ -435,16 +457,16 @@ export class SetupScene extends Phaser.Scene {
 
     minusZone.on('pointerdown', () => {
       this.config.aiCount = Math.max(1, this.config.aiCount - 1)
-      this.aiCountText.setText(`${this.config.aiCount}`)
-      this.sanitizeAllyPlayerIds()
-      this.refreshAllianceRows()
+      this.sanitizeAiCountForMapSize()
+      this.updateAiCountText()
+      this.refreshTeamRows()
       this.regeneratePreview()
     })
     plusZone.on('pointerdown', () => {
-      this.config.aiCount = Math.min(3, this.config.aiCount + 1)
-      this.aiCountText.setText(`${this.config.aiCount}`)
-      this.sanitizeAllyPlayerIds()
-      this.refreshAllianceRows()
+      this.config.aiCount = Math.min(this.getMaxAiCountForMapSize(), this.config.aiCount + 1)
+      this.sanitizeAiCountForMapSize()
+      this.updateAiCountText()
+      this.refreshTeamRows()
       this.regeneratePreview()
     })
     minusZone.on('pointerover', () => minusText.setColor('#ffffff'))
@@ -454,25 +476,25 @@ export class SetupScene extends Phaser.Scene {
 
     cy += 44
 
-    // ── Alliance Picker ───────────────────────────────────────
-    this.add.text(panelX + 10, cy, 'ALLIANCE PICKER', {
+    // ── Team Assignments ──────────────────────────────────────
+    this.add.text(panelX + 10, cy, 'TEAM ASSIGNMENTS', {
       fontFamily: 'monospace',
       fontSize: '11px',
       color: '#aaaaaa',
     })
     cy += 20
 
-    const rowH = 32
-    for (let aiId = 1; aiId <= 3; aiId++) {
-      const rowY = cy + (aiId - 1) * (rowH + 4)
+    const rowH = 24
+    for (let slot = 0; slot < MAX_PLAYER_SLOTS; slot++) {
+      const rowY = cy + slot * (rowH + 3)
       const rowBg = this.add.graphics()
-      const label = this.add.text(panelX + 18, rowY + rowH / 2, `AI ${aiId}`, {
+      const label = this.add.text(panelX + 18, rowY + rowH / 2, '', {
         fontFamily: 'monospace',
-        fontSize: '11px',
+        fontSize: '10px',
         color: '#bbbbbb',
       }).setOrigin(0, 0.5)
 
-      const toggleW = 100
+      const toggleW = 112
       const toggleX = panelX + 10 + stepperW - toggleW - 8
       const toggleBg = this.add.graphics()
       const toggleText = this.add.text(toggleX + toggleW / 2, rowY + rowH / 2, '', {
@@ -485,68 +507,100 @@ export class SetupScene extends Phaser.Scene {
         .setInteractive({ cursor: 'pointer' })
 
       zone.on('pointerdown', () => {
-        if (aiId > this.config.aiCount) return
-        const idx = this.config.allyPlayerIds.indexOf(aiId)
-        if (idx >= 0) this.config.allyPlayerIds.splice(idx, 1)
-        else {
-          const maxAllies = Math.max(0, this.config.aiCount - 1)
-          if (this.config.allyPlayerIds.length >= maxAllies) return
-          this.config.allyPlayerIds.push(aiId)
-        }
-        this.refreshAllianceRows()
+        if (slot >= this.getActivePlayerCount()) return
+        this.cycleSlotTeam(slot)
+        this.refreshTeamRows()
       })
 
-      this.allianceRows.set(aiId, { rowBg, label, toggleBg, toggleText, zone })
+      this.teamRows.set(slot, { rowBg, label, toggleBg, toggleText, zone })
     }
-    this.refreshAllianceRows()
+    this.refreshTeamRows()
   }
 
-  private sanitizeAllyPlayerIds() {
-    const maxAllies = Math.max(0, this.config.aiCount - 1)
-    this.config.allyPlayerIds = this.config.allyPlayerIds
-      .filter(id => Number.isInteger(id) && id >= 1 && id <= this.config.aiCount)
-      .sort((a, b) => a - b)
-      .slice(0, maxAllies)
+  private getMaxPlayersForMapSize(): number {
+    switch (this.config.mapSize) {
+      case 'small': return 4
+      case 'medium': return 6
+      case 'large': return 8
+      default: return 4
+    }
   }
 
-  private refreshAllianceRows() {
-    this.sanitizeAllyPlayerIds()
-    for (let aiId = 1; aiId <= 3; aiId++) {
-      const row = this.allianceRows.get(aiId)
+  private getMaxAiCountForMapSize(): number {
+    return Math.max(1, this.getMaxPlayersForMapSize() - 1)
+  }
+
+  private sanitizeAiCountForMapSize(): void {
+    this.config.aiCount = Phaser.Math.Clamp(this.config.aiCount, 1, this.getMaxAiCountForMapSize())
+  }
+
+  private sanitizePlayerTeams(): void {
+    const sanitized: TeamId[] = Array.from({ length: MAX_PLAYER_SLOTS }, (_, idx) => {
+      const team = this.config.playerTeams[idx]
+      return TEAM_IDS.includes(team) ? team : DEFAULT_SLOT_TEAMS[idx]
+    })
+    this.config.playerTeams = sanitized
+  }
+
+  private getActivePlayerCount(): number {
+    this.sanitizeAiCountForMapSize()
+    return Math.min(MAX_PLAYER_SLOTS, this.config.aiCount + 1)
+  }
+
+  private cycleSlotTeam(slot: number): void {
+    this.sanitizePlayerTeams()
+    const current = this.config.playerTeams[slot] ?? 'A'
+    const currentIdx = TEAM_IDS.indexOf(current)
+    const nextIdx = (currentIdx + 1 + TEAM_IDS.length) % TEAM_IDS.length
+    this.config.playerTeams[slot] = TEAM_IDS[nextIdx]
+  }
+
+  private updateAiCountText(): void {
+    if (!this.aiCountText) return
+    this.aiCountText.setText(`${this.config.aiCount}/${this.getMaxAiCountForMapSize()}`)
+  }
+
+  private refreshTeamRows() {
+    this.sanitizePlayerTeams()
+    const activeCount = this.getActivePlayerCount()
+    for (let slot = 0; slot < MAX_PLAYER_SLOTS; slot++) {
+      const row = this.teamRows.get(slot)
       if (!row) continue
 
-      const visible = aiId <= this.config.aiCount
-      const isAlly = this.config.allyPlayerIds.includes(aiId)
+      const visible = slot < activeCount
+      const team = this.config.playerTeams[slot]
+      const teamColor = TEAM_COLORS[team]
       row.rowBg.clear()
       row.toggleBg.clear()
 
       if (visible) {
-        const rowY = row.label.y - 16
+        const rowY = row.label.y - row.label.height / 2 - 7
         const rowX = row.label.x - 8
         const rowW = 208
-        const rowH = 32
+        const rowH = 24
         row.rowBg.fillStyle(STYLE.btnNormal, 1)
         row.rowBg.fillRect(rowX, rowY, rowW, rowH)
         row.rowBg.lineStyle(1, STYLE.panelBorder, 1)
         row.rowBg.strokeRect(rowX, rowY, rowW, rowH)
 
-        const toggleW = 100
+        const toggleW = 112
         const toggleX = rowX + rowW - toggleW - 8
-        row.toggleBg.fillStyle(isAlly ? STYLE.selectedBg : STYLE.btnNormal, 1)
+        row.toggleBg.fillStyle(STYLE.selectedBg, 1)
         row.toggleBg.fillRect(toggleX, rowY, toggleW, rowH)
-        row.toggleBg.lineStyle(1, isAlly ? STYLE.selected : STYLE.panelBorder, 1)
+        row.toggleBg.lineStyle(1, STYLE.selected, 1)
         row.toggleBg.strokeRect(toggleX, rowY, toggleW, rowH)
       }
 
-      row.toggleText.setText(isAlly ? 'ALLY' : 'ENEMY')
-      row.toggleText.setColor(isAlly ? '#e94560' : '#778899')
+      row.label.setText(slot === 0 ? 'P1 YOU' : `P${slot + 1} AI ${slot}`)
+      row.toggleText.setText(`TEAM ${team}`)
+      row.toggleText.setColor(teamColor)
 
       row.rowBg.setVisible(visible)
       row.label.setVisible(visible)
       row.toggleBg.setVisible(visible)
       row.toggleText.setVisible(visible)
       row.zone.setVisible(visible)
-      row.zone.input!.enabled = visible
+      if (row.zone.input) row.zone.input.enabled = visible
     }
   }
 
@@ -766,6 +820,8 @@ export class SetupScene extends Phaser.Scene {
   }
 
   private regeneratePreview() {
+    this.sanitizeAiCountForMapSize()
+    this.sanitizePlayerTeams()
     if (!this.mapPreview) return
     const g = this.mapPreview
     g.clear()
@@ -797,7 +853,8 @@ export class SetupScene extends Phaser.Scene {
     const pw = this.mapPreview.x
     const ph = this.mapPreview.y
     const positions = data.startPositions
-    const maxSpawns = Math.min(positions.length, this.config.aiCount + 1) // player + AI count
+    const maxSpawns = Math.min(positions.length, this.getActivePlayerCount())
+    if (this.config.playerSpawn >= maxSpawns) this.config.playerSpawn = -1
 
     for (let i = 0; i < maxSpawns; i++) {
       const sp = positions[i]
@@ -844,8 +901,11 @@ export class SetupScene extends Phaser.Scene {
   }
 
   private launchMission() {
-    this.sanitizeAllyPlayerIds()
-    const config: SkirmishConfig = { ...this.config, allyPlayerIds: [...this.config.allyPlayerIds] }
+    this.sanitizeAiCountForMapSize()
+    this.sanitizePlayerTeams()
+    const maxSpawns = this.getActivePlayerCount()
+    if (this.config.playerSpawn >= maxSpawns) this.config.playerSpawn = -1
+    const config: SkirmishConfig = { ...this.config, playerTeams: [...this.config.playerTeams] }
     this.cameras.main.fadeOut(400, 0, 0, 0)
     this.cameras.main.once('camerafadeoutcomplete', () => {
       this.scene.start('GameScene', { config })

@@ -1877,23 +1877,23 @@ export class HUDScene extends Phaser.Scene {
     const em = this.registry.get('entityMgr') as {
       getAllEntities(): E[]
       getAllBuildings(): E[]
+      isEnemy(playerA: number, playerB: number): boolean
     } | undefined
     if (em) {
       const localId = this.gameState?.localPlayerId ?? 0
       em.getAllEntities().forEach(e => {
         if (!e.isAlive) return
 
-        // Show enemy entities in explored or visible tiles (hide only in unrevealed fog).
-        const isOwn = e.playerId === localId
-        if (!isOwn && map.tiles) {
+        const isEnemy = e.playerId >= 0 ? em.isEnemy(localId, e.playerId) : true
+        const isFriendly = e.playerId >= 0 && !isEnemy
+        if (!isFriendly && map.tiles) {
           const tc = Math.floor(e.x / TILE_SIZE)
           const tr = Math.floor(e.y / TILE_SIZE)
           const fog = map.tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
           if (fog === FogState.HIDDEN) return
         }
 
-        // RA2 minimap colors: own blue, enemy red.
-        const color = isOwn ? 0x4488ff : 0xe94560
+        const color = isFriendly ? 0x4ade80 : 0xe94560
         const tc = Phaser.Math.Clamp(e.x / TILE_SIZE, 0, map.width)
         const tr = Phaser.Math.Clamp(e.y / TILE_SIZE, 0, map.height)
         const mx = ox + (tc / map.width) * this.mmW
@@ -1914,8 +1914,9 @@ export class HUDScene extends Phaser.Scene {
       // Explicitly render building footprints as tinted rectangles for readability.
       for (const b of em.getAllBuildings()) {
         if (!b.isAlive) continue
-        const isOwn = b.playerId === localId
-        if (!isOwn && map.tiles) {
+        const isEnemy = b.playerId >= 0 ? em.isEnemy(localId, b.playerId) : true
+        const isFriendly = b.playerId >= 0 && !isEnemy
+        if (!isFriendly && map.tiles) {
           const tc = Math.floor(b.x / TILE_SIZE)
           const tr = Math.floor(b.y / TILE_SIZE)
           const fog = map.tiles[tr]?.[tc]?.fogState ?? FogState.HIDDEN
@@ -1927,7 +1928,7 @@ export class HUDScene extends Phaser.Scene {
         const my = oy + (tr / map.height) * this.mmH
         const fw = Math.max(2, ((b.def?.footprint?.w ?? 2) / map.width) * this.mmW)
         const fh = Math.max(2, ((b.def?.footprint?.h ?? 2) / map.height) * this.mmH)
-        g.lineStyle(1, isOwn ? 0x77aaff : 0xff8899, 0.9)
+        g.lineStyle(1, isFriendly ? 0x8bffb5 : 0xff8899, 0.9)
         g.strokeRect(mx - fw / 2, my - fh / 2, fw, fh)
       }
     }

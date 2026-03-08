@@ -14,7 +14,7 @@ import { Production } from '../economy/Production'
 import { AI } from '../combat/AI'
 import { BUILDING_DEFS, getPowerBuildingDefId, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
 import { UNIT_DEFS, getHarvesterDefId, getBasicInfantryDefId } from '../entities/UnitDefs'
-import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, FactionSide } from '../types'
+import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, FactionSide, TeamId } from '../types'
 import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL_PLAYER_ID } from '../types'
 import { cartToScreen, screenToCart, getIsoWorldBounds } from '../engine/IsoUtils'
 import { FACTIONS } from '../data/factions'
@@ -29,6 +29,9 @@ const ACK_LINES: Record<string, string[]> = {
 }
 const PLAYER_TINT = 0x4488ff
 const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff, 0x44cc44, 0xffdd00, 0x44dddd, 0xff66aa] // red, orange, purple, green, yellow, cyan, pink
+const TEAM_IDS: TeamId[] = ['A', 'B', 'C', 'D']
+const DEFAULT_SLOT_TEAMS: TeamId[] = ['A', 'B', 'C', 'D', 'A', 'B', 'C', 'D']
+const MAX_PLAYER_SLOTS = 8
 const PRODUCER_BUILDING_IDS = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery'] as const
 
 export class GameScene extends Phaser.Scene {
@@ -111,7 +114,7 @@ export class GameScene extends Phaser.Scene {
       aiCount: 1,
       aiDifficulty: 'medium',
       startingCredits: STARTING_CREDITS,
-      allyPlayerIds: [],
+      playerTeams: [...DEFAULT_SLOT_TEAMS],
     }
     // Reset per-session state
     this.aiCommanders = []
@@ -215,19 +218,30 @@ export class GameScene extends Phaser.Scene {
     try {
     const playerFaction = cfg.playerFaction
     const factionKeys = Object.keys(FACTIONS) as FactionId[]
+    const mapSpawnSlots = Math.max(2, Math.min(MAX_PLAYER_SLOTS, this.gameMap.data.startPositions.length))
+    const aiCount = Phaser.Math.Clamp(cfg.aiCount ?? 1, 1, Math.max(1, mapSpawnSlots - 1))
+    const normalizeTeamId = (team: TeamId | undefined, slot: number): TeamId => {
+      if (team && TEAM_IDS.includes(team)) return team
+      return DEFAULT_SLOT_TEAMS[slot % DEFAULT_SLOT_TEAMS.length]
+    }
+    const slotTeams: TeamId[] = Array.from({ length: mapSpawnSlots }, (_, slot) =>
+      normalizeTeamId(cfg.playerTeams?.[slot], slot),
+    )
 
     const humanPlayer: Player = {
       id: 0, name: 'Commander', faction: playerFaction,
+      teamId: slotTeams[0],
       color: PLAYER_TINT, credits: cfg.startingCredits,
       power: 0, powerGenerated: 0, powerConsumed: 0,
       isAI: false, isDefeated: false, entities: [], buildQueue: [],
     }
 
     aiPlayers = []
-    for (let i = 0; i < cfg.aiCount; i++) {
+    for (let i = 0; i < aiCount; i++) {
       const fac = factionKeys[(factionKeys.indexOf(playerFaction) + i + 1) % factionKeys.length]
       aiPlayers.push({
         id: i + 1, name: `AI ${i + 1}`, faction: fac,
+        teamId: slotTeams[i + 1] ?? DEFAULT_SLOT_TEAMS[(i + 1) % DEFAULT_SLOT_TEAMS.length],
         color: AI_TINTS[i] ?? 0xff4444, credits: cfg.startingCredits,
         power: 0, powerGenerated: 0, powerConsumed: 0,
         isAI: true, isDefeated: false, entities: [], buildQueue: [],
@@ -235,18 +249,13 @@ export class GameScene extends Phaser.Scene {
     }
     allPlayers = [humanPlayer, ...aiPlayers]
 
-    // ── 5b. Explicit alliances ────────────────────────────────
-    const validAiIds = new Set(aiPlayers.map(p => p.id))
-    const maxAllies = Math.max(0, aiPlayers.length - 1)
-    const allyAiIds = [...new Set(cfg.allyPlayerIds ?? [])]
-      .filter(id => validAiIds.has(id))
-      .sort((a, b) => a - b)
-      .slice(0, maxAllies)
+    // ── 5b. Team-based diplomacy ──────────────────────────────
     const alliedPairs: Array<[number, number]> = []
-    for (const allyId of allyAiIds) alliedPairs.push([0, allyId])
-    for (let i = 0; i < allyAiIds.length; i++) {
-      for (let j = i + 1; j < allyAiIds.length; j++) {
-        alliedPairs.push([allyAiIds[i], allyAiIds[j]])
+    for (let i = 0; i < allPlayers.length; i++) {
+      for (let j = i + 1; j < allPlayers.length; j++) {
+        if (allPlayers[i].teamId === allPlayers[j].teamId) {
+          alliedPairs.push([allPlayers[i].id, allPlayers[j].id])
+        }
       }
     }
     this.entityMgr.setAllianceMode(alliedPairs)
@@ -1363,13 +1372,13 @@ export class GameScene extends Phaser.Scene {
 
     // Scan all units + buildings belonging to human player
     for (const u of this.entityMgr.getAllUnits()) {
-      if (u.playerId === localId && u.hp > 0) {
+      if (!this.entityMgr.isEnemy(localId, u.playerId) && u.hp > 0) {
         const pos = this.gameMap.worldToTile(u.x, u.y)
         sources.push({ pos, range: u.def.stats.sightRange })
       }
     }
     for (const b of this.entityMgr.getAllBuildings()) {
-      if (b.playerId === localId && b.hp > 0) {
+      if (!this.entityMgr.isEnemy(localId, b.playerId) && b.hp > 0) {
         const pos = this.gameMap.worldToTile(b.x, b.y)
         sources.push({ pos, range: b.def.stats.sightRange })
       }
@@ -1538,7 +1547,7 @@ export class GameScene extends Phaser.Scene {
 
     // Units
     for (const u of this.entityMgr.getAllUnits()) {
-      if (u.playerId === localId) {
+      if (!this.entityMgr.isEnemy(localId, u.playerId)) {
         u.setVisible(true)
         // Don't reset alpha if invulnerable (pulsing) or mind-controlled
         if (!u.invulnerable && !u.mindControlledBy) u.setAlpha(1)
@@ -1562,7 +1571,7 @@ export class GameScene extends Phaser.Scene {
 
     // Buildings
     for (const b of this.entityMgr.getAllBuildings()) {
-      if (b.playerId === localId) { b.setVisible(true); b.setAlpha(1); continue }
+      if (!this.entityMgr.isEnemy(localId, b.playerId)) { b.setVisible(true); b.setAlpha(1); continue }
       const tc = Math.floor(b.x / TILE_SIZE)
       const tr = Math.floor(b.y / TILE_SIZE)
       if (tc < 0 || tc >= width || tr < 0 || tr >= height) { b.setVisible(false); continue }
@@ -2283,14 +2292,22 @@ export class GameScene extends Phaser.Scene {
     }
 
     const localPlayer = players.find(p => p.id === localId)
-    if (localPlayer?.isDefeated) {
+    if (!localPlayer) return
+
+    const localTeamId = localPlayer.teamId
+    const localTeamAlive = players.some(p => p.teamId === localTeamId && !p.isDefeated)
+    if (!localTeamAlive) {
       this.triggerDefeat()
       return
     }
 
-    // Player coalition (player + chosen allies) wins when all enemies are defeated.
-    const opponents = players.filter(p => this.entityMgr.isEnemy(localId, p.id))
-    if (opponents.length > 0 && opponents.every(p => p.isDefeated)) {
+    const hasEnemyTeams = players.some(p => p.teamId !== localTeamId)
+    if (!hasEnemyTeams) {
+      this.triggerVictory()
+      return
+    }
+    const enemyTeamAlive = players.some(p => p.teamId !== localTeamId && !p.isDefeated)
+    if (!enemyTeamAlive) {
       this.triggerVictory()
     }
   }
