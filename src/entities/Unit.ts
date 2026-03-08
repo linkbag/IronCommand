@@ -24,6 +24,7 @@ export interface IRTSScene extends Phaser.Scene {
   findPath?: (from: TileCoord, to: TileCoord, playerId?: number, unitId?: string) => TileCoord[]
   worldToTile?: (x: number, y: number) => TileCoord
   tileToWorld?: (col: number, row: number) => Position
+  isGroundTilePassable?: (col: number, row: number) => boolean
   markTileOccupied?: (tile: TileCoord, entityId: string | null) => void
 }
 
@@ -84,6 +85,10 @@ export class Unit extends Phaser.GameObjects.Container {
   private harvestCapacity: number
   private refineryId: string | null
 
+  // Transport state
+  private embarkedTransportId: string | null
+  private transportedUnitIds: string[]
+
   // Visuals
   facing = 0 // 0: NE, 1: SE, 2: SW, 3: NW
   private visualRoot: Phaser.GameObjects.Container
@@ -138,6 +143,8 @@ export class Unit extends Phaser.GameObjects.Container {
     this.unloadTimer = 0
     this.harvestCapacity = HARVESTER_CAPACITY
     this.refineryId = null
+    this.embarkedTransportId = null
+    this.transportedUnitIds = []
 
     this.isSelected = false
 
@@ -214,6 +221,7 @@ export class Unit extends Phaser.GameObjects.Container {
   // ── Public API ───────────────────────────────────────────────
 
   giveOrder(order: Order, append = false): void {
+    if (this.isEmbarked()) return
     if (!append) {
       this.orders = []
       this.target = null
@@ -248,6 +256,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
   takeDamage(amount: number, _sourcePlayerId: number): void {
     if (this.state === 'dying') return
+    if (this.isEmbarked()) return
     if (this.invulnerable) return  // Iron Curtain — skip all damage
     this.hp = Math.max(0, this.hp - amount)
     this.drawHealthBar()
@@ -267,6 +276,87 @@ export class Unit extends Phaser.GameObjects.Container {
   setCargoAmount(amount: number): void {
     this.cargoValue = Math.max(0, Math.floor(amount))
     this.cargoLoads = Math.min(this.harvestCapacity, Math.ceil(this.cargoValue / ORE_PER_LOAD))
+  }
+
+  canTransportUnits(): boolean {
+    return !!this.def.transport
+  }
+
+  canCarryCategory(category: UnitDef['category']): boolean {
+    const profile = this.def.transport
+    if (!profile) return false
+    return profile.allowedCategories.includes(category)
+  }
+
+  getTransportCapacity(): number {
+    return this.def.transport?.capacity ?? 0
+  }
+
+  getTransportLoadRangePixels(): number {
+    const tiles = this.def.transport?.loadRangeTiles ?? 1.75
+    return tiles * TILE_SIZE
+  }
+
+  getTransportUnloadRadiusTiles(): number {
+    return this.def.transport?.unloadRadiusTiles ?? 4
+  }
+
+  hasCargoSpace(): boolean {
+    return this.transportedUnitIds.length < this.getTransportCapacity()
+  }
+
+  getTransportCargoCount(): number {
+    return this.transportedUnitIds.length
+  }
+
+  getTransportedUnitIds(): string[] {
+    return [...this.transportedUnitIds]
+  }
+
+  addTransportedUnit(unitId: string): boolean {
+    if (!this.canTransportUnits()) return false
+    if (!this.hasCargoSpace()) return false
+    if (this.transportedUnitIds.includes(unitId)) return false
+    this.transportedUnitIds.push(unitId)
+    return true
+  }
+
+  removeTransportedUnit(unitId: string): boolean {
+    const idx = this.transportedUnitIds.indexOf(unitId)
+    if (idx < 0) return false
+    this.transportedUnitIds.splice(idx, 1)
+    return true
+  }
+
+  clearTransportedUnits(): string[] {
+    const out = [...this.transportedUnitIds]
+    this.transportedUnitIds = []
+    return out
+  }
+
+  isEmbarked(): boolean {
+    return this.embarkedTransportId !== null
+  }
+
+  getEmbarkedTransportId(): string | null {
+    return this.embarkedTransportId
+  }
+
+  setEmbarkedTransportId(transportId: string | null): void {
+    this.embarkedTransportId = transportId
+    const embarked = transportId !== null
+    if (embarked) {
+      this.orders = []
+      this.currentOrder = null
+      this.path = []
+      this.target = null
+      this.state = 'idle'
+      if (this.isSelected) this.setSelected(false)
+      this.setVisible(false)
+      return
+    }
+    this.setVisible(true)
+    this.setAlpha(1)
   }
 
   /** RA2 Veterancy: record a kill and rank up if threshold met */
@@ -348,6 +438,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
   update(delta: number): void {
     if (this.state === 'dying') return
+    if (this.isEmbarked()) return
 
     this.attackCooldown = Math.max(0, this.attackCooldown - delta / 1000)
     this.weaponFxTimer = Math.max(0, this.weaponFxTimer - delta)
@@ -382,12 +473,19 @@ export class Unit extends Phaser.GameObjects.Container {
 
     switch (this.state) {
       case 'idle':
+        if (this.currentOrder?.type === 'load') {
+          this.updateLoadOrder()
+          break
+        }
         this.updateIdle()
         break
       case 'moving':
         this.updateMovement(delta)
+        if (this.currentOrder?.type === 'load') {
+          this.updateLoadOrder()
+        }
         // Auto-attack while moving (RA2-style: units fire on the move)
-        if (this.def.attack && this.attackCooldown <= 0) {
+        if (this.def.attack && this.attackCooldown <= 0 && this.currentOrder?.type !== 'load') {
           this.tryFireWhileMoving()
         }
         break
@@ -406,6 +504,15 @@ export class Unit extends Phaser.GameObjects.Container {
 
   die(): void {
     if (this.state === 'dying') return
+    const embarkedTransportId = this.embarkedTransportId
+    if (embarkedTransportId) {
+      this.emit('embarked_unit_died', this.id, embarkedTransportId)
+      this.setEmbarkedTransportId(null)
+    }
+    const lostCargoIds = this.clearTransportedUnits()
+    if (lostCargoIds.length > 0) {
+      this.emit('transport_destroyed', this.id, lostCargoIds)
+    }
     this.state = 'dying'
     this.target = null
 
@@ -481,6 +588,27 @@ export class Unit extends Phaser.GameObjects.Container {
         this.state = 'harvesting'
         if (order.target) {
           this.startMoveTo(order.target)
+        }
+        break
+
+      case 'load':
+        this.state = 'idle'
+        this.path = []
+        this.target = null
+        this.updateLoadOrder()
+        break
+
+      case 'unload':
+        if (!this.canTransportUnits()) {
+          this.state = 'idle'
+          this.processNextOrder()
+          return
+        }
+        if (order.target) {
+          this.startMoveTo(order.target)
+        } else {
+          this.emit('request_transport_unload', this.id, { x: this.x, y: this.y }, () => {})
+          this.processNextOrder()
         }
         break
 
@@ -600,6 +728,45 @@ export class Unit extends Phaser.GameObjects.Container {
     }
   }
 
+  private updateLoadOrder(): void {
+    const order = this.currentOrder
+    if (!order || order.type !== 'load' || !order.targetEntityId) {
+      return
+    }
+    this.emit('resolve_target', order.targetEntityId, (target: IEntityRef | undefined) => {
+      if (!target || target.hp <= 0) {
+        this.processNextOrder()
+        return
+      }
+
+      const transportRange = (target as IEntityRef & { getTransportLoadRangePixels?: () => number })
+        .getTransportLoadRangePixels?.() ?? TILE_SIZE * 1.85
+      const dist = Phaser.Math.Distance.Between(this.x, this.y, target.x, target.y)
+      if (dist > TILE_SIZE * 6 && this.state !== 'moving') {
+        this.startMoveTo({ x: target.x, y: target.y })
+        return
+      }
+      if (dist > transportRange) {
+        if (this.state !== 'moving') {
+          this.startMoveTo({ x: target.x, y: target.y })
+        }
+        return
+      }
+
+      let loaded = false
+      this.emit('request_transport_board', this.id, target.id, (ok: boolean) => {
+        loaded = ok
+      })
+      if (loaded) {
+        this.currentOrder = null
+        this.orders = []
+        this.state = 'idle'
+        return
+      }
+      this.processNextOrder()
+    })
+  }
+
   private trackAndResolveStuck(delta: number): void {
     this.stuckTimerMs += delta
     if (this.stuckTimerMs < 3000) return
@@ -706,9 +873,15 @@ export class Unit extends Phaser.GameObjects.Container {
     this.stuckTimerMs = 0
     this.stuckRetryCount = 0
 
-    if (this.currentOrder?.type === 'harvest') {
+    if (this.currentOrder?.type === 'load') {
+      this.state = 'idle'
+      this.updateLoadOrder()
+    } else if (this.currentOrder?.type === 'harvest') {
       this.state = 'harvesting'
       this.harvestTimer = 0
+    } else if (this.currentOrder?.type === 'unload') {
+      this.emit('request_transport_unload', this.id, { x: this.x, y: this.y }, () => {})
+      this.processNextOrder()
     } else if (this.currentOrder?.type === 'attackMove' && this.def.attack) {
       if (!this.updateAttackMove()) {
         this.processNextOrder()

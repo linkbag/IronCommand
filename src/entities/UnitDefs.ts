@@ -374,9 +374,41 @@ export const UNIT_DEFS: Record<string, UnitDef> = {
       prerequisites: ['air_force_command'],
     },
     attack: null, // stealth transport — unarmed, carries up to 5 infantry
+    transport: {
+      capacity: 5,
+      allowedCategories: ['infantry'],
+      loadRangeTiles: 1.85,
+      unloadRadiusTiles: 5,
+    },
   },
 
   // ── Alliance Naval ─────────────────────────────────────────
+
+  amphibious_transport: {
+    id: 'amphibious_transport',
+    name: 'Amphibious Transport',
+    category: 'naval',
+    side: null,
+    factionExclusive: null,
+    spriteKey: 'unit_amphibious_transport',
+    armorType: ArmorType.MEDIUM,
+    stats: {
+      maxHp: 520,
+      armor: 0.2,
+      speed: 2.8,
+      sightRange: 7,
+      cost: 900,
+      buildTime: 11,
+      prerequisites: ['naval_shipyard'],
+    },
+    attack: null,
+    transport: {
+      capacity: 8,
+      allowedCategories: ['infantry', 'vehicle'],
+      loadRangeTiles: 1.85,
+      unloadRadiusTiles: 6,
+    },
+  },
 
   destroyer: {
     id: 'destroyer',

@@ -39,6 +39,8 @@ export class GameScene extends Phaser.Scene {
     (x, y) => ({ col: Math.floor(x / TILE_SIZE), row: Math.floor(y / TILE_SIZE) })
   tileToWorld: (col: number, row: number) => Position =
     (col, row) => ({ x: col * TILE_SIZE + TILE_SIZE / 2, y: row * TILE_SIZE + TILE_SIZE / 2 })
+  isGroundTilePassable: (col: number, row: number) => boolean =
+    () => false
 
   // ── Systems ─────────────────────────────────────────────────
   private gameMap!: GameMap
@@ -191,6 +193,10 @@ export class GameScene extends Phaser.Scene {
     }
     this.worldToTile = (x, y) => this.gameMap.worldToTile(x, y)
     this.tileToWorld = (col, row) => this.gameMap.tileToWorld(col, row)
+    this.isGroundTilePassable = (col, row) => {
+      const tile = this.gameMap.getTile(col, row)
+      return !!tile && tile.passable && !tile.occupiedBy
+    }
     } catch (e) { console.error('[IC] CRASH in section 2 (pathfinder):', e); throw e }
 
     // ── 3. Entity manager ─────────────────────────────────────
@@ -710,6 +716,17 @@ export class GameScene extends Phaser.Scene {
         const hud = this.scene.get('HUDScene')
         if (hud) hud.events.emit('evaAlert', { message: 'Unit lost', type: 'danger' })
       }
+    })
+
+    this.entityMgr.on('unit_loaded', (data: { transportId: string; passengerId: string; playerId: number }) => {
+      if (data.playerId !== 0) return
+      if (this.selectedIds.delete(data.passengerId)) this.syncSelectionState()
+    })
+
+    this.entityMgr.on('unit_unloaded', (data: { playerId: number }) => {
+      if (data.playerId !== 0) return
+      const hud = this.scene.get('HUDScene')
+      if (hud) hud.events.emit('evaAlert', { message: 'Units disembarked', type: 'info' })
     })
 
     this.entityMgr.on('building_destroyed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
@@ -1660,6 +1677,14 @@ export class GameScene extends Phaser.Scene {
       this.cursorMode = 'attackMove'
     })
 
+    // U — unload selected transport(s): next click sets drop point
+    this.input.keyboard!.on('keydown-U', () => {
+      const transports = this.getSelectedTransportUnits(0, true)
+      if (transports.length === 0) return
+      this.cursorMode = 'unload'
+      this.showUnitAck('Select unload zone')
+    })
+
     // G — guard mode: units hold position and auto-engage
     this.input.keyboard!.on('keydown-G', () => {
       this.selectedIds.forEach(id => {
@@ -1817,6 +1842,21 @@ export class GameScene extends Phaser.Scene {
       const hud = this.scene.get('HUDScene')
       if (hud) hud.events.emit('evaAlert', { message: 'Rally point set', type: 'info' })
       return
+    }
+
+    const transportTarget = this.getOwnTransportAt(worldX, worldY)
+    if (transportTarget) {
+      const selectedUnits = Array.from(this.selectedIds)
+        .map(id => this.entityMgr.getUnit(id))
+        .filter((u): u is NonNullable<typeof u> => !!u && u.playerId === 0)
+        .filter(u => u.id !== transportTarget.id && !u.canTransportUnits() && !u.isEmbarked())
+      if (selectedUnits.length > 0) {
+        for (const unit of selectedUnits) {
+          unit.giveOrder({ type: 'load', targetEntityId: transportTarget.id }, this.waypointMode)
+        }
+        this.showUnitAck('Boarding transport')
+        return
+      }
     }
 
     const clickRadius = TILE_SIZE * 2
@@ -1986,6 +2026,22 @@ export class GameScene extends Phaser.Scene {
       return
     }
 
+    if (this.cursorMode === 'unload') {
+      const transports = this.getSelectedTransportUnits(0, true)
+      if (transports.length > 0) {
+        const offsets = this.computeFormationOffsets(transports.length)
+        transports.forEach((transport, idx) => {
+          const off = offsets[idx] ?? { dx: 0, dy: 0 }
+          const target = { x: worldX + off.dx, y: worldY + off.dy }
+          transport.giveOrder({ type: 'move', target }, this.waypointMode)
+          transport.giveOrder({ type: 'unload', target }, true)
+        })
+        this.showUnitAck('Unloading transport')
+      }
+      this.cursorMode = 'normal'
+      return
+    }
+
     if (this.cursorMode === 'patrol') {
       this.selectedIds.forEach(id => {
         const unit = this.entityMgr.getUnit(id)
@@ -2098,6 +2154,19 @@ export class GameScene extends Phaser.Scene {
     }
 
     return bestUnit
+  }
+
+  private getOwnTransportAt(worldX: number, worldY: number): import('../entities/Unit').Unit | null {
+    const unit = this.getOwnUnitAt(worldX, worldY)
+    if (!unit || !unit.canTransportUnits() || unit.state === 'dying') return null
+    return unit
+  }
+
+  private getSelectedTransportUnits(playerId: number, requireCargo = false): import('../entities/Unit').Unit[] {
+    return Array.from(this.selectedIds)
+      .map(id => this.entityMgr.getUnit(id))
+      .filter((u): u is NonNullable<typeof u> => !!u && u.playerId === playerId && u.state !== 'dying')
+      .filter(u => u.canTransportUnits() && (!requireCargo || u.getTransportCargoCount() > 0))
   }
 
   private getOwnBuildingAt(worldX: number, worldY: number): import('../entities/Building').Building | null {
