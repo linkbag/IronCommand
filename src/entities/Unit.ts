@@ -393,11 +393,14 @@ export class Unit extends Phaser.GameObjects.Container {
         break
       case 'moving':
         this.updateMovement(delta)
-        // Auto-attack while moving (RA2-style: units fire on the move)
+        // Auto-attack while moving (RA2-style: units fire on the move).
+        // Attack-move orders handle their own fire-on-move inside updateMovement()
+        // (where the scan budget is consumed), so skip them here to avoid budget starvation.
         if (
           this.state === 'moving'
           && this.def.attack
           && this.attackCooldown <= 0
+          && this.currentOrder?.type !== 'attackMove'
           && this.consumeAutoAcquireScanBudget(MOVING_AUTO_ACQUIRE_SCAN_MS)
         ) {
           this.tryFireWhileMoving()
@@ -606,13 +609,17 @@ export class Unit extends Phaser.GameObjects.Container {
       }
     }
 
-    // Attack-move: check for targets while moving
+    // Attack-move: check for targets while moving.
+    // If no stop-and-fight target is found but weapon is ready, fire on the move anyway.
     if (
       this.currentOrder?.type === 'attackMove'
       && this.def.attack
       && this.consumeAutoAcquireScanBudget(ATTACK_MOVE_SCAN_MS)
     ) {
-      this.updateAttackMove()
+      if (!this.updateAttackMove() && this.attackCooldown <= 0) {
+        const nearbyEnemy = this.findNearbyEnemy()
+        if (nearbyEnemy) this.fireAtTarget(nearbyEnemy)
+      }
     }
   }
 
