@@ -1207,6 +1207,32 @@ export class HUDScene extends Phaser.Scene {
     return null
   }
 
+  private isBuildingQueueItem(defId: string): boolean {
+    const item = this.buildItems.find(i => i.id === defId)
+    return item?.tab === 'buildings' || item?.tab === 'defenses'
+  }
+
+  private hasActiveConstructionYard(): boolean {
+    type E = { getPlayerActiveBuildingIds(playerId: number): string[] }
+    const em = this.registry.get('entityMgr') as E | undefined
+    if (!em) return true
+    const localPlayerId = this.gameState?.localPlayerId ?? 0
+    return em.getPlayerActiveBuildingIds(localPlayerId).includes('construction_yard')
+  }
+
+  isConstructionWorkflowActive(): boolean {
+    for (const id of this.buildProgress.keys()) {
+      if (this.isBuildingQueueItem(id)) return true
+    }
+    for (const id of this.pendingPlace.values()) {
+      if (this.isBuildingQueueItem(id)) return true
+    }
+    if (this.placementMode && this.placementDefId && this.isBuildingQueueItem(this.placementDefId)) {
+      return true
+    }
+    return false
+  }
+
   private startBuildItem(item: BuildableItem): void {
     this.buildProgress.set(item.id, 0)
     this.buildProgressDisplay.set(item.id, 0)
@@ -1257,6 +1283,10 @@ export class HUDScene extends Phaser.Scene {
 
     // If building is ready to place, enter placement mode
     if (this.pendingPlace.has(item.id) && isBuildingTab) {
+      if (!this.hasActiveConstructionYard()) {
+        this.showAlert('Construction Yard required', 'danger')
+        return
+      }
       this.enterPlacement(item.id)
       return
     }
@@ -1480,13 +1510,16 @@ export class HUDScene extends Phaser.Scene {
       }
     }
 
-    const canCommand = hasMCV || hasConYard
-    const label = hasMCV && hasConYard
+    const busyPacking = hasConYard && !hasMCV && this.isConstructionWorkflowActive()
+    const canCommand = (hasMCV || hasConYard) && !busyPacking
+    const label = busyPacking
+      ? 'D BUSY'
+      : hasMCV && hasConYard
       ? 'D TOGGLE'
       : hasMCV
         ? 'D DEPLOY'
         : hasConYard
-          ? 'D UNPACK'
+          ? 'D PACK'
           : 'NO CMD'
 
     this.actionCommandEnabled = canCommand
@@ -1637,6 +1670,10 @@ export class HUDScene extends Phaser.Scene {
     if (ptr.rightButtonDown()) { this.exitPlacement(true); return }
     if (!ptr.leftButtonDown()) return
     if (ptr.x >= this.sidebarX) return           // clicked sidebar
+    if (!this.hasActiveConstructionYard()) {
+      this.showAlert('Construction Yard required', 'danger')
+      return
+    }
 
     const world = this.pointerScreenToCart(ptr.x, ptr.y)
     const tileCol = Math.floor(world.x / TILE_SIZE)
@@ -2022,9 +2059,18 @@ export class HUDScene extends Phaser.Scene {
 
   private tickBuildProgress(delta: number) {
     const done: string[] = []
+    const hasConYard = this.hasActiveConstructionYard()
+
+    if (this.placementMode && this.placementDefId && this.isBuildingQueueItem(this.placementDefId) && !hasConYard) {
+      this.exitPlacement(false)
+      this.showAlert('Placement paused: no Construction Yard', 'warning')
+    }
 
     this.buildProgress.forEach((_, id) => {
       const item = this.buildItems.find(i => i.id === id)!
+      if (this.isBuildingQueueItem(item.id) && !hasConYard) {
+        return
+      }
       const totalTime = item.buildTime * 1000
       const paid = this.creditsPaid.get(id) ?? 0
       const remaining = item.cost - paid
@@ -2268,7 +2314,10 @@ export class HUDScene extends Phaser.Scene {
 
     if (ids.length === 1) {
       if (first.defId === 'mcv') infoText += '\n[D] Deploy into Construction Yard'
-      if (first.defId === 'construction_yard') infoText += '\n[D] Pack up into MCV'
+      if (first.defId === 'construction_yard') {
+        infoText += '\n[D] Pack up into MCV'
+        if (this.isConstructionWorkflowActive()) infoText += '\nFinish/cancel build queue first'
+      }
     }
 
     this.selectedInfoTxt.setText(infoText)

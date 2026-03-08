@@ -632,6 +632,7 @@ export class GameScene extends Phaser.Scene {
     this.registry.set('canPlaceBuilding', (defId: string, col: number, row: number) => {
       const def = BUILDING_DEFS[defId]
       if (!def) return false
+      if (defId !== 'construction_yard' && !this.entityMgr.playerHasBuilding(0, 'construction_yard')) return false
       const isShipyard = defId === 'naval_shipyard'
       // Shipyard requires water tiles; other buildings require land
       if (!isShipyard) {
@@ -790,6 +791,11 @@ export class GameScene extends Phaser.Scene {
       if (!this.production.checkPrerequisites(0, data.defId, this.gameState)) {
         const hud = this.scene.get('HUDScene')
         if (hud) hud.events.emit('evaAlert', { message: 'Prerequisites not met', type: 'danger' })
+        return
+      }
+      if (data.defId !== 'construction_yard' && !this.entityMgr.playerHasBuilding(0, 'construction_yard')) {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'Construction Yard required', type: 'danger' })
         return
       }
 
@@ -2488,9 +2494,20 @@ export class GameScene extends Phaser.Scene {
     return true
   }
 
+  private hasLocalConstructionWorkflowInProgress(): boolean {
+    const hud = this.scene.get('HUDScene') as { isConstructionWorkflowActive?: () => boolean } | undefined
+    return Boolean(hud?.isConstructionWorkflowActive?.())
+  }
+
   private undeployConstructionYard(building: import('../entities/Building').Building): boolean {
     if (building.state !== 'active' && building.state !== 'low_power') {
       this.showUnitAck('Construction Yard is busy')
+      return false
+    }
+    if (building.playerId === this.gameState.localPlayerId && this.hasLocalConstructionWorkflowInProgress()) {
+      this.showUnitAck('Finish/cancel construction first')
+      const hud = this.scene.get('HUDScene')
+      if (hud) hud.events.emit('evaAlert', { message: 'Cannot pack while construction is active', type: 'warning' })
       return false
     }
 
