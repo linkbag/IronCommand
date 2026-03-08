@@ -104,6 +104,11 @@ export class GameScene extends Phaser.Scene {
   private lastMoveFeedbackAtMs = -Infinity
   private selectedIds: Set<string> = new Set()
   private selectionPulseTweens: Map<string, Phaser.Tweens.Tween> = new Map()
+  private readonly typeSelectDoubleTapMs = 350
+  private lastTypeHotkeyMs = 0
+  private lastTypeHotkeyDefId = ''
+  private lastUnitTypeClickMs = 0
+  private lastUnitTypeClickDefId = ''
 
   // ── Last alert position (for Space key) ────────────────────
   private lastAlertPos: Position | null = null
@@ -148,6 +153,10 @@ export class GameScene extends Phaser.Scene {
     this.patrolAnchorByUnit = new Map()
     this.selectionPulseTweens.forEach(tw => tw.stop())
     this.selectionPulseTweens = new Map()
+    this.lastTypeHotkeyMs = 0
+    this.lastTypeHotkeyDefId = ''
+    this.lastUnitTypeClickMs = 0
+    this.lastUnitTypeClickDefId = ''
     this.lastAlertPos = null
     this.lastUnderAttackAlertMs = 0
     this.lastMinimapAttackPingMs = 0
@@ -1808,9 +1817,21 @@ export class GameScene extends Phaser.Scene {
       this.selectionRect.clear()
     })
 
-    // ESC / P — toggle pause
+    // ESC / PauseBreak — toggle pause
     this.input.keyboard!.on('keydown-ESC', () => this.togglePause())
-    this.input.keyboard!.on('keydown-P', () => this.togglePause())
+    this.input.keyboard!.on('keydown-PAUSE', () => this.togglePause())
+
+    // T — select same unit type on-screen; double-tap T selects map-wide.
+    this.input.keyboard!.on('keydown-T', (ev: KeyboardEvent) => {
+      if (ev.repeat) return
+      this.handleSelectSameTypeHotkey(ev)
+    })
+
+    // P — select all own units currently visible on-screen.
+    this.input.keyboard!.on('keydown-P', (ev: KeyboardEvent) => {
+      if (ev.repeat) return
+      this.selectAllOwnUnitsOnScreen(ev.shiftKey)
+    })
 
     // S — stop selected units (only if units selected; otherwise let WASD handle camera)
     this.input.keyboard!.on('keydown-S', () => {
@@ -1977,6 +1998,82 @@ export class GameScene extends Phaser.Scene {
     }
 
     return false
+  }
+
+  private getAliveOwnUnits(): import('../entities/Unit').Unit[] {
+    return this.entityMgr
+      .getUnitsForPlayer(0)
+      .filter(unit => unit.hp > 0 && unit.state !== 'dying')
+  }
+
+  private getOwnUnitsOnScreen(): import('../entities/Unit').Unit[] {
+    const view = this.cameras.main.worldView
+    const units: import('../entities/Unit').Unit[] = []
+    for (const unit of this.getAliveOwnUnits()) {
+      if (!unit.visible) continue
+      const iso = cartToScreen(unit.x, unit.y)
+      if (view.contains(iso.x, iso.y)) {
+        units.push(unit)
+      }
+    }
+    return units
+  }
+
+  private getPrimarySelectedOwnUnitType(): string | null {
+    for (const id of this.selectedIds) {
+      const unit = this.entityMgr.getUnit(id)
+      if (unit && unit.playerId === 0 && unit.hp > 0 && unit.state !== 'dying') {
+        return unit.def.id
+      }
+    }
+    return null
+  }
+
+  private applyUnitSelection(unitIds: string[], append: boolean): number {
+    if (!append) {
+      this.selectedIds.forEach(id => {
+        this.entityMgr.getUnit(id)?.setSelected(false)
+        this.entityMgr.getBuilding(id)?.setSelected(false)
+      })
+      this.selectedIds.clear()
+    }
+
+    let selectedCount = 0
+    for (const id of new Set(unitIds)) {
+      const unit = this.entityMgr.getUnit(id)
+      if (!unit || unit.playerId !== 0 || unit.hp <= 0 || unit.state === 'dying') continue
+      this.selectedIds.add(unit.id)
+      unit.setSelected(true)
+      selectedCount++
+    }
+
+    this.syncSelectionState()
+    return selectedCount
+  }
+
+  private selectUnitsOfType(defId: string, scope: 'screen' | 'map', append: boolean): number {
+    const source = scope === 'screen' ? this.getOwnUnitsOnScreen() : this.getAliveOwnUnits()
+    const matched = source.filter(unit => unit.def.id === defId)
+    return this.applyUnitSelection(matched.map(unit => unit.id), append)
+  }
+
+  private selectAllOwnUnitsOnScreen(append: boolean): number {
+    const onScreen = this.getOwnUnitsOnScreen()
+    return this.applyUnitSelection(onScreen.map(unit => unit.id), append)
+  }
+
+  private handleSelectSameTypeHotkey(ev: KeyboardEvent): void {
+    const typeId = this.getPrimarySelectedOwnUnitType()
+    if (!typeId) return
+
+    const now = this.time.now
+    const isDoubleTap = (
+      this.lastTypeHotkeyDefId === typeId &&
+      now - this.lastTypeHotkeyMs <= this.typeSelectDoubleTapMs
+    )
+    this.lastTypeHotkeyMs = now
+    this.lastTypeHotkeyDefId = typeId
+    this.selectUnitsOfType(typeId, isDoubleTap ? 'map' : 'screen', ev.shiftKey)
   }
 
   // ── Ctrl+click force fire ──────────────────────────────────────
@@ -2347,6 +2444,19 @@ export class GameScene extends Phaser.Scene {
 
     const ownUnit = this.getOwnUnitAt(worldX, worldY)
     if (ownUnit) {
+      const now = this.time.now
+      const isDoubleClickSameType = (
+        this.lastUnitTypeClickDefId === ownUnit.def.id &&
+        now - this.lastUnitTypeClickMs <= this.typeSelectDoubleTapMs
+      )
+      this.lastUnitTypeClickMs = now
+      this.lastUnitTypeClickDefId = ownUnit.def.id
+
+      if (isDoubleClickSameType) {
+        this.selectUnitsOfType(ownUnit.def.id, 'map', shiftHeld)
+        return
+      }
+
       if (!shiftHeld) this.deselectAll()
       if (shiftHeld && this.selectedIds.has(ownUnit.id)) {
         this.selectedIds.delete(ownUnit.id)
