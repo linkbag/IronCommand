@@ -422,7 +422,6 @@ export class Building extends Phaser.GameObjects.Container {
     switch (this.def.category) {
       case 'power': return 'power'
       case 'tech': return 'lab'
-      case 'production': return 'factory'
       default: return 'factory'
     }
   }
