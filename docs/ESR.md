@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 04:09*
+*Last updated: 2026-03-08 04:10*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -146,3 +146,7 @@ Implementation is clean and correct. Coordinate system in isHoveringEnemyEntity 
 ### Update: 2026-03-08 04:09
 ### codex-ic-move-feedback-v2 — 2026-03-08 04:09
 feat/ic-move-feedback-v2 adds move trajectory lines and order marker overlays. Code is clean: proper Graphics lifecycle (optional type, destroy+undefined in init, guard in draw method), correct dedupe guard, cap at 64 lines with per-frame pruning, valid Phaser.Math.Easing.Cubic.Out usage, gameMap.worldWidth clamping is safe (listener registered after systems init). TypeScript: zero errors. No fixes required.
+
+### Update: 2026-03-08 04:10
+### codex-ic-autoattack-nearby — 2026-03-08 04:10
+One regression fixed: attack-move units were blocked from fire-while-moving because the shared scan budget was consumed by the attack-move scan inside updateMovement(), preventing the outer tryFireWhileMoving() from running. Fixed by inlining fire-on-move inside the attack-move block when no stop-and-fight target is found, and excluding attack-move orders from the outer moving-fire scan. TypeScript clean.
