@@ -832,7 +832,7 @@ export class AI {
     const mildFloat = overflow > 0
     const severeFloat = overflow > CREDIT_FLOAT_SOFT_THRESHOLD
 
-    if (this.needsMorePower() || mildFloat) {
+    if (this.needsMorePower()) {
       this.buildExtraPower()
     }
 
