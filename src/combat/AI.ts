@@ -214,7 +214,6 @@ export class AI {
   private unitKiteUntilMs: Map<string, number>
   private antiAirEmergencyUntilMs: number
   private lastEmergencySellMs: number
-  private lastGoalPlan: AIUltimateGoalDirective[]
 
   private static readonly SW_COOLDOWNS: Record<string, number> = {
     nuclear_silo: 300000,
@@ -282,7 +281,6 @@ export class AI {
     this.unitKiteUntilMs = new Map()
     this.antiAirEmergencyUntilMs = 0
     this.lastEmergencySellMs = -EMERGENCY_SELL_COOLDOWN_MS
-    this.lastGoalPlan = []
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -336,7 +334,7 @@ export class AI {
     const goalPlan = this.planUltimateGoals(gameState)
     this.executeUltimateGoalPlan(goalPlan, gameState)
 
-      // Superweapon management (medium/hard only)
+    // Superweapon management (medium/hard only)
     if (this.difficulty !== 'easy') {
       this.tickSuperweapons(gameState)
     }
@@ -364,7 +362,6 @@ export class AI {
       currentlyAttacking: this.isAttacking,
     }
     const plan = buildUltimateGoalPlan(signals)
-    this.lastGoalPlan = plan
     return plan
   }
 
