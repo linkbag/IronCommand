@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-07 22:38*
+*Last updated: 2026-03-07 22:39*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -114,3 +114,7 @@ One fix applied: nuclear_reactor was missing from the wallH +3 group in getIsoDi
 ### Update: 2026-03-07 22:38
 ### codex-ic-move-feedback-trajectories — 2026-03-07 22:38
 Move trajectory overlay implementation is clean. All types imported, coordinate transforms match existing rally overlay pattern, both move paths correctly wired, line cap and expiry logic correct, typecheck clean. No issues found.
+
+### Update: 2026-03-07 22:39
+### codex-ic-bldg-lighting — 2026-03-07 22:39
+All changes confined to visual helpers in Building.ts. Palette expansion, sheen/highlight/AO overlays, two-pass edge lines, and tighter drop shadow all correct. adjustBrightness clamps safely, polygon bounds are valid, type signatures consistent, no callers broken. Build clean.
