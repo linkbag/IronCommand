@@ -118,3 +118,7 @@ Move trajectory overlay implementation is clean. All types imported, coordinate 
 ### Update: 2026-03-07 22:39
 ### codex-ic-bldg-lighting — 2026-03-07 22:39
 All changes confined to visual helpers in Building.ts. Palette expansion, sheen/highlight/AO overlays, two-pass edge lines, and tighter drop shadow all correct. adjustBrightness clamps safely, polygon bounds are valid, type signatures consistent, no callers broken. Build clean.
+
+### Update: 2026-03-07 22:39
+### codex-ic-move-feedback-cursor — 2026-03-07 22:39
+Clean implementation. TypeScript passes (exit 0). Two transient Graphics objects properly destroyed via onComplete tweens — no leak. Trigger paths (handleLeftClick vs issueOrder event) are mutually exclusive — no double-trigger. Chord-line ring segments (22.5° span, radius 18) produce ~0.35px deviation — visually correct. Tween sequencing (pop-in 0-140ms, fade-out 150-580ms) is clean with no conflicting alpha.
