@@ -104,6 +104,8 @@ interface Projectile {
   fromY: number
   toX: number
   toY: number
+  prevX: number
+  prevY: number
   progress: number
   speed: number   // pixels per second
   attack: AttackStats
@@ -337,6 +339,8 @@ export class Combat extends Phaser.Events.EventEmitter {
       return
     }
 
+    this.createMuzzleFlash(attacker.x, attacker.y, attack.damageType)
+
     if (attack.projectileSpeed <= 0) {
       // Hitscan — instant damage
       if (impact.hitPrimary) {
@@ -384,10 +388,8 @@ export class Combat extends Phaser.Events.EventEmitter {
       if (attacker instanceof Unit && attacker.def.id === 'desolator') {
         this.createRadiationZone(impact.x, impact.y, attacker.playerId)
       }
+      this.createImpactFlash(impact.x, impact.y, attack.damageType, impact.hitPrimary ? 1 : 0.8)
     } else {
-      // Muzzle flash at attacker position
-      this.createMuzzleFlash(attacker.x, attacker.y, attack.damageType)
-
       // Spawn projectile
       this.spawnProjectile(
         attacker.x, attacker.y,
@@ -395,6 +397,7 @@ export class Combat extends Phaser.Events.EventEmitter {
         attack,
         attacker.playerId,
         () => {
+          this.createImpactFlash(impact.x, impact.y, attack.damageType, impact.hitPrimary ? 1 : 0.9)
           if (impact.hitPrimary && target.hp > 0) {
             const baseDmg = this.calculateDamage(
               attack,
@@ -597,10 +600,12 @@ export class Combat extends Phaser.Events.EventEmitter {
         const px = Phaser.Math.Linear(p.fromX, p.toX, p.progress)
         const py = Phaser.Math.Linear(p.fromY, p.toY, p.progress)
         const isoPos = cartToScreen(px, py)
-        const isoFrom = cartToScreen(p.fromX, p.fromY)
+        const isoPrev = cartToScreen(p.prevX, p.prevY)
         p.graphic.clear()
         p.graphic.setDepth(30 + isoPos.y * 0.01)
-        this.drawProjectileGraphic(p.graphic, isoPos.x, isoPos.y, p.attack.damageType, isoFrom.x, isoFrom.y)
+        this.drawProjectileGraphic(p.graphic, isoPos.x, isoPos.y, p.attack.damageType, isoPrev.x, isoPrev.y)
+        p.prevX = px
+        p.prevY = py
       }
     }
 
@@ -870,6 +875,8 @@ export class Combat extends Phaser.Events.EventEmitter {
     this.projectiles.push({
       graphic: g,
       fromX, fromY, toX, toY,
+      prevX: fromX,
+      prevY: fromY,
       progress: 0,
       speed: attack.projectileSpeed,
       attack,
@@ -933,9 +940,11 @@ export class Combat extends Phaser.Events.EventEmitter {
             sy = ey
           }
         } else {
-          // Standard trail line
-          g.lineStyle(size * 0.7, color, 0.4)
+          // Layered tracer line for stronger readability.
+          g.lineStyle(Math.max(1.5, size * 0.95), color, 0.3)
           g.lineBetween(x, y, x + nx * trailLen, y + ny * trailLen)
+          g.lineStyle(Math.max(1, size * 0.45), 0xffffff, 0.75)
+          g.lineBetween(x, y, x + nx * trailLen * 0.8, y + ny * trailLen * 0.8)
         }
       }
     }
@@ -968,16 +977,81 @@ export class Combat extends Phaser.Events.EventEmitter {
       [DamageType.RADIATION]: 0x99ff55,
     }
     const iso = cartToScreen(x, y)
+    const radiusByType: Record<DamageType, number> = {
+      [DamageType.BULLET]: 3.5,
+      [DamageType.EXPLOSIVE]: 5.5,
+      [DamageType.HE]: 6,
+      [DamageType.AP]: 4,
+      [DamageType.MISSILE]: 5.5,
+      [DamageType.FIRE]: 6,
+      [DamageType.ELECTRIC]: 4.5,
+      [DamageType.RADIATION]: 4.8,
+    }
+    const color = flashColors[dmgType] ?? 0xffff44
+    const radius = radiusByType[dmgType] ?? 4
     const flash = this.scene.add.graphics()
-    flash.fillStyle(flashColors[dmgType] ?? 0xffff44, 0.9)
-    flash.fillCircle(iso.x, iso.y, 4)
+    flash.fillStyle(color, 0.92)
+    flash.fillCircle(iso.x, iso.y, radius)
+    flash.fillStyle(0xffffff, 0.75)
+    flash.fillCircle(iso.x, iso.y, radius * 0.45)
+    flash.lineStyle(1.5, color, 0.6)
+    flash.strokeCircle(iso.x, iso.y, radius * 1.55)
+    const rayLen = radius * 2.4
+    flash.lineBetween(iso.x - rayLen, iso.y, iso.x + rayLen, iso.y)
+    flash.lineBetween(iso.x, iso.y - rayLen * 0.65, iso.x, iso.y + rayLen * 0.65)
     flash.setDepth(35)
     this.scene.tweens.add({
       targets: flash,
       alpha: 0,
-      scaleX: 2,
-      scaleY: 2,
-      duration: 100,
+      scaleX: 1.8,
+      scaleY: 1.8,
+      duration: 120,
+      onComplete: () => flash.destroy(),
+    })
+  }
+
+  private createImpactFlash(x: number, y: number, dmgType: DamageType, intensity = 1): void {
+    const impactColors: Record<DamageType, number> = {
+      [DamageType.BULLET]: 0xfff2a0,
+      [DamageType.EXPLOSIVE]: 0xff8a4f,
+      [DamageType.HE]: 0xff6e40,
+      [DamageType.AP]: 0xffd080,
+      [DamageType.MISSILE]: 0xffa060,
+      [DamageType.FIRE]: 0xff5a2d,
+      [DamageType.ELECTRIC]: 0x9ad4ff,
+      [DamageType.RADIATION]: 0xb9ff66,
+    }
+    const baseSizeByType: Record<DamageType, number> = {
+      [DamageType.BULLET]: 2.8,
+      [DamageType.EXPLOSIVE]: 4.4,
+      [DamageType.HE]: 5.2,
+      [DamageType.AP]: 3.4,
+      [DamageType.MISSILE]: 4.8,
+      [DamageType.FIRE]: 4.2,
+      [DamageType.ELECTRIC]: 3.8,
+      [DamageType.RADIATION]: 3.8,
+    }
+
+    const iso = cartToScreen(x, y)
+    const color = impactColors[dmgType] ?? 0xffcc88
+    const size = (baseSizeByType[dmgType] ?? 3.5) * Phaser.Math.Clamp(intensity, 0.7, 1.4)
+
+    const flash = this.scene.add.graphics()
+    flash.setDepth(36)
+    flash.fillStyle(color, 0.85)
+    flash.fillCircle(iso.x, iso.y, size)
+    flash.fillStyle(0xffffff, 0.65)
+    flash.fillCircle(iso.x, iso.y, size * 0.45)
+    flash.lineStyle(1.2, color, 0.75)
+    flash.strokeCircle(iso.x, iso.y, size * 1.5)
+
+    this.scene.tweens.add({
+      targets: flash,
+      alpha: 0,
+      scaleX: 1.7,
+      scaleY: 1.7,
+      duration: 140,
+      ease: 'Quad.easeOut',
       onComplete: () => flash.destroy(),
     })
   }
