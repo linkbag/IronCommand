@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 04:07*
+*Last updated: 2026-03-08 04:08*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -138,3 +138,7 @@ One correctness bug fixed: carveMeanderingRiver was called with halfWidth=0 whic
 ### Update: 2026-03-08 04:07
 ### codex-ic-bldg-box-symbols-v2 — 2026-03-08 04:07
 All changes are clean. Removed redundant barracks equality check and stray blank line from debug-log removal. TypeScript passes, build passes. Shadow z-order correct, palette all opaque, fallback logic sound.
+
+### Update: 2026-03-08 04:08
+### codex-ic-ui-enemy-cursor-minimap — 2026-03-08 04:08
+Implementation is clean and correct. Coordinate system in isHoveringEnemyEntity matches existing getOwnUnitAt/getOwnBuildingAt patterns. Cursor state guard prevents redundant DOM writes. SHUTDOWN handler and create() reset cursor properly. Minimap ally/enemy colors correct. TypeScript passes. Build passes. Minor: HUD_SIDEBAR_W in GameScene duplicates SIDEBAR_W in HUDScene but is harmless.
