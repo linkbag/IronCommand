@@ -532,26 +532,28 @@ export class HUDScene extends Phaser.Scene {
       // Short readable name (truncated to fit)
       const shortName = this.getShortName(item.id)
       const abbTxt = this.add.text(0, -18, shortName, {
-        fontFamily: 'monospace', fontSize: '7px', color: '#aabbcc',
-        stroke: '#000', strokeThickness: 1,
+        fontFamily: 'monospace', fontSize: '9px', color: '#d6e6ff',
+        stroke: '#000', strokeThickness: 2,
       }).setOrigin(0.5)
 
       const costTxt = this.add.text(0, 18, `$${item.cost}`, {
-        fontFamily: 'monospace', fontSize: '7px', color: '#ffd700',
+        fontFamily: 'monospace', fontSize: '8px', color: '#ffd700',
+        stroke: '#000', strokeThickness: 2,
       }).setOrigin(0.5)
 
       const queueTxt = this.add.text(BTN_W / 2 - 2, -BTN_H / 2 + 2, '', {
-        fontFamily: 'monospace', fontSize: '8px', color: '#ffffff',
+        fontFamily: 'monospace', fontSize: '9px', color: '#ffffff',
         backgroundColor: '#e94560', padding: { x: 2, y: 1 },
       }).setOrigin(1, 0)
       const hotkey = this.tabHotkeys[idx] ?? ''
       const hotkeyTxt = this.add.text(-BTN_W / 2 + 4, -BTN_H / 2 + 2, hotkey, {
-        fontFamily: 'monospace', fontSize: '8px', color: '#ccd8ff',
+        fontFamily: 'monospace', fontSize: '9px', color: '#e0e9ff',
         backgroundColor: '#1a2848', padding: { x: 2, y: 1 },
       }).setOrigin(0, 0)
 
       const readyTxt = this.add.text(0, 20, '', {
-        fontFamily: 'monospace', fontSize: '8px', color: '#4ade80',
+        fontFamily: 'monospace', fontSize: '9px', color: '#4ade80',
+        stroke: '#001108', strokeThickness: 2,
       }).setOrigin(0.5)
 
       ctr.add([bg, progressBar, iconGfx, abbTxt, costTxt, queueTxt, hotkeyTxt, readyTxt])

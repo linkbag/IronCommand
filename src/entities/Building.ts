@@ -10,6 +10,7 @@ import { TILE_SIZE } from '../types'
 import { cartToScreen } from '../engine/IsoUtils'
 
 export type BuildingState = 'constructing' | 'active' | 'low_power' | 'dying'
+type FacilityVisualType = 'factory' | 'barracks' | 'refinery' | 'power' | 'radar' | 'lab' | 'defense'
 
 function adjustBrightness(color: number, amount: number): number {
   const r = Math.max(0, Math.min(255, ((color >> 16) & 0xff) + amount))
@@ -370,27 +371,17 @@ export class Building extends Phaser.GameObjects.Container {
     const g = this.bodyGraphic
     g.clear()
     const dims = this.getIsoDims()
-    console.log('[Building.drawBody] iso box coords', {
-      id: this.def.id,
-      halfW: dims.halfW,
-      halfH: dims.halfH,
-      wallH: dims.wallH,
-      baseY: dims.baseY,
-      topY: dims.topY,
-      northTop: { x: 0, y: dims.topY - dims.halfH },
-      southBottom: { x: 0, y: dims.baseY + dims.halfH },
-    })
     this.drawDropShadow(dims)
     const pct = this.hp / this.def.stats.maxHp
-    const palette = this.getBuildingPalette(pct)
+    const visualType = this.getFacilityVisualType()
+    const palette = this.getBuildingPalette(pct, visualType)
 
     this.drawIsoBox(g, dims, palette)
-    this.drawBuildingDetails(g, dims)
+    this.drawBuildingDetails(g, dims, visualType, palette.line)
     this.drawDamageOverlay(pct)
 
     if (this.state === 'low_power') {
-      g.lineStyle(2, 0xff4400, 0.8)
-      g.strokeEllipse(0, dims.baseY - dims.wallH * 0.08, dims.halfW * 1.35, dims.halfH * 1.35)
+      this.drawLowPowerWarning(g, dims)
     }
   }
 
@@ -420,6 +411,7 @@ export class Building extends Phaser.GameObjects.Container {
       case 'tech_center':
       case 'barracks':
       case 'tesla_reactor':
+      case 'nuclear_reactor':
         wallH += 3
         break
       case 'pillbox':
@@ -434,23 +426,66 @@ export class Building extends Phaser.GameObjects.Container {
     return { halfW, halfH, wallH, baseY, topY: baseY - wallH }
   }
 
-  private getBuildingPalette(pct: number): { top: number; left: number; right: number; line: number } {
+  private getFacilityVisualType(): FacilityVisualType {
+    const id = this.def.id
+    if (
+      id.includes('wall') ||
+      id.includes('turret') ||
+      id.includes('coil') ||
+      id.includes('missile') ||
+      id.includes('cannon') ||
+      this.def.category === 'defense'
+    ) return 'defense'
+    if (id.includes('refinery') || id.includes('purifier')) return 'refinery'
+    if (id.includes('power') || id.includes('reactor') || id.includes('nuclear')) return 'power'
+    if (id.includes('radar') || id.includes('sensor') || id.includes('satellite') || id.includes('air_force')) return 'radar'
+    if (
+      id.includes('lab') ||
+      id.includes('tech') ||
+      id.includes('weapon') ||
+      id.includes('chronosphere') ||
+      id.includes('iron_curtain')
+    ) return 'lab'
+    if (id.includes('barracks') || id.includes('cloning')) return 'barracks'
+    if (id.includes('factory') || id.includes('yard') || this.def.category === 'production') return 'factory'
+    return 'factory'
+  }
+
+  private getBuildingPalette(pct: number, visualType: FacilityVisualType): { top: number; left: number; right: number; line: number } {
     const lowPower = this.state === 'low_power'
     let main = lowPower ? 0x7a6a4e : this.factionColor
     if (pct < 0.5) main = adjustBrightness(main, -45)
-    if (this.def.id === 'tesla_reactor' || this.def.id === 'tesla_coil') {
-      main = this.blendColors(main, 0x7b1d1d, 0.45)
-    } else if (this.def.id === 'power_plant' || this.def.id === 'battle_lab') {
-      main = this.blendColors(main, 0x90b8c8, 0.3)
-    } else if (this.def.id === 'war_factory' || this.def.id === 'ore_refinery' || this.def.id === 'construction_yard') {
-      main = this.blendColors(main, 0x6f6f6f, 0.4)
+
+    switch (visualType) {
+      case 'factory':
+        main = this.blendColors(main, 0x6f6f6f, 0.38)
+        break
+      case 'barracks':
+        main = this.blendColors(main, 0x8b6b5f, 0.28)
+        break
+      case 'refinery':
+        main = this.blendColors(main, 0x8d7a42, 0.42)
+        break
+      case 'power':
+        main = this.blendColors(main, 0x4a6f8d, 0.33)
+        break
+      case 'radar':
+        main = this.blendColors(main, 0x547f90, 0.34)
+        break
+      case 'lab':
+        main = this.blendColors(main, 0x6277a5, 0.36)
+        break
+      case 'defense':
+        main = this.blendColors(main, 0x4f555f, 0.42)
+        break
     }
+    if (this.def.category === 'superweapon') main = this.blendColors(main, 0x7a3b20, 0.25)
 
     return {
-      top: adjustBrightness(main, 32),
-      left: adjustBrightness(main, 10),
-      right: adjustBrightness(main, -22),
-      line: adjustBrightness(main, -44),
+      top: adjustBrightness(main, 30),
+      left: adjustBrightness(main, 8),
+      right: adjustBrightness(main, -24),
+      line: adjustBrightness(main, -46),
     }
   }
 
@@ -516,13 +551,23 @@ export class Building extends Phaser.GameObjects.Container {
   private drawDropShadow(dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number }): void {
     const s = this.dropShadow
     s.clear()
-    s.fillStyle(0x000000, 0.2)
-    s.fillEllipse(0, dims.baseY + 7, dims.halfW * 1.15, Math.max(6, dims.halfH * 0.8))
+    const y = dims.baseY + 8
+    const hw = dims.halfW * 1.05
+    const hh = Math.max(4, dims.halfH * 0.55)
+    s.fillStyle(0x000000, 0.22)
+    s.fillPoints([
+      new Phaser.Geom.Point(0, y - hh),
+      new Phaser.Geom.Point(hw, y),
+      new Phaser.Geom.Point(0, y + hh),
+      new Phaser.Geom.Point(-hw, y),
+    ], true)
   }
 
   private drawBuildingDetails(
     g: Phaser.GameObjects.Graphics,
     dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    visualType: FacilityVisualType,
+    lineColor: number,
   ): void {
     const hw = dims.halfW
     const hh = dims.halfH
@@ -530,51 +575,147 @@ export class Building extends Phaser.GameObjects.Container {
     const wallY = dims.topY + hh * 0.7
     const detailW = Math.max(8, hw * 0.28)
     const detailH = Math.max(5, hh * 0.45)
+    const accent = adjustBrightness(lineColor, 42)
+    const accentDark = adjustBrightness(lineColor, -8)
 
-    g.fillStyle(0x2a2a2a, 0.45)
+    g.fillStyle(adjustBrightness(lineColor, -20), 1)
     g.fillRect(-detailW * 0.5, wallY, detailW, detailH)
 
-    switch (this.def.category) {
+    switch (visualType) {
       case 'power':
-        g.fillStyle(0xf4d447, 0.92)
-        g.fillRect(-3, roofY - hh * 0.7, 6, 12)
+        g.fillStyle(0xf4d447, 1)
+        g.fillRect(-3, roofY - hh * 0.78, 6, 12)
         break
-      case 'production':
-        g.fillStyle(0xa9b7c9, 0.88)
+      case 'factory':
+        g.fillStyle(0xa9b7c9, 1)
         g.fillRect(hw * 0.22, roofY - hh * 0.35, detailW, detailH)
+        g.fillStyle(0x5b5b5b, 1)
+        g.fillRect(-hw * 0.6, dims.baseY + hh * 0.08, hw * 1.2, 4)
         break
       case 'defense':
-        g.fillStyle(0x3b3b3b, 0.95)
+        g.fillStyle(0x3b3b3b, 1)
         g.fillRect(-4, roofY - hh * 0.95, 8, 14)
-        g.fillStyle(0x222222, 0.95)
+        g.fillStyle(0x222222, 1)
         g.fillRect(4, roofY - hh * 0.78, hw * 0.34, 3)
         break
-      case 'tech':
-        g.fillStyle(0x88c8ff, 0.9)
+      case 'lab':
+        g.fillStyle(0x88c8ff, 1)
         g.fillRect(-5, roofY - hh * 0.65, 10, 10)
         break
-      case 'superweapon':
-        g.fillStyle(0xff9c48, 0.9)
-        g.fillRect(-6, roofY - hh * 0.82, 12, 14)
-        break
-      case 'base':
-        g.fillStyle(0xd6d6d6, 0.8)
+      case 'barracks':
+        g.fillStyle(0xd6d6d6, 1)
         g.fillRect(-2, roofY - hh * 0.92, 4, 13)
+        g.fillStyle(0xd64b4b, 1)
+        g.fillTriangle(3, roofY - hh * 1.12, 8, roofY - hh * 0.95, 3, roofY - hh * 0.78)
         break
+      case 'refinery':
+        g.fillStyle(0xffb347, 1)
+        g.fillRect(-6, roofY - hh * 0.82, 12, 14)
+        g.fillStyle(0xd7b24f, 1)
+        g.fillCircle(6, roofY - hh * 0.35, 2)
+        break
+      case 'radar':
+        g.fillStyle(0xb8d6ef, 1)
+        g.fillRect(-8, roofY - hh * 1.05, 16, 5)
+        g.lineStyle(2, 0x92deff, 1)
+        g.lineBetween(5, roofY - hh * 0.1, 5, roofY - hh * 0.8)
+        g.strokeCircle(5, roofY - hh * 0.8, 3)
+        break
+    }
+    if (this.def.id === 'tesla_coil' || this.def.id === 'prism_tower' || this.def.id === 'nuclear_silo') {
+      g.fillStyle(0x9fd2ff, 1)
+      g.fillRect(-3, roofY - hh * 1.15, 6, 12)
     }
 
-    if (this.def.id === 'air_force_command' || this.def.id === 'radar_tower') {
-      g.fillStyle(0xb8d6ef, 0.95)
-      g.fillRect(-8, roofY - hh * 1.15, 16, 5)
+    this.drawFacilitySymbol(g, dims, visualType, accent, accentDark)
+  }
+
+  private drawFacilitySymbol(
+    g: Phaser.GameObjects.Graphics,
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    visualType: FacilityVisualType,
+    fillColor: number,
+    lineColor: number,
+  ): void {
+    const cy = dims.topY - dims.halfH * 0.24
+    const w = Math.max(10, dims.halfW * 0.42)
+    const h = Math.max(8, dims.halfH * 0.62)
+
+    g.fillStyle(0x1a1a1a, 1)
+    g.fillRect(-w / 2 - 1, cy - h / 2 - 1, w + 2, h + 2)
+    g.fillStyle(fillColor, 1)
+    g.fillRect(-w / 2, cy - h / 2, w, h)
+    g.lineStyle(1, lineColor, 1)
+    g.strokeRect(-w / 2, cy - h / 2, w, h)
+
+    switch (visualType) {
+      case 'factory':
+        g.fillStyle(lineColor, 1)
+        g.fillRect(-2, cy - 3, 4, 6)
+        g.fillRect(-5, cy - 1, 10, 2)
+        break
+      case 'barracks':
+        g.lineStyle(1.5, lineColor, 1)
+        g.lineBetween(-4, cy + 2, 0, cy - 2)
+        g.lineBetween(0, cy - 2, 4, cy + 2)
+        g.lineBetween(-4, cy - 1, 0, cy - 5)
+        g.lineBetween(0, cy - 5, 4, cy - 1)
+        break
+      case 'refinery':
+        g.fillStyle(lineColor, 1)
+        g.fillCircle(-3, cy, 2)
+        g.fillRect(0, cy - 3, 4, 6)
+        break
+      case 'power':
+        g.fillStyle(lineColor, 1)
+        g.fillPoints([
+          new Phaser.Geom.Point(-2, cy - 4),
+          new Phaser.Geom.Point(2, cy - 4),
+          new Phaser.Geom.Point(-1, cy + 1),
+          new Phaser.Geom.Point(2, cy + 1),
+          new Phaser.Geom.Point(-3, cy + 5),
+          new Phaser.Geom.Point(-1, cy),
+        ], true)
+        break
+      case 'radar':
+        g.lineStyle(1.5, lineColor, 1)
+        g.lineBetween(0, cy + 3, 0, cy - 3)
+        g.strokeCircle(0, cy - 3, 3)
+        break
+      case 'lab':
+        g.lineStyle(1.5, lineColor, 1)
+        g.strokeRect(-3, cy - 4, 6, 7)
+        g.lineBetween(-2, cy - 1, 2, cy -1)
+        break
+      case 'defense':
+        g.fillStyle(lineColor, 1)
+        g.fillPoints([
+          new Phaser.Geom.Point(0, cy - 4),
+          new Phaser.Geom.Point(4, cy - 1),
+          new Phaser.Geom.Point(3, cy + 4),
+          new Phaser.Geom.Point(-3, cy + 4),
+          new Phaser.Geom.Point(-4, cy - 1),
+        ], true)
+        break
     }
-    if (this.def.id === 'war_factory' || this.def.id === 'construction_yard') {
-      g.fillStyle(0x5b5b5b, 0.88)
-      g.fillRect(-hw * 0.6, dims.baseY + hh * 0.08, hw * 1.2, 4)
-    }
-    if (this.def.id === 'tesla_coil' || this.def.id === 'prism_tower') {
-      g.fillStyle(0x9fd2ff, 0.92)
-      g.fillRect(-3, roofY - hh * 1.2, 6, 12)
-    }
+  }
+
+  private drawLowPowerWarning(
+    g: Phaser.GameObjects.Graphics,
+    dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+  ): void {
+    const w = Math.max(14, dims.halfW * 0.5)
+    const h = 8
+    const y = dims.topY - dims.halfH - 3
+
+    g.fillStyle(0x2b1000, 1)
+    g.fillRect(-w / 2 - 1, y - 1, w + 2, h + 2)
+    g.fillStyle(0xff7b2f, 1)
+    g.fillRect(-w / 2, y, w, h)
+    g.fillStyle(0x2b1000, 1)
+    g.fillRect(-w / 2 + 2, y + 2, 2, h - 4)
+    g.fillRect(-1, y + 2, 2, h - 4)
+    g.fillRect(w / 2 - 4, y + 2, 2, h - 4)
   }
 
   private drawDamageOverlay(pct: number): void {
@@ -699,15 +840,6 @@ export class Building extends Phaser.GameObjects.Container {
       this.emit('fire_at_target', this, nearest)
       this.playDefenseMuzzleFlash(nearest.x, nearest.y)
       this.attackCooldown = 1 / attack.fireRate
-
-      if (this.def.id === 'grand_cannon') {
-        console.log('[GrandCannon] Fired', {
-          buildingId: this.id,
-          owner: this.playerId,
-          targetId: nearest.id,
-          targetCategory: nearest.def?.category ?? 'unknown',
-        })
-      }
     })
   }
 
