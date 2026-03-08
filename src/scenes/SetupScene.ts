@@ -88,7 +88,23 @@ export class SetupScene extends Phaser.Scene {
   private mapPreview!: Phaser.GameObjects.Graphics
   private spawnMarkers: Phaser.GameObjects.Text[] = []
   private spawnZones: Phaser.GameObjects.Zone[] = []
-  private allianceRows: Map<number, { rowBg: Phaser.GameObjects.Graphics; label: Phaser.GameObjects.Text; toggleBg: Phaser.GameObjects.Graphics; toggleText: Phaser.GameObjects.Text; zone: Phaser.GameObjects.Zone }> = new Map()
+  private spawnLegend?: Phaser.GameObjects.Text
+  private previewSize = 150
+  private previewX = 0
+  private previewY = 0
+  private allianceRows: Map<number, {
+    rowBg: Phaser.GameObjects.Graphics
+    label: Phaser.GameObjects.Text
+    toggleBg: Phaser.GameObjects.Graphics
+    toggleText: Phaser.GameObjects.Text
+    zone: Phaser.GameObjects.Zone
+    rowX: number
+    rowY: number
+    rowW: number
+    rowH: number
+    toggleX: number
+    toggleW: number
+  }> = new Map()
 
   constructor() {
     super({ key: 'SetupScene' })
@@ -101,7 +117,7 @@ export class SetupScene extends Phaser.Scene {
     this.createHeader(width)
     this.createFactionPanel(width, height)
     this.createSettingsPanel(width, height)
-    this.createMapPreview(width, height)
+    this.createMapPreview()
     this.createBottomBar(width, height)
     this.updateFactionInfo()
     this.regeneratePreview()
@@ -309,12 +325,37 @@ export class SetupScene extends Phaser.Scene {
     const panelY = 60
     const panelW = width - panelX - 12
     const panelH = height - 120
+    const contentPadding = 10
+    const contentGap = 10
+    const minContentW = 248
+    const availableW = panelW - contentPadding * 2
+    let previewDockW = Math.max(0, Math.min(190, Math.floor(panelW * 0.34)))
+    if (availableW - previewDockW - contentGap < minContentW) {
+      previewDockW = Math.max(0, availableW - minContentW - contentGap)
+    }
+    const hasPreviewDock = previewDockW >= 120
+    const settingsW = hasPreviewDock ? (availableW - previewDockW - contentGap) : availableW
+    const settingsX = panelX + contentPadding
+    const previewDockX = settingsX + settingsW + contentGap
+    if (hasPreviewDock) {
+      this.previewSize = Math.max(110, Math.min(166, previewDockW - 18))
+      this.previewX = previewDockX + Math.floor((previewDockW - this.previewSize) / 2)
+      this.previewY = panelY + 44
+    } else {
+      this.previewSize = Math.max(100, Math.min(150, panelW - 22))
+      this.previewX = panelX + Math.floor((panelW - this.previewSize) / 2)
+      this.previewY = panelY + panelH - this.previewSize - 70
+    }
 
     const g = this.add.graphics()
     g.fillStyle(STYLE.panel, 1)
     g.fillRect(panelX, panelY, panelW, panelH)
     g.lineStyle(1, STYLE.panelBorder, 1)
     g.strokeRect(panelX, panelY, panelW, panelH)
+    if (hasPreviewDock) {
+      g.lineStyle(1, STYLE.panelBorder, 0.6)
+      g.lineBetween(previewDockX - 5, panelY + 8, previewDockX - 5, panelY + panelH - 8)
+    }
 
     this.add.text(panelX + 12, panelY + 10, 'GAME SETTINGS', {
       fontFamily: 'monospace',
@@ -326,7 +367,7 @@ export class SetupScene extends Phaser.Scene {
 
     // Map Size
     cy = this.createRadioGroup(
-      panelX + 10, cy, panelW - 20,
+      settingsX, cy, settingsW,
       'MAP SIZE',
       MAP_SIZES.map(m => ({ label: `${m.label}\n${m.tiles}`, value: m.value })),
       this.config.mapSize,
@@ -346,7 +387,7 @@ export class SetupScene extends Phaser.Scene {
       { label: '🎲 RANDOM', value: 'random' },
     ]
     cy = this.createRadioGroup(
-      panelX + 10, cy, panelW - 20,
+      settingsX, cy, settingsW,
       'MAP TEMPLATE',
       TEMPLATES.map(t => ({ label: t.label, value: t.value })),
       this.config.mapTemplate,
@@ -361,7 +402,7 @@ export class SetupScene extends Phaser.Scene {
 
     // Map Visibility
     cy = this.createRadioGroup(
-      panelX + 10, cy, panelW - 20,
+      settingsX, cy, settingsW,
       'MAP VISIBILITY',
       MAP_VISIBILITY_OPTIONS.map(m => ({ label: m.label, value: m.value })),
       this.config.revealMap,
@@ -373,7 +414,7 @@ export class SetupScene extends Phaser.Scene {
 
     // AI Difficulty
     cy = this.createRadioGroup(
-      panelX + 10, cy, panelW - 20,
+      settingsX, cy, settingsW,
       'AI DIFFICULTY',
       DIFFICULTIES.map(d => ({ label: d.label, value: d.value })),
       this.config.aiDifficulty,
@@ -385,7 +426,7 @@ export class SetupScene extends Phaser.Scene {
 
     // Starting Credits
     cy = this.createRadioGroup(
-      panelX + 10, cy, panelW - 20,
+      settingsX, cy, settingsW,
       'STARTING CREDITS',
       CREDIT_OPTIONS.map(c => ({ label: c.toLocaleString(), value: c })),
       this.config.startingCredits,
@@ -396,29 +437,29 @@ export class SetupScene extends Phaser.Scene {
     cy += 16
 
     // AI Opponents (stepper)
-    this.add.text(panelX + 10, cy, 'AI OPPONENTS', {
+    this.add.text(settingsX, cy, 'AI OPPONENTS', {
       fontFamily: 'monospace',
       fontSize: '11px',
       color: '#aaaaaa',
     })
     cy += 20
 
-    const stepperW = panelW - 20
+    const stepperW = settingsW
     const sg = this.add.graphics()
     sg.fillStyle(STYLE.btnNormal, 1)
-    sg.fillRect(panelX + 10, cy, stepperW, 36)
+    sg.fillRect(settingsX, cy, stepperW, 36)
     sg.lineStyle(1, STYLE.panelBorder, 1)
-    sg.strokeRect(panelX + 10, cy, stepperW, 36)
+    sg.strokeRect(settingsX, cy, stepperW, 36)
 
     // Minus button
-    const minusZone = this.add.zone(panelX + 28, cy + 18, 32, 32).setInteractive({ cursor: 'pointer' })
-    const minusText = this.add.text(panelX + 28, cy + 18, '−', {
+    const minusZone = this.add.zone(settingsX + 18, cy + 18, 32, 32).setInteractive({ cursor: 'pointer' })
+    const minusText = this.add.text(settingsX + 18, cy + 18, '−', {
       fontFamily: 'monospace',
       fontSize: '20px',
       color: '#e94560',
     }).setOrigin(0.5)
 
-    this.aiCountText = this.add.text(panelX + 10 + stepperW / 2, cy + 18,
+    this.aiCountText = this.add.text(settingsX + stepperW / 2, cy + 18,
       `${this.config.aiCount}`, {
       fontFamily: 'monospace',
       fontSize: '18px',
@@ -426,8 +467,8 @@ export class SetupScene extends Phaser.Scene {
     }).setOrigin(0.5)
 
     // Plus button
-    const plusZone = this.add.zone(panelX + 10 + stepperW - 18, cy + 18, 32, 32).setInteractive({ cursor: 'pointer' })
-    const plusText = this.add.text(panelX + 10 + stepperW - 18, cy + 18, '+', {
+    const plusZone = this.add.zone(settingsX + stepperW - 18, cy + 18, 32, 32).setInteractive({ cursor: 'pointer' })
+    const plusText = this.add.text(settingsX + stepperW - 18, cy + 18, '+', {
       fontFamily: 'monospace',
       fontSize: '20px',
       color: '#e94560',
@@ -455,7 +496,7 @@ export class SetupScene extends Phaser.Scene {
     cy += 44
 
     // ── Alliance Picker ───────────────────────────────────────
-    this.add.text(panelX + 10, cy, 'ALLIANCE PICKER', {
+    this.add.text(settingsX, cy, 'ALLIANCE PICKER', {
       fontFamily: 'monospace',
       fontSize: '11px',
       color: '#aaaaaa',
@@ -464,16 +505,18 @@ export class SetupScene extends Phaser.Scene {
 
     const rowH = 32
     for (let aiId = 1; aiId <= 3; aiId++) {
+      const rowX = settingsX + 8
       const rowY = cy + (aiId - 1) * (rowH + 4)
+      const rowW = stepperW - 16
       const rowBg = this.add.graphics()
-      const label = this.add.text(panelX + 18, rowY + rowH / 2, `AI ${aiId}`, {
+      const label = this.add.text(rowX + 8, rowY + rowH / 2, `AI ${aiId}`, {
         fontFamily: 'monospace',
         fontSize: '11px',
         color: '#bbbbbb',
       }).setOrigin(0, 0.5)
 
-      const toggleW = 100
-      const toggleX = panelX + 10 + stepperW - toggleW - 8
+      const toggleW = Math.max(84, Math.min(100, rowW - 84))
+      const toggleX = rowX + rowW - toggleW - 8
       const toggleBg = this.add.graphics()
       const toggleText = this.add.text(toggleX + toggleW / 2, rowY + rowH / 2, '', {
         fontFamily: 'monospace',
@@ -496,7 +539,19 @@ export class SetupScene extends Phaser.Scene {
         this.refreshAllianceRows()
       })
 
-      this.allianceRows.set(aiId, { rowBg, label, toggleBg, toggleText, zone })
+      this.allianceRows.set(aiId, {
+        rowBg,
+        label,
+        toggleBg,
+        toggleText,
+        zone,
+        rowX,
+        rowY,
+        rowW,
+        rowH,
+        toggleX,
+        toggleW,
+      })
     }
     this.refreshAllianceRows()
   }
@@ -521,21 +576,15 @@ export class SetupScene extends Phaser.Scene {
       row.toggleBg.clear()
 
       if (visible) {
-        const rowY = row.label.y - 16
-        const rowX = row.label.x - 8
-        const rowW = 208
-        const rowH = 32
         row.rowBg.fillStyle(STYLE.btnNormal, 1)
-        row.rowBg.fillRect(rowX, rowY, rowW, rowH)
+        row.rowBg.fillRect(row.rowX, row.rowY, row.rowW, row.rowH)
         row.rowBg.lineStyle(1, STYLE.panelBorder, 1)
-        row.rowBg.strokeRect(rowX, rowY, rowW, rowH)
+        row.rowBg.strokeRect(row.rowX, row.rowY, row.rowW, row.rowH)
 
-        const toggleW = 100
-        const toggleX = rowX + rowW - toggleW - 8
         row.toggleBg.fillStyle(isAlly ? STYLE.selectedBg : STYLE.btnNormal, 1)
-        row.toggleBg.fillRect(toggleX, rowY, toggleW, rowH)
+        row.toggleBg.fillRect(row.toggleX, row.rowY, row.toggleW, row.rowH)
         row.toggleBg.lineStyle(1, isAlly ? STYLE.selected : STYLE.panelBorder, 1)
-        row.toggleBg.strokeRect(toggleX, rowY, toggleW, rowH)
+        row.toggleBg.strokeRect(row.toggleX, row.rowY, row.toggleW, row.rowH)
       }
 
       row.toggleText.setText(isAlly ? 'ALLY' : 'ENEMY')
@@ -546,6 +595,8 @@ export class SetupScene extends Phaser.Scene {
       row.toggleBg.setVisible(visible)
       row.toggleText.setVisible(visible)
       row.zone.setVisible(visible)
+      row.zone.setPosition(row.toggleX + row.toggleW / 2, row.rowY + row.rowH / 2)
+      row.toggleText.setPosition(row.toggleX + row.toggleW / 2, row.rowY + row.rowH / 2)
       row.zone.input!.enabled = visible
     }
   }
@@ -565,11 +616,12 @@ export class SetupScene extends Phaser.Scene {
     })
     y += 20
 
-    const btnW = Math.floor(w / options.length) - 4
+    const btnGap = 4
+    const btnW = Math.max(28, Math.floor((w - btnGap * (options.length - 1)) / options.length))
     const btnH = 36
 
     options.forEach((opt, i) => {
-      const bx = x + i * (btnW + 4)
+      const bx = x + i * (btnW + btnGap)
       const bg = this.add.graphics()
 
       const drawState = (selected: boolean, hovered = false) => {
@@ -628,16 +680,16 @@ export class SetupScene extends Phaser.Scene {
         // Deselect all
         store.forEach((g, key) => {
           const isNowSelected = key === opt.value
-          g.clear()
-          if (isNowSelected) {
-            g.fillStyle(STYLE.accentDim, 1)
-            g.fillRect(bx - (options.indexOf(options.find(o => o.value === key)!) * (btnW + 4)), y, btnW, btnH)
-          }
-        })
-        // Simpler: just mark the right one
-        store.forEach((g, key) => {
-          const idx2 = options.findIndex(o => o.value === key)
-          const bx2 = x + idx2 * (btnW + 4)
+            g.clear()
+            if (isNowSelected) {
+              g.fillStyle(STYLE.accentDim, 1)
+              g.fillRect(bx - (options.indexOf(options.find(o => o.value === key)!) * (btnW + btnGap)), y, btnW, btnH)
+            }
+          })
+          // Simpler: just mark the right one
+          store.forEach((g, key) => {
+            const idx2 = options.findIndex(o => o.value === key)
+            const bx2 = x + idx2 * (btnW + btnGap)
           g.clear()
           if (key === opt.value) {
             g.fillStyle(STYLE.accentDim, 1)
@@ -720,23 +772,23 @@ export class SetupScene extends Phaser.Scene {
     })
   }
 
-  private createMapPreview(width: number, height: number) {
-    const previewSize = 180
-    const px = width - previewSize - 30
-    const py = 80
+  private createMapPreview() {
+    const previewSize = this.previewSize
+    const px = this.previewX
+    const py = this.previewY
 
     // Panel background
     const bg = this.add.graphics()
-    bg.fillStyle(STYLE.panel, 1)
+    bg.fillStyle(0x0a0a14, 1)
     bg.fillRect(px - 10, py - 30, previewSize + 20, previewSize + 80)
     bg.lineStyle(1, STYLE.panelBorder, 1)
     bg.strokeRect(px - 10, py - 30, previewSize + 20, previewSize + 80)
 
-    this.add.text(px + previewSize / 2 - 10, py - 20, 'MAP PREVIEW', {
+    this.add.text(px + previewSize / 2, py - 20, 'MAP PREVIEW', {
       fontFamily: 'monospace',
       fontSize: '11px',
       color: '#aaaaaa',
-    })
+    }).setOrigin(0.5)
 
     // Map preview canvas
     this.mapPreview = this.add.graphics()
@@ -774,7 +826,7 @@ export class SetupScene extends Phaser.Scene {
     const mapSize = mapDims[this.config.mapSize] ?? 64
     const data = generatePreviewData(mapSize, mapSize, this.config.mapSeed, this.config.mapTemplate)
 
-    const previewSize = 180
+    const previewSize = this.previewSize
     const scale = previewSize / mapSize
 
     // Draw terrain
@@ -831,12 +883,11 @@ export class SetupScene extends Phaser.Scene {
 
     // Spawn legend
     const legendY = ph + previewSize + 38
-    // Clean up old legend text
-    if ((this as any)._spawnLegend) (this as any)._spawnLegend.destroy()
+    this.spawnLegend?.destroy()
     const legendText = this.config.playerSpawn === -1
       ? 'Spawn: RANDOM (click # to pick)'
       : `Spawn: Position ${this.config.playerSpawn + 1} (click to change)`
-    ;(this as any)._spawnLegend = this.add.text(pw + previewSize / 2, legendY, legendText, {
+    this.spawnLegend = this.add.text(pw + previewSize / 2, legendY, legendText, {
       fontFamily: 'monospace',
       fontSize: '8px',
       color: '#778899',
