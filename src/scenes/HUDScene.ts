@@ -20,8 +20,15 @@ const POWER_BAR_W     = 12
 const TAB_H           = 28
 const BTN_W           = 96
 const BTN_H           = 62
-const BTN_GAP         = 6
+const BTN_GAP         = 8
 const BTN_PAD         = 6
+const BTN_NAME_Y      = -18
+const BTN_NAME_FONT   = '11px'
+const BTN_META_FONT   = '10px'
+const BTN_BOTTOM_Y    = 23
+const BTN_ICON_Y      = 6
+const BTN_PROGRESS_Y  = 6
+const BTN_BADGE_Y     = -BTN_H / 2 + 4
 const SELECTED_H      = 90
 const ACTION_H        = 30
 const MAX_ALERTS      = 3
@@ -525,37 +532,37 @@ export class HUDScene extends Phaser.Scene {
 
       const bg          = this.add.graphics()
       const progressBar = this.add.graphics()
-      progressBar.setY(4)
+      progressBar.setY(BTN_PROGRESS_Y)
 
       // Draw iconic symbol for this item
       const iconGfx = this.add.graphics()
-      iconGfx.setY(4)
+      iconGfx.setY(BTN_ICON_Y)
       this.drawBuildIcon(iconGfx, item.id, item.tab)
 
-      const label = this.formatBuildLabel(item.label)
-      const nameTxt = this.add.text(0, -16, label, {
-        fontFamily: 'monospace', fontSize: '9px', color: '#c8d7ef',
+      const label = this.formatBuildLabel(item.label, 11, 2)
+      const nameTxt = this.add.text(0, BTN_NAME_Y, label, {
+        fontFamily: 'monospace', fontSize: BTN_NAME_FONT, color: '#c8d7ef',
         stroke: '#000', strokeThickness: 2, align: 'center',
-        lineSpacing: 1,
+        lineSpacing: 2,
       }).setOrigin(0.5)
 
-      const costTxt = this.add.text(0, 22, `$${item.cost}`, {
-        fontFamily: 'monospace', fontSize: '9px', color: '#ffd700',
+      const costTxt = this.add.text(0, BTN_BOTTOM_Y, `$${item.cost}`, {
+        fontFamily: 'monospace', fontSize: BTN_META_FONT, color: '#ffd700',
         stroke: '#000', strokeThickness: 1,
       }).setOrigin(0.5)
 
-      const queueTxt = this.add.text(BTN_W / 2 - 3, -BTN_H / 2 + 3, '', {
-        fontFamily: 'monospace', fontSize: '9px', color: '#ffffff',
+      const queueTxt = this.add.text(BTN_W / 2 - 3, BTN_BADGE_Y, '', {
+        fontFamily: 'monospace', fontSize: BTN_META_FONT, color: '#ffffff',
         backgroundColor: '#e94560', padding: { x: 2, y: 1 },
       }).setOrigin(1, 0)
       const hotkey = this.tabHotkeys[idx] ?? ''
-      const hotkeyTxt = this.add.text(-BTN_W / 2 + 4, -BTN_H / 2 + 3, hotkey, {
-        fontFamily: 'monospace', fontSize: '9px', color: '#ccd8ff',
+      const hotkeyTxt = this.add.text(-BTN_W / 2 + 4, BTN_BADGE_Y, hotkey, {
+        fontFamily: 'monospace', fontSize: BTN_META_FONT, color: '#ccd8ff',
         backgroundColor: '#1a2848', padding: { x: 2, y: 1 },
       }).setOrigin(0, 0)
 
-      const readyTxt = this.add.text(0, 22, '', {
-        fontFamily: 'monospace', fontSize: '9px', color: '#4ade80',
+      const readyTxt = this.add.text(0, BTN_BOTTOM_Y, '', {
+        fontFamily: 'monospace', fontSize: BTN_META_FONT, color: '#4ade80',
         stroke: '#000', strokeThickness: 1,
       }).setOrigin(0.5)
 
@@ -1350,11 +1357,11 @@ export class HUDScene extends Phaser.Scene {
     this.selectedIcon.strokeRect(x + 5, y + 5, 34, 34)
 
     this.selectedNameTxt = this.add.text(x + 46, y + 6, 'No Selection', {
-      fontFamily: 'monospace', fontSize: '10px', color: '#e94560',
+      fontFamily: 'monospace', fontSize: '11px', color: '#e94560',
     })
 
-    this.selectedInfoTxt = this.add.text(x + 46, y + 21, '', {
-      fontFamily: 'monospace', fontSize: '8px', color: '#888888',
+    this.selectedInfoTxt = this.add.text(x + 46, y + 24, '', {
+      fontFamily: 'monospace', fontSize: '9px', color: '#888888',
       wordWrap: { width: SIDEBAR_W - 54 },
     })
 
