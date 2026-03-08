@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 13:28*
+*Last updated: 2026-03-08 13:29*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -180,3 +180,7 @@ One visual bug fixed: statusText label (FAC/BAR/etc.) was always shown via setVi
 ### Update: 2026-03-08 13:28
 ### codex-ic-ore-regen-1pct-and-8p-colors-r2 — 2026-03-08 13:28
 One logic bug fixed: getPlayerSlotColor(-1) was returning human-blue (0x4488ff) for neutral buildings (NEUTRAL_PLAYER_ID=-1), making them indistinguishable from the human player on the minimap. Fixed by adding NEUTRAL_SLOT_COLOR=0x888888 returned for all playerId<0. All other changes (ORE_REGEN_RATE 10->1, 8-player slot colors, MAX_AI_PLAYERS=7 cap, 2-column alliance layout, per-player minimap colors) are correct. Build passes clean.
+
+### Update: 2026-03-08 13:29
+### codex-ic-ra2-ai-benchmark-and-upgrade-r2 — 2026-03-08 13:29
+Doctrine-driven strategic AI layer reviewed. TypeScript build passes clean. One cosmetic indentation fix applied (mis-indented superweapon comment in tick()). All new features (AIStrategicDoctrine, EnemyMacroIntel, opportunistic attack windows, reserve-aware defender selection, doctrine-weighted targeting/harassment, wave composition stabilization, intent-based scouting with revisit memory) are logically sound and correctly integrated. Removed autoEngageVisibleOrNearbyEnemies is covered by Unit.ts built-in auto-acquire. No logic bugs, memory leaks, or type errors found.
