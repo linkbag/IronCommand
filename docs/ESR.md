@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-05 22:13*
+*Last updated: 2026-03-07 21:54*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -106,3 +106,7 @@ Review passed — reviewer exited cleanly (auto-pass: clean exit, no issues indi
 ### Update: 2026-03-05 22:13
 ### codex-ic-gameplay-fix — 2026-03-05 22:13
 Review passed — reviewer found no issues (work log updated, no fixes needed)
+
+### Update: 2026-03-07 21:54
+### codex-ic-bldg-silhouette — 2026-03-07 21:54
+One fix applied: nuclear_reactor was missing from the wallH +3 group in getIsoDims(), inconsistent with its power-family siblings that share the same twin-stack silhouette in drawBuildingDetails. Added the case — tsc clean before and after. All other silhouette logic is correct, no memory leaks, no imports issues, no dead code from this PR.
