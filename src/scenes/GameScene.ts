@@ -30,6 +30,9 @@ const ACK_LINES: Record<string, string[]> = {
 const PLAYER_TINT = 0x4488ff
 const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff, 0x44cc44, 0xffdd00, 0x44dddd, 0xff66aa] // red, orange, purple, green, yellow, cyan, pink
 const PRODUCER_BUILDING_IDS = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery'] as const
+const HUD_SIDEBAR_W = 220
+const DEFAULT_CURSOR = 'default'
+const ENEMY_HOVER_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Ccircle cx='10' cy='10' r='6.5' fill='none' stroke='%23ff3b3b' stroke-width='2'/%3E%3Cpath d='M10 1v4M10 15v4M1 10h4M15 10h4' stroke='%23ff3b3b' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") 10 10, auto`
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
@@ -95,6 +98,7 @@ export class GameScene extends Phaser.Scene {
   private pauseText?: Phaser.GameObjects.Text
   private blockerNudgeCooldownMs: Map<string, number> = new Map()
   private forceFullMapReveal = false
+  private enemyHoverCursorActive = false
 
   constructor() {
     super({ key: 'GameScene' })
@@ -144,6 +148,7 @@ export class GameScene extends Phaser.Scene {
     this.rallyOverlay?.destroy()
     this.blockerNudgeCooldownMs = new Map()
     this.forceFullMapReveal = false
+    this.enemyHoverCursorActive = false
   }
 
   create() {
@@ -540,6 +545,10 @@ export class GameScene extends Phaser.Scene {
 
     // Prevent browser context menu on the game canvas
     this.game.canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault())
+    this.game.canvas.style.cursor = DEFAULT_CURSOR
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.game.canvas.style.cursor = DEFAULT_CURSOR
+    })
 
     this.cameras.main.fadeIn(500)
   }
@@ -617,6 +626,7 @@ export class GameScene extends Phaser.Scene {
 
     // Hide enemy entities in fog
     this.updateEntityVisibility()
+    this.updateHoverCursor()
 
     // Win/loss check (every 120 ticks ≈ 2s)
     if (this.gameState.tick % 120 === 0) {
@@ -1735,6 +1745,60 @@ export class GameScene extends Phaser.Scene {
   /** Convert pointer's world position (isometric screen space) to Cartesian game coordinates */
   private ptrToCart(ptr: Phaser.Input.Pointer): { x: number; y: number } {
     return screenToCart(ptr.worldX, ptr.worldY)
+  }
+
+  private updateHoverCursor(): void {
+    const ptr = this.input.activePointer
+    const isInsideCanvas = !!ptr
+      && ptr.x >= 0
+      && ptr.y >= 0
+      && ptr.x < this.scale.width
+      && ptr.y < this.scale.height
+    if (!isInsideCanvas) {
+      this.setEnemyHoverCursor(false)
+      return
+    }
+
+    const isOverWorldView = ptr.x < this.scale.width - HUD_SIDEBAR_W
+    if (!isOverWorldView || this.cursorMode !== 'normal') {
+      this.setEnemyHoverCursor(false)
+      return
+    }
+
+    const { x, y } = this.ptrToCart(ptr)
+    this.setEnemyHoverCursor(this.isHoveringEnemyEntity(x, y))
+  }
+
+  private setEnemyHoverCursor(active: boolean): void {
+    if (this.enemyHoverCursorActive === active) return
+    this.enemyHoverCursorActive = active
+    this.game.canvas.style.cursor = active ? ENEMY_HOVER_CURSOR : DEFAULT_CURSOR
+  }
+
+  private isHoveringEnemyEntity(worldX: number, worldY: number): boolean {
+    const localId = this.gameState.localPlayerId ?? 0
+    const unitHitRadius = TILE_SIZE * 0.75
+
+    for (const unit of this.entityMgr.getAllUnits()) {
+      if (unit.state === 'dying' || !unit.visible) continue
+      if (!this.entityMgr.isEnemy(localId, unit.playerId)) continue
+      const dist = Phaser.Math.Distance.Between(worldX, worldY, unit.x, unit.y)
+      if (dist <= unitHitRadius) return true
+    }
+
+    for (const building of this.entityMgr.getAllBuildings()) {
+      if (building.state === 'dying' || !building.visible) continue
+      if (!this.entityMgr.isEnemy(localId, building.playerId)) continue
+      const bx = building.x
+      const by = building.y
+      const bw = building.def.footprint.w * TILE_SIZE
+      const bh = building.def.footprint.h * TILE_SIZE
+      if (worldX >= bx && worldX <= bx + bw && worldY >= by && worldY <= by + bh) {
+        return true
+      }
+    }
+
+    return false
   }
 
   // ── Ctrl+click force fire ──────────────────────────────────────
