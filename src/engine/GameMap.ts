@@ -1159,6 +1159,7 @@ export class GameMap {
   private oreSpreadTimerMs = 0
   private oreGrowthTimerMs = 0
   private depletedOreTiles: Set<number> = new Set()
+  private damagedBridgeTiles: Set<number> = new Set()
   private debugGridEnabled = false
 
   constructor(scene: Phaser.Scene, width?: number, height?: number, seed?: number, template?: MapTemplate) {
@@ -1179,6 +1180,7 @@ export class GameMap {
     const { tiles, width, height } = this.data
     this.waterTiles = []
     this.oreTiles = []
+    this.damagedBridgeTiles.clear()
 
     for (let row = 0; row < height; row++) {
       for (let col = 0; col < width; col++) {
@@ -1676,6 +1678,111 @@ export class GameMap {
   setOccupied(col: number, row: number, entityId: string | null): void {
     const tile = this.getTile(col, row)
     if (tile) tile.occupiedBy = entityId
+  }
+
+  isDamagedBridge(col: number, row: number): boolean {
+    return this.damagedBridgeTiles.has(this.key(col, row))
+  }
+
+  /** Destroy a bridge tile into impassable water. */
+  damageBridgeAt(col: number, row: number): boolean {
+    const tile = this.getTile(col, row)
+    if (!tile || tile.terrain !== TerrainType.BRIDGE) return false
+
+    tile.terrain = TerrainType.WATER
+    tile.height = 0
+    tile.passable = false
+    tile.buildable = false
+    tile.oreAmount = 0
+    this.damagedBridgeTiles.add(this.key(col, row))
+    if (!this.waterTiles.some(t => t.col === col && t.row === row)) {
+      this.waterTiles.push({ col, row })
+    }
+    this.redrawTile(col, row)
+    this.renderAnimatedTiles()
+    return true
+  }
+
+  /** Restore a previously damaged bridge tile. */
+  repairBridgeAt(col: number, row: number): boolean {
+    const key = this.key(col, row)
+    if (!this.damagedBridgeTiles.has(key)) return false
+    const tile = this.getTile(col, row)
+    if (!tile) {
+      this.damagedBridgeTiles.delete(key)
+      return false
+    }
+
+    tile.terrain = TerrainType.BRIDGE
+    tile.height = 1
+    tile.passable = true
+    tile.buildable = false
+    tile.oreAmount = 0
+    this.damagedBridgeTiles.delete(key)
+    this.waterTiles = this.waterTiles.filter(t => !(t.col === col && t.row === row))
+    this.redrawTile(col, row)
+    this.renderAnimatedTiles()
+    return true
+  }
+
+  /** Find nearest damaged bridge center near a world-space point. */
+  findDamagedBridgeNear(worldX: number, worldY: number, radiusTiles = 2): Position | null {
+    const origin = this.worldToTile(worldX, worldY)
+    let best: TileCoord | null = null
+    let bestDist = Infinity
+    for (let dr = -radiusTiles; dr <= radiusTiles; dr++) {
+      for (let dc = -radiusTiles; dc <= radiusTiles; dc++) {
+        const tc = origin.col + dc
+        const tr = origin.row + dr
+        if (!this.isDamagedBridge(tc, tr)) continue
+        const d = Math.hypot(dc, dr)
+        if (d < bestDist) {
+          bestDist = d
+          best = { col: tc, row: tr }
+        }
+      }
+    }
+    return best ? this.tileToWorld(best.col, best.row) : null
+  }
+
+  /** Repair nearest damaged bridge near world-space point and return repaired tile center. */
+  repairDamagedBridgeNear(worldX: number, worldY: number, radiusTiles = 2): Position | null {
+    const origin = this.worldToTile(worldX, worldY)
+    let best: TileCoord | null = null
+    let bestDist = Infinity
+    for (let dr = -radiusTiles; dr <= radiusTiles; dr++) {
+      for (let dc = -radiusTiles; dc <= radiusTiles; dc++) {
+        const tc = origin.col + dc
+        const tr = origin.row + dr
+        if (!this.isDamagedBridge(tc, tr)) continue
+        const d = Math.hypot(dc, dr)
+        if (d < bestDist) {
+          bestDist = d
+          best = { col: tc, row: tr }
+        }
+      }
+    }
+    if (!best) return null
+    if (!this.repairBridgeAt(best.col, best.row)) return null
+    return this.tileToWorld(best.col, best.row)
+  }
+
+  /** Damage all bridge tiles in circular area; returns number damaged. */
+  damageBridgesInRadius(worldX: number, worldY: number, radiusPx: number): number {
+    const origin = this.worldToTile(worldX, worldY)
+    const rTiles = Math.ceil(radiusPx / TILE_SIZE) + 1
+    let damaged = 0
+    for (let dr = -rTiles; dr <= rTiles; dr++) {
+      for (let dc = -rTiles; dc <= rTiles; dc++) {
+        const tc = origin.col + dc
+        const tr = origin.row + dr
+        const center = this.tileToWorld(tc, tr)
+        const dist = Phaser.Math.Distance.Between(worldX, worldY, center.x, center.y)
+        if (dist > radiusPx) continue
+        if (this.damageBridgeAt(tc, tr)) damaged++
+      }
+    }
+    return damaged
   }
 
   update(delta: number): void {

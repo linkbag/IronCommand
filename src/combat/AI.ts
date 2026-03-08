@@ -1532,6 +1532,8 @@ export class AI {
     const capturable = this.em.getAllBuildings().filter(
       b => b.state !== 'dying' && b.playerId !== this.playerId && (neutralSet.has(b.def.id) || this.isEnemyPlayer(b.playerId)),
     )
+    const damagedOwnBuildings = this.em.getBuildingsForPlayer(this.playerId)
+      .filter(b => b.state !== 'dying' && b.hp < b.def.stats.maxHp)
     for (const eng of engineers) {
       if (eng.state !== 'idle') continue
       const target = capturable
@@ -1539,6 +1541,13 @@ export class AI {
         .sort((a, b) => dist(eng.x, eng.y, a.x, a.y) - dist(eng.x, eng.y, b.x, b.y))[0]
       if (target) {
         eng.giveOrder({ type: 'attack', targetEntityId: target.id })
+      } else {
+        const repairTarget = damagedOwnBuildings
+          .slice()
+          .sort((a, b) => dist(eng.x, eng.y, a.x, a.y) - dist(eng.x, eng.y, b.x, b.y))[0]
+        if (repairTarget) {
+          eng.giveOrder({ type: 'repair', targetEntityId: repairTarget.id })
+        }
       }
     }
 

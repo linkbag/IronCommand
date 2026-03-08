@@ -162,6 +162,8 @@ export class HUDScene extends Phaser.Scene {
   private selectedInfoTxt!: Phaser.GameObjects.Text
   private selectedHPFill!:  Phaser.GameObjects.Graphics
   private selectedIcon!:    Phaser.GameObjects.Graphics
+  private selectedTypeBar!: Phaser.GameObjects.Container
+  private selectedTypeSig = ''
 
   // ── Build panel ───────────────────────────────────────────────────
   private activeTab: BuildTab = 'buildings'
@@ -1385,6 +1387,14 @@ export class HUDScene extends Phaser.Scene {
     hpTrack.strokeRect(x + 5, y + 46, SIDEBAR_W - 10, 8)
 
     this.selectedHPFill = this.add.graphics()
+
+    this.selectedTypeBar = this.add.container(x + 5, y + 58)
+    const typeBg = this.add.graphics()
+    typeBg.fillStyle(0x0b1020, 0.95)
+    typeBg.fillRect(0, 0, SIDEBAR_W - 10, 26)
+    typeBg.lineStyle(1, HUD_BORDER, 0.45)
+    typeBg.strokeRect(0, 0, SIDEBAR_W - 10, 26)
+    this.selectedTypeBar.add(typeBg)
   }
 
   // ── Action buttons ───────────────────────────────────────────────────
@@ -2236,6 +2246,7 @@ export class HUDScene extends Phaser.Scene {
       this.selectedIcon.fillRect(x + 5, y + 5, 34, 34)
       this.selectedIcon.lineStyle(1, HUD_ACCENT, 0.3)
       this.selectedIcon.strokeRect(x + 5, y + 5, 34, 34)
+      this.renderSelectionTypeShortcuts(ids)
       return
     }
 
@@ -2289,6 +2300,93 @@ export class HUDScene extends Phaser.Scene {
     this.selectedIcon.fillRect(x + 5, y + 5, 34, 34)
     this.selectedIcon.lineStyle(2, 0x4ade80, 0.75)
     this.selectedIcon.strokeRect(x + 5, y + 5, 34, 34)
+    this.renderSelectionTypeShortcuts(ids)
+  }
+
+  private renderSelectionTypeShortcuts(ids: string[]): void {
+    type U = { id: string; state?: string; def: { id: string; name: string } }
+    const em = this.registry.get('entityMgr') as {
+      getUnit(id: string): U | undefined
+      getUnitsForPlayer(playerId: number): U[]
+    } | undefined
+    if (!this.selectedTypeBar || !em) return
+
+    const selectedCounts = new Map<string, number>()
+    for (const id of ids) {
+      const unit = em.getUnit(id)
+      if (!unit || unit.state === 'dying') continue
+      selectedCounts.set(unit.def.id, (selectedCounts.get(unit.def.id) ?? 0) + 1)
+    }
+
+    const allCounts = new Map<string, number>()
+    for (const unit of em.getUnitsForPlayer(0)) {
+      if (unit.state === 'dying') continue
+      allCounts.set(unit.def.id, (allCounts.get(unit.def.id) ?? 0) + 1)
+    }
+
+    const entries = [...selectedCounts.entries()]
+      .map(([defId, selectedCount]) => ({
+        defId,
+        selectedCount,
+        totalCount: allCounts.get(defId) ?? selectedCount,
+        label: UNIT_DEFS[defId]?.name ?? defId.replace(/_/g, ' '),
+      }))
+      .sort((a, b) => b.selectedCount - a.selectedCount)
+      .slice(0, 5)
+
+    const sig = entries.map(e => `${e.defId}:${e.selectedCount}:${e.totalCount}`).join('|')
+    if (sig === this.selectedTypeSig) return
+    this.selectedTypeSig = sig
+
+    this.selectedTypeBar.removeAll(true)
+    const bg = this.add.graphics()
+    bg.fillStyle(0x0b1020, 0.95)
+    bg.fillRect(0, 0, SIDEBAR_W - 10, 26)
+    bg.lineStyle(1, HUD_BORDER, 0.45)
+    bg.strokeRect(0, 0, SIDEBAR_W - 10, 26)
+    this.selectedTypeBar.add(bg)
+
+    if (entries.length === 0) {
+      const hint = this.add.text(6, 7, 'TYPE SHORTCUTS', {
+        fontFamily: 'monospace',
+        fontSize: '8px',
+        color: '#5a6880',
+      })
+      this.selectedTypeBar.add(hint)
+      return
+    }
+
+    const innerW = SIDEBAR_W - 20
+    const slotW = Math.max(38, Math.floor(innerW / entries.length))
+    entries.forEach((entry, idx) => {
+      const bx = 5 + idx * slotW
+      const bw = Math.max(34, slotW - 4)
+      const g = this.add.graphics()
+      g.fillStyle(0x1d2540, 1)
+      g.fillRect(bx, 3, bw, 20)
+      g.lineStyle(1, HUD_ACCENT, 0.4)
+      g.strokeRect(bx, 3, bw, 20)
+
+      const short = entry.label.toUpperCase().replace(/[^A-Z0-9 ]/g, '').slice(0, 7)
+      const txt = this.add.text(bx + 2, 4, short, {
+        fontFamily: 'monospace',
+        fontSize: '7px',
+        color: '#d8e5ff',
+      })
+      const countTxt = this.add.text(bx + bw - 2, 13, `${entry.totalCount}`, {
+        fontFamily: 'monospace',
+        fontSize: '8px',
+        color: '#44ff88',
+      }).setOrigin(1, 0)
+
+      const zone = this.add.zone(bx + bw / 2, 13, bw, 20).setInteractive({ cursor: 'pointer' })
+      zone.on('pointerdown', () => {
+        const gs = this.scene.get('GameScene')
+        if (gs) gs.events.emit('selectUnitTypeMapWide', { defId: entry.defId })
+      })
+
+      this.selectedTypeBar.add([g, txt, countTxt, zone])
+    })
   }
 
   private tickGhost() {

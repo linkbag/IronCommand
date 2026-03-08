@@ -463,8 +463,13 @@ export class EntityManager extends Phaser.Events.EventEmitter {
       this.emit('ore_harvested', tilePos, amount)
     })
 
-    unit.on('find_ore_field', (x: number, y: number, cb: (pos: Position | null) => void) => {
-      this.emit('find_ore_field', x, y, cb)
+    unit.on('find_ore_field', (
+      x: number,
+      y: number,
+      cb: (pos: Position | null) => void,
+      opts?: { maxRadiusTiles?: number; minOreAmount?: number },
+    ) => {
+      this.emit('find_ore_field', x, y, cb, opts)
     })
 
     unit.on('check_ore_at', (x: number, y: number, cb: (amount: number, pos: Position) => void) => {
@@ -474,6 +479,22 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     // Spy infiltration
     unit.on('spy_infiltrate', (spy: Unit, target: Unit | Building) => {
       this.emit('spy_infiltrate', spy, target)
+    })
+
+    unit.on('engineer_repair_target', (
+      engineer: Unit,
+      target: Unit | Building,
+      cb: (done: boolean) => void,
+    ) => {
+      this.emit('engineer_repair_target', engineer, target, cb)
+    })
+
+    unit.on('engineer_repair_bridge', (
+      engineer: Unit,
+      targetPos: Position,
+      cb: (done: boolean) => void,
+    ) => {
+      this.emit('engineer_repair_bridge', engineer, targetPos, cb)
     })
   }
 

@@ -126,6 +126,7 @@ export class GameScene extends Phaser.Scene {
   private blockerNudgeCooldownMs: Map<string, number> = new Map()
   private forceFullMapReveal = false
   private enemyHoverCursorActive = false
+  private silentDespawnIds: Set<string> = new Set()
 
   constructor() {
     super({ key: 'GameScene' })
@@ -176,6 +177,7 @@ export class GameScene extends Phaser.Scene {
     this.blockerNudgeCooldownMs = new Map()
     this.forceFullMapReveal = false
     this.enemyHoverCursorActive = false
+    this.silentDespawnIds = new Set()
   }
 
   create() {
@@ -354,7 +356,14 @@ export class GameScene extends Phaser.Scene {
       if (!engineer || !building) return
 
       // Transfer building ownership
+      const prevOwner = building.playerId
       ;(building as any).playerId = data.newPlayerId
+      const prevPlayer = this.gameState.players.find(p => p.id === prevOwner)
+      if (prevPlayer) prevPlayer.entities = prevPlayer.entities.filter(id => id !== building.id)
+      const newPlayer = this.gameState.players.find(p => p.id === data.newPlayerId)
+      if (newPlayer && !newPlayer.entities.includes(building.id)) {
+        newPlayer.entities.push(building.id)
+      }
 
       // Sacrifice the engineer
       engineer.takeDamage(engineer.hp + 100, engineer.playerId)
@@ -366,6 +375,41 @@ export class GameScene extends Phaser.Scene {
         if (hud) hud.events.emit('evaAlert', { message: `Building captured by enemy!`, type: 'danger' })
       }
       console.log(`[Engineer] Building ${data.buildingId} captured by player ${data.newPlayerId}`)
+    })
+
+    this.entityMgr.on('engineer_repair_target', (
+      engineer: import('../entities/Unit').Unit,
+      target: import('../entities/Unit').Unit | import('../entities/Building').Building,
+      cb: (done: boolean) => void,
+    ) => {
+      const building = this.entityMgr.getBuilding(target.id)
+      if (!building || building.state === 'dying') {
+        cb(true)
+        return
+      }
+      if (!this.entityMgr.isAlly(engineer.playerId, building.playerId)) {
+        cb(true)
+        return
+      }
+      if (building.hp >= building.def.stats.maxHp) {
+        cb(true)
+        return
+      }
+      building.repair(22)
+      cb(building.hp >= building.def.stats.maxHp)
+    })
+
+    this.entityMgr.on('engineer_repair_bridge', (
+      engineer: import('../entities/Unit').Unit,
+      targetPos: Position,
+      cb: (done: boolean) => void,
+    ) => {
+      const repaired = this.gameMap.repairDamagedBridgeNear(targetPos.x, targetPos.y, 2)
+      if (repaired && engineer.playerId === 0) {
+        const hud = this.scene.get('HUDScene')
+        if (hud) hud.events.emit('evaAlert', { message: 'Bridge repaired', type: 'success' })
+      }
+      cb(!!repaired)
     })
 
     // Yuri mind control
@@ -738,30 +782,36 @@ export class GameScene extends Phaser.Scene {
     })
 
     this.entityMgr.on('unit_destroyed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
-      this.lastCombatMs = this.time.now
-      this.staleMateBoostActive = false
+      const silent = this.silentDespawnIds.delete(entityId)
+      if (!silent) {
+        this.lastCombatMs = this.time.now
+        this.staleMateBoostActive = false
+      }
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p) p.entities = p.entities.filter(id => id !== entityId)
-      if (playerId !== this.gameState.localPlayerId) {
+      if (!silent && playerId !== this.gameState.localPlayerId) {
         this.playerUnitsKilled++
       }
       // Notify HUD
-      if (playerId === 0) {
+      if (!silent && playerId === 0) {
         const hud = this.scene.get('HUDScene')
         if (hud) hud.events.emit('evaAlert', { message: 'Unit lost', type: 'danger' })
       }
     })
 
     this.entityMgr.on('building_destroyed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
-      this.lastCombatMs = this.time.now
-      this.staleMateBoostActive = false
+      const silent = this.silentDespawnIds.delete(entityId)
+      if (!silent) {
+        this.lastCombatMs = this.time.now
+        this.staleMateBoostActive = false
+      }
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p) p.entities = p.entities.filter(id => id !== entityId)
       if (this.selectedIds.delete(entityId)) this.syncSelectionState()
-      if (playerId !== this.gameState.localPlayerId) {
+      if (!silent && playerId !== this.gameState.localPlayerId) {
         this.playerBuildingsDestroyed++
       }
-      if (playerId === 0) {
+      if (!silent && playerId === 0) {
         const hud = this.scene.get('HUDScene')
         if (hud) hud.events.emit('buildingLost', { defId: entityId })
       }
@@ -846,6 +896,10 @@ export class GameScene extends Phaser.Scene {
   private wireHUDEvents(): void {
     // Clear selection when entering building placement mode
     this.events.on('clearSelection', () => this.deselectAll())
+    this.events.on('selectUnitTypeMapWide', (data: { defId: string }) => {
+      if (!data?.defId) return
+      this.selectMapWideByUnitDef(data.defId)
+    })
 
     // Place building from HUD placement mode
     this.events.on('placeBuilding', (data: { defId: string; tileCol: number; tileRow: number }) => {
@@ -1061,12 +1115,23 @@ export class GameScene extends Phaser.Scene {
     })
 
     // Harvester asks: "where is the nearest ore field?"
-    this.entityMgr.on('find_ore_field', (x: number, y: number, cb: (pos: Position | null) => void) => {
+    this.entityMgr.on('find_ore_field', (
+      x: number,
+      y: number,
+      cb: (pos: Position | null) => void,
+      opts?: { maxRadiusTiles?: number; minOreAmount?: number },
+    ) => {
       const origin = this.gameMap.worldToTile(x, y)
-      let foundPos: Position | null = null
-      const maxRadius = Math.min(width, height) / 2
+      const hardMaxRadius = Math.floor(Math.min(width, height) / 2)
+      const preferredMaxRadius = Math.max(1, Math.floor(opts?.maxRadiusTiles ?? hardMaxRadius))
+      const minOreAmount = Math.max(1, Math.floor(opts?.minOreAmount ?? 1))
 
-      for (let radius = 1; radius <= maxRadius && foundPos === null; radius++) {
+      let foundPos: Position | null = null
+      let bestOre = -1
+
+      // Prefer richer nearby ore first when caller asks for a threshold.
+      const preferredSearchMax = Math.min(hardMaxRadius, preferredMaxRadius)
+      for (let radius = 1; radius <= preferredSearchMax; radius++) {
         for (let dr = -radius; dr <= radius; dr++) {
           for (let dc = -radius; dc <= radius; dc++) {
             if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
@@ -1074,11 +1139,33 @@ export class GameScene extends Phaser.Scene {
             const tr = origin.row + dr
             if (tc < 0 || tc >= width || tr < 0 || tr >= height) continue
             const t = tiles[tr]?.[tc]
-            if (t && t.oreAmount > 0) {
+            if (!t) continue
+            if (t.oreAmount >= minOreAmount && t.oreAmount > bestOre) {
+              bestOre = t.oreAmount
               foundPos = this.gameMap.tileToWorld(tc, tr)
             }
           }
-          if (foundPos !== null) break
+        }
+        if (foundPos) break
+      }
+
+      // Fallback: any ore field map-wide.
+      if (!foundPos) {
+        for (let radius = 1; radius <= hardMaxRadius && !foundPos; radius++) {
+          for (let dr = -radius; dr <= radius; dr++) {
+            for (let dc = -radius; dc <= radius; dc++) {
+              if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
+              const tc = origin.col + dc
+              const tr = origin.row + dr
+              if (tc < 0 || tc >= width || tr < 0 || tr >= height) continue
+              const t = tiles[tr]?.[tc]
+              if (t && t.oreAmount > 0) {
+                foundPos = this.gameMap.tileToWorld(tc, tr)
+                break
+              }
+            }
+            if (foundPos) break
+          }
         }
       }
 
@@ -1500,6 +1587,7 @@ export class GameScene extends Phaser.Scene {
         defId === 'nuclear_silo' ? DamageType.EXPLOSIVE : DamageType.ELECTRIC,
         playerId,
       )
+      const bridgesDamaged = this.gameMap.damageBridgesInRadius(targetX, targetY, radiusPx)
       // Big explosion visual — central + ring of 12 staggered blasts
       this.combat.createExplosion(targetX, targetY, 'large')
       for (let i = 0; i < 12; i++) {
@@ -1524,6 +1612,9 @@ export class GameScene extends Phaser.Scene {
       // EVA alert to ALL players
       const weaponName = defId === 'nuclear_silo' ? 'Nuclear missile launched!' : 'Lightning storm created!'
       if (hud) hud.events.emit('evaAlert', { message: weaponName, type: 'danger' })
+      if (bridgesDamaged > 0 && hud) {
+        hud.events.emit('evaAlert', { message: `Bridges destroyed: ${bridgesDamaged}`, type: 'warning' })
+      }
       console.log(`[Superweapon] ${defId} fired at (${Math.round(targetX)}, ${Math.round(targetY)}) by player ${playerId}`)
 
     } else if (defId === 'iron_curtain') {
@@ -1759,11 +1850,12 @@ export class GameScene extends Phaser.Scene {
 
     // D — deploy (GI/Conscript toggle fortified, MCV deploy/undeploy)
     this.input.keyboard!.on('keydown-D', () => {
+      let changedSelection = false
       this.selectedIds.forEach(id => {
         const unit = this.entityMgr.getUnit(id)
         if (!unit || unit.playerId !== 0) return
         if (unit.def.id === 'mcv') {
-          this.deployMCV(unit)
+          if (this.deployMCV(unit)) changedSelection = true
           return
         }
         // Toggle guard mode as "deploy" (fortified position: can't move, auto-engage)
@@ -1777,6 +1869,16 @@ export class GameScene extends Phaser.Scene {
           }
         }
       })
+
+      this.selectedIds.forEach(id => {
+        const building = this.entityMgr.getBuilding(id)
+        if (!building || building.playerId !== 0) return
+        if (building.def.id === 'construction_yard') {
+          if (this.undeployConstructionYard(building)) changedSelection = true
+        }
+      })
+
+      if (changedSelection) this.syncSelectionState()
     })
 
     // X — scatter: units spread out (anti-splash)
@@ -1971,6 +2073,33 @@ export class GameScene extends Phaser.Scene {
       })
       this.showUnitAck('Attacking')
       return
+    }
+
+    const selectedEngineers = this.getSelectedEngineers()
+    if (selectedEngineers.length > 0) {
+      const damagedFriendlyBuilding = this.entityMgr.getBuildingsInRange(worldX, worldY, clickRadius)
+        .find(b =>
+          b.state !== 'dying' &&
+          b.playerId >= 0 &&
+          this.entityMgr.isAlly(0, b.playerId) &&
+          b.hp < b.def.stats.maxHp
+        )
+      if (damagedFriendlyBuilding) {
+        for (const engineer of selectedEngineers) {
+          engineer.giveOrder({ type: 'repair', targetEntityId: damagedFriendlyBuilding.id }, this.waypointMode)
+        }
+        this.showUnitAck('Repairing structure')
+        return
+      }
+
+      const damagedBridge = this.gameMap.findDamagedBridgeNear(worldX, worldY, 2)
+      if (damagedBridge) {
+        for (const engineer of selectedEngineers) {
+          engineer.giveOrder({ type: 'repair', target: damagedBridge }, this.waypointMode)
+        }
+        this.showUnitAck('Repairing bridge')
+        return
+      }
     }
 
     // Right-click on empty ground clears current selection.
@@ -2334,6 +2463,29 @@ export class GameScene extends Phaser.Scene {
     return null
   }
 
+  private getSelectedEngineers(): Array<import('../entities/Unit').Unit> {
+    const engineers: Array<import('../entities/Unit').Unit> = []
+    for (const id of this.selectedIds) {
+      const unit = this.entityMgr.getUnit(id)
+      if (!unit || unit.playerId !== 0 || unit.state === 'dying') continue
+      if (unit.def.id === 'engineer') engineers.push(unit)
+    }
+    return engineers
+  }
+
+  private selectMapWideByUnitDef(defId: string): void {
+    this.deselectAll()
+    for (const unit of this.entityMgr.getUnitsForPlayer(0)) {
+      if (unit.state === 'dying' || unit.def.id !== defId) continue
+      this.selectedIds.add(unit.id)
+      unit.setSelected(true)
+    }
+    this.syncSelectionState()
+    if (this.selectedIds.size > 0) {
+      this.showFloatingText(`${this.selectedIds.size} ${defId.replace(/_/g, ' ').toUpperCase()}`, 120, this.scale.height - 70)
+    }
+  }
+
   private syncSelectionState(): void {
     this.refreshBuildingSelectionVisuals()
     this.gameState.selectedEntityIds = Array.from(this.selectedIds)
@@ -2588,7 +2740,9 @@ export class GameScene extends Phaser.Scene {
     for (const p of players) {
       const aliveBuildings = this.entityMgr.getBuildingsForPlayer(p.id)
         .filter(b => b.state !== 'dying')
-      p.isDefeated = aliveBuildings.length === 0
+      const aliveMcvs = this.entityMgr.getUnitsForPlayer(p.id)
+        .filter(u => u.state !== 'dying' && u.def.id === 'mcv')
+      p.isDefeated = aliveBuildings.length === 0 && aliveMcvs.length === 0
     }
 
     const localPlayer = players.find(p => p.id === localId)
@@ -2718,7 +2872,7 @@ export class GameScene extends Phaser.Scene {
     return false
   }
 
-  private deployMCV(unit: import('../entities/Unit').Unit): void {
+  private deployMCV(unit: import('../entities/Unit').Unit): boolean {
     const tile = this.gameMap.worldToTile(unit.x, unit.y)
     const def = BUILDING_DEFS['construction_yard']
     const col = tile.col - Math.floor(def.footprint.w / 2)
@@ -2728,23 +2882,75 @@ export class GameScene extends Phaser.Scene {
       for (let c = 0; c < def.footprint.w; c++) {
         if (!this.gameMap.isBuildable(col + c, row + r)) {
           this.showUnitAck('Cannot deploy here')
-          return
+          return false
         }
       }
     }
 
     const cy = this.entityMgr.createBuilding(unit.playerId, 'construction_yard', col, row)
-    if (!cy) return
+    if (!cy) return false
     cy.state = 'active'
     cy.setAlpha(1)
     this.onBuildingActivated(cy)
     for (const occ of cy.occupiedTiles) {
       this.gameMap.setOccupied(occ.col, occ.row, cy.id)
     }
-    unit.takeDamage(unit.hp + 999, unit.playerId)
+    this.silentDespawnIds.add(unit.id)
+    this.entityMgr.removeEntity(unit.id)
+    unit.destroy()
     this.selectedIds.delete(unit.id)
+    this.selectedIds.add(cy.id)
     this.showUnitAck('Construction Yard deployed')
     console.log('[MCV] Deployed into Construction Yard', { playerId: unit.playerId, col, row })
+    return true
+  }
+
+  private undeployConstructionYard(building: import('../entities/Building').Building): boolean {
+    if (building.state === 'dying' || building.state === 'constructing') return false
+
+    for (const occ of building.occupiedTiles) {
+      this.gameMap.setOccupied(occ.col, occ.row, null)
+    }
+    const spawnTile = this.findNearestOpenTile(building.x, building.y, 4)
+    if (!spawnTile) {
+      for (const occ of building.occupiedTiles) {
+        this.gameMap.setOccupied(occ.col, occ.row, building.id)
+      }
+      this.showUnitAck('Cannot undeploy here')
+      return false
+    }
+
+    this.selectedIds.delete(building.id)
+    this.silentDespawnIds.add(building.id)
+    this.entityMgr.removeEntity(building.id)
+    building.destroy()
+
+    const spawnPos = this.gameMap.tileToWorld(spawnTile.col, spawnTile.row)
+    const mcv = this.entityMgr.createUnit(building.playerId, 'mcv', spawnPos.x, spawnPos.y)
+    if (!mcv) return false
+
+    this.selectedIds.add(mcv.id)
+    this.showUnitAck('Construction Yard packed')
+    console.log('[MCV] Packed Construction Yard into MCV', { playerId: building.playerId, col: spawnTile.col, row: spawnTile.row })
+    return true
+  }
+
+  private findNearestOpenTile(worldX: number, worldY: number, maxRadiusTiles: number): TileCoord | null {
+    const origin = this.gameMap.worldToTile(worldX, worldY)
+    for (let radius = 0; radius <= maxRadiusTiles; radius++) {
+      for (let dr = -radius; dr <= radius; dr++) {
+        for (let dc = -radius; dc <= radius; dc++) {
+          if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
+          const tc = origin.col + dc
+          const tr = origin.row + dr
+          const tile = this.gameMap.getTile(tc, tr)
+          if (!tile) continue
+          if (!tile.passable || tile.occupiedBy) continue
+          return { col: tc, row: tr }
+        }
+      }
+    }
+    return null
   }
 
   private onBuildingActivated(building: import('../entities/Building').Building): void {
