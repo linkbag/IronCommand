@@ -130,3 +130,7 @@ One issue found and fixed: a leftover console.log in updateCombat() that fired e
 ### Update: 2026-03-08 04:06
 ### codex-ic-combat-anim-minimap-alert — 2026-03-08 04:06
 All 5 changed files reviewed. TypeScript and Vite build pass clean. unit_damaged event pipeline is correct, isEnemy guard exists, minimap ping rendering has all variables in scope, Graphics objects are destroyed in tween onComplete (no leaks), muzzle flash correctly fires for both hitscan and projectile paths, prevX/prevY tracer motion-alignment is correct. building_damaged handler correctly uses localPlayerId instead of hardcoded 0.
+
+### Update: 2026-03-08 04:06
+### codex-ic-map-continent-landmass — 2026-03-08 04:06
+One correctness bug fixed: carveMeanderingRiver was called with halfWidth=0 which produced a zero-width river immediately overwritten by its own bridge-placement loop, leaving 3 isolated BRIDGE tiles. Fixed to halfWidth=1 matching all other callers. All other new code (radial coastBand scoring, ocean-component BFS, fjord-trimming pass) is algorithmically correct. Build passes.
