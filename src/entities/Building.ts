@@ -370,22 +370,12 @@ export class Building extends Phaser.GameObjects.Container {
     const g = this.bodyGraphic
     g.clear()
     const dims = this.getIsoDims()
-    console.log('[Building.drawBody] iso box coords', {
-      id: this.def.id,
-      halfW: dims.halfW,
-      halfH: dims.halfH,
-      wallH: dims.wallH,
-      baseY: dims.baseY,
-      topY: dims.topY,
-      northTop: { x: 0, y: dims.topY - dims.halfH },
-      southBottom: { x: 0, y: dims.baseY + dims.halfH },
-    })
     this.drawDropShadow(dims)
     const pct = this.hp / this.def.stats.maxHp
     const palette = this.getBuildingPalette(pct)
 
     this.drawIsoBox(g, dims, palette)
-    this.drawBuildingDetails(g, dims)
+    this.drawBuildingDetails(g, dims, palette)
     this.drawDamageOverlay(pct)
 
     if (this.state === 'low_power') {
@@ -420,6 +410,7 @@ export class Building extends Phaser.GameObjects.Container {
       case 'tech_center':
       case 'barracks':
       case 'tesla_reactor':
+      case 'nuclear_reactor':
         wallH += 3
         break
       case 'pillbox':
@@ -523,58 +514,170 @@ export class Building extends Phaser.GameObjects.Container {
   private drawBuildingDetails(
     g: Phaser.GameObjects.Graphics,
     dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
+    palette: { top: number; left: number; right: number; line: number },
   ): void {
     const hw = dims.halfW
     const hh = dims.halfH
     const roofY = dims.topY
-    const wallY = dims.topY + hh * 0.7
-    const detailW = Math.max(8, hw * 0.28)
-    const detailH = Math.max(5, hh * 0.45)
+    const baseY = dims.baseY
+    const id = this.def.id
+    const metal = adjustBrightness(palette.right, -24)
+    const darkMetal = adjustBrightness(palette.line, -12)
+    const brightMetal = adjustBrightness(palette.top, 12)
 
-    g.fillStyle(0x2a2a2a, 0.45)
-    g.fillRect(-detailW * 0.5, wallY, detailW, detailH)
+    // Shared roof seam so all structures still read as a built-up 3D box.
+    g.fillStyle(darkMetal, 0.45)
+    g.fillRect(-hw * 0.35, roofY + hh * 0.45, hw * 0.7, Math.max(3, hh * 0.2))
 
-    switch (this.def.category) {
-      case 'power':
-        g.fillStyle(0xf4d447, 0.92)
-        g.fillRect(-3, roofY - hh * 0.7, 6, 12)
-        break
-      case 'production':
-        g.fillStyle(0xa9b7c9, 0.88)
-        g.fillRect(hw * 0.22, roofY - hh * 0.35, detailW, detailH)
-        break
-      case 'defense':
-        g.fillStyle(0x3b3b3b, 0.95)
-        g.fillRect(-4, roofY - hh * 0.95, 8, 14)
-        g.fillStyle(0x222222, 0.95)
-        g.fillRect(4, roofY - hh * 0.78, hw * 0.34, 3)
-        break
-      case 'tech':
-        g.fillStyle(0x88c8ff, 0.9)
-        g.fillRect(-5, roofY - hh * 0.65, 10, 10)
-        break
-      case 'superweapon':
-        g.fillStyle(0xff9c48, 0.9)
-        g.fillRect(-6, roofY - hh * 0.82, 12, 14)
-        break
-      case 'base':
-        g.fillStyle(0xd6d6d6, 0.8)
-        g.fillRect(-2, roofY - hh * 0.92, 4, 13)
-        break
+    if (id === 'war_factory') {
+      // Heavy profile: gantry ridge + broad front bay + side stack.
+      g.fillStyle(darkMetal, 0.95)
+      g.fillRect(-hw * 0.7, roofY - hh * 0.32, hw * 1.4, Math.max(6, hh * 0.62))
+      g.fillStyle(0x2b2b2b, 0.95)
+      g.fillRect(-hw * 0.54, baseY - 1, hw * 1.08, Math.max(8, hh * 0.56))
+      g.fillStyle(brightMetal, 0.85)
+      g.fillRect(-hw * 0.2, baseY + hh * 0.05, hw * 0.4, Math.max(3, hh * 0.22))
+      g.fillStyle(metal, 0.95)
+      g.fillRect(hw * 0.38, roofY - hh * 1.16, Math.max(6, hw * 0.1), hh * 0.95)
+      g.fillStyle(adjustBrightness(metal, 14), 0.95)
+      g.fillEllipse(hw * 0.43, roofY - hh * 1.16, Math.max(10, hw * 0.2), Math.max(4, hh * 0.24))
+      return
     }
 
-    if (this.def.id === 'air_force_command' || this.def.id === 'radar_tower') {
-      g.fillStyle(0xb8d6ef, 0.95)
-      g.fillRect(-8, roofY - hh * 1.15, 16, 5)
+    if (id === 'barracks') {
+      // Low rectangular mass with twin dorm blocks and a short comm mast.
+      g.fillStyle(metal, 0.92)
+      g.fillRect(-hw * 0.7, roofY + hh * 0.06, hw * 1.4, hh * 0.52)
+      g.fillStyle(darkMetal, 0.95)
+      g.fillRect(-hw * 0.62, roofY - hh * 0.52, hw * 0.42, hh * 0.48)
+      g.fillRect(hw * 0.2, roofY - hh * 0.52, hw * 0.42, hh * 0.48)
+      g.fillStyle(0xd9d9d9, 0.95)
+      g.fillRect(-1.5, roofY - hh * 1.12, 3, hh * 0.74)
+      g.fillStyle(0x3a3a3a, 0.9)
+      g.fillRect(-hw * 0.15, baseY + hh * 0.1, hw * 0.3, Math.max(3, hh * 0.2))
+      return
     }
-    if (this.def.id === 'war_factory' || this.def.id === 'construction_yard') {
-      g.fillStyle(0x5b5b5b, 0.88)
-      g.fillRect(-hw * 0.6, dims.baseY + hh * 0.08, hw * 1.2, 4)
+
+    if (id === 'ore_refinery') {
+      // Distinct refinery silhouette: intake block + round storage tank + transfer pipe.
+      g.fillStyle(darkMetal, 0.94)
+      g.fillRect(-hw * 0.72, roofY - hh * 0.1, hw * 0.86, hh * 0.78)
+      g.fillStyle(0x747474, 0.94)
+      g.fillRect(hw * 0.16, roofY - hh * 0.26, hw * 0.36, hh * 0.98)
+      g.fillEllipse(hw * 0.34, roofY + hh * 0.7, hw * 0.42, hh * 0.46)
+      g.fillStyle(0x8a8a8a, 0.9)
+      g.fillRect(-hw * 0.12, roofY - hh * 0.78, hw * 0.62, Math.max(4, hh * 0.2))
+      g.fillStyle(adjustBrightness(palette.top, 18), 0.95)
+      g.fillEllipse(hw * 0.34, roofY - hh * 0.26, hw * 0.36, hh * 0.22)
+      return
     }
-    if (this.def.id === 'tesla_coil' || this.def.id === 'prism_tower') {
-      g.fillStyle(0x9fd2ff, 0.92)
-      g.fillRect(-3, roofY - hh * 1.2, 6, 12)
+
+    if (id === 'power_plant' || id === 'tesla_reactor' || id === 'nuclear_reactor') {
+      // Utility silhouette: twin stacks + energized/industrial core.
+      const stackW = Math.max(5, hw * 0.12)
+      const stackH = hh * 1.15
+      g.fillStyle(metal, 0.95)
+      g.fillRect(-hw * 0.42, roofY - hh * 1.02, stackW, stackH)
+      g.fillRect(hw * 0.24, roofY - hh * 1.02, stackW, stackH)
+      g.fillStyle(adjustBrightness(metal, 16), 0.95)
+      g.fillEllipse(-hw * 0.36, roofY - hh * 1.02, stackW * 1.6, Math.max(4, hh * 0.24))
+      g.fillEllipse(hw * 0.3, roofY - hh * 1.02, stackW * 1.6, Math.max(4, hh * 0.24))
+      g.fillStyle(darkMetal, 0.9)
+      g.fillRect(-hw * 0.58, roofY + hh * 0.1, hw * 1.16, hh * 0.5)
+      if (id === 'tesla_reactor') {
+        g.fillStyle(0x9fd2ff, 0.95)
+        g.fillRect(-2, roofY - hh * 1.42, 4, hh * 0.62)
+      } else {
+        g.fillStyle(0xf2d560, 0.9)
+        g.fillRect(-2, roofY - hh * 1.34, 4, hh * 0.54)
+      }
+      return
     }
+
+    if (id === 'radar_tower' || id === 'psychic_sensor' || id === 'spy_satellite') {
+      // Tall mast + dish profile reads as radar/sensor at a glance.
+      g.fillStyle(darkMetal, 0.95)
+      g.fillRect(-3, roofY - hh * 1.35, 6, hh * 1.32)
+      g.fillStyle(0xbad8ef, 0.95)
+      g.fillEllipse(0, roofY - hh * 1.45, hw * 0.74, hh * 0.42)
+      g.lineStyle(2, 0x4b6578, 0.85)
+      g.lineBetween(-hw * 0.22, roofY - hh * 1.45, hw * 0.22, roofY - hh * 1.25)
+      g.fillStyle(adjustBrightness(palette.left, -18), 0.9)
+      g.fillRect(-hw * 0.34, roofY + hh * 0.12, hw * 0.68, hh * 0.52)
+      return
+    }
+
+    if (this.def.category === 'defense') {
+      // Defensive language defaults to weaponized tops, barrels, and hard angles.
+      if (id === 'fortress_wall') {
+        g.fillStyle(darkMetal, 0.96)
+        g.fillRect(-hw * 0.82, roofY + hh * 0.24, hw * 1.64, hh * 0.5)
+        g.fillStyle(adjustBrightness(darkMetal, 10), 0.95)
+        g.fillRect(-hw * 0.58, roofY - hh * 0.12, hw * 0.26, hh * 0.22)
+        g.fillRect(-hw * 0.13, roofY - hh * 0.12, hw * 0.26, hh * 0.22)
+        g.fillRect(hw * 0.32, roofY - hh * 0.12, hw * 0.26, hh * 0.22)
+        return
+      }
+
+      if (id === 'pillbox' || id === 'sentry_gun') {
+        g.fillStyle(darkMetal, 0.96)
+        g.fillEllipse(0, roofY + hh * 0.24, hw * 1.02, hh * 0.9)
+        g.fillStyle(0x202020, 0.96)
+        g.fillRect(hw * 0.12, roofY + hh * 0.1, hw * 0.45, Math.max(3, hh * 0.2))
+        return
+      }
+
+      if (id === 'patriot_missile') {
+        g.fillStyle(darkMetal, 0.96)
+        g.fillRect(-hw * 0.5, roofY + hh * 0.06, hw, hh * 0.58)
+        g.fillStyle(0x9a9a9a, 0.92)
+        g.fillRect(-hw * 0.38, roofY - hh * 0.6, hw * 0.22, hh * 0.72)
+        g.fillRect(-hw * 0.08, roofY - hh * 0.64, hw * 0.22, hh * 0.76)
+        g.fillRect(hw * 0.22, roofY - hh * 0.58, hw * 0.22, hh * 0.7)
+        return
+      }
+
+      if (id === 'flak_cannon') {
+        g.fillStyle(darkMetal, 0.96)
+        g.fillEllipse(0, roofY + hh * 0.24, hw * 0.94, hh * 0.86)
+        g.fillStyle(0x252525, 0.95)
+        g.fillRect(-hw * 0.2, roofY - hh * 0.38, hw * 0.14, hh * 0.82)
+        g.fillRect(hw * 0.06, roofY - hh * 0.38, hw * 0.14, hh * 0.82)
+        return
+      }
+
+      g.fillStyle(darkMetal, 0.95)
+      g.fillRect(-hw * 0.2, roofY - hh * 1.02, hw * 0.4, hh * 1.18)
+      g.fillStyle(0x2a2a2a, 0.95)
+      g.fillRect(hw * 0.2, roofY - hh * 0.8, hw * 0.48, Math.max(4, hh * 0.24))
+      if (id === 'tesla_coil' || id === 'prism_tower') {
+        g.fillStyle(0x9fd2ff, 0.95)
+        g.fillRect(-2.5, roofY - hh * 1.42, 5, hh * 0.58)
+      }
+      return
+    }
+
+    if (id === 'air_force_command' || id === 'naval_shipyard') {
+      g.fillStyle(metal, 0.92)
+      g.fillRect(-hw * 0.72, roofY + hh * 0.08, hw * 1.44, hh * 0.48)
+      g.fillStyle(brightMetal, 0.9)
+      g.fillRect(-hw * 0.6, roofY - hh * 0.3, hw * 1.2, hh * 0.28)
+      return
+    }
+
+    if (id === 'construction_yard') {
+      g.fillStyle(darkMetal, 0.95)
+      g.fillRect(-hw * 0.62, roofY - hh * 0.35, hw * 1.24, hh * 0.52)
+      g.fillStyle(metal, 0.9)
+      g.fillRect(-hw * 0.72, baseY + hh * 0.06, hw * 1.44, Math.max(4, hh * 0.24))
+      return
+    }
+
+    // Fallback details for non-target structures.
+    g.fillStyle(metal, 0.82)
+    g.fillRect(-hw * 0.26, roofY - hh * 0.48, hw * 0.52, hh * 0.54)
+    g.fillStyle(brightMetal, 0.85)
+    g.fillRect(-hw * 0.1, roofY - hh * 0.9, hw * 0.2, hh * 0.42)
   }
 
   private drawDamageOverlay(pct: number): void {
