@@ -76,6 +76,10 @@ export class GameScene extends Phaser.Scene {
   private rallyOverlay!: Phaser.GameObjects.Graphics
   private selectedIds: Set<string> = new Set()
   private selectionPulseTweens: Map<string, Phaser.Tweens.Tween> = new Map()
+  private unitDefById: Map<string, string> = new Map()
+  private localUnitTypeCounts: Map<string, number> = new Map()
+  private localUnitTypeCountsVersion = 0
+  private localUnitTypeCountsDirty = true
 
   // ── Last alert position (for Space key) ────────────────────
   private lastAlertPos: Position | null = null
@@ -124,6 +128,10 @@ export class GameScene extends Phaser.Scene {
     this.patrolAnchorByUnit = new Map()
     this.selectionPulseTweens.forEach(tw => tw.stop())
     this.selectionPulseTweens = new Map()
+    this.unitDefById = new Map()
+    this.localUnitTypeCounts = new Map()
+    this.localUnitTypeCountsVersion = 0
+    this.localUnitTypeCountsDirty = true
     this.lastAlertPos = null
     this.lastUnderAttackAlertMs = 0
     this.fogAnchorSources = []
@@ -344,14 +352,20 @@ export class GameScene extends Phaser.Scene {
 
       // Release any previously controlled unit by this Yuri
       for (const u of this.entityMgr.getAllUnits()) {
-        if (u.mindControlledBy === data.yuriId) {
+        if (u.mindControlledBy === data.yuriId && u.state !== 'dying') {
+          const ownerBeforeRelease = u.playerId
           u.releaseMindControl()
+          this.adjustLocalUnitTypeCount(ownerBeforeRelease, u.def.id, -1)
+          this.adjustLocalUnitTypeCount(u.playerId, u.def.id, 1)
           console.log(`[Yuri] Released previous target ${u.id}`)
         }
       }
 
       // Mind control the target
+      const ownerBeforeControl = target.playerId
       target.setMindControlled(data.yuriId, data.yuriPlayerId)
+      this.adjustLocalUnitTypeCount(ownerBeforeControl, target.def.id, -1)
+      this.adjustLocalUnitTypeCount(target.playerId, target.def.id, 1)
 
       // Visual: purple glow overlay on controlled unit
       const mcGlow = this.add.graphics()
@@ -363,8 +377,11 @@ export class GameScene extends Phaser.Scene {
 
       // When Yuri dies, release controlled unit
       const onYuriDied = () => {
-        if (target.mindControlledBy === data.yuriId) {
+        if (target.mindControlledBy === data.yuriId && target.state !== 'dying') {
+          const ownerBeforeRelease = target.playerId
           target.releaseMindControl()
+          this.adjustLocalUnitTypeCount(ownerBeforeRelease, target.def.id, -1)
+          this.adjustLocalUnitTypeCount(target.playerId, target.def.id, 1)
           const glow = (target as any)._mcGlow as Phaser.GameObjects.Graphics | undefined
           if (glow) { glow.destroy(); (target as any)._mcGlow = null }
           console.log(`[Yuri] Died — released ${target.id}`)
@@ -486,6 +503,7 @@ export class GameScene extends Phaser.Scene {
     // ── 15. Launch HUD overlay ────────────────────────────────
     try {
     this.scene.launch('HUDScene', { gameState: this.gameState })
+    this.publishLocalUnitTypeCounts()
     } catch (e) { console.error('[IC] CRASH in section 15 (HUD launch):', e); throw e }
 
     // ── 16. Initial fog reveal around player base ─────────────
@@ -663,6 +681,7 @@ export class GameScene extends Phaser.Scene {
       return true
     })
     this.registry.set('selectedIds', Array.from(this.selectedIds))
+    this.publishLocalUnitTypeCountsIfDirty()
     this.registry.set('camX', this.camX)
     this.registry.set('camY', this.camY)
   }
@@ -680,6 +699,32 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private adjustLocalUnitTypeCount(ownerId: number, defId: string, delta: number): void {
+    if (ownerId !== this.gameState.localPlayerId || delta === 0) return
+    const prev = this.localUnitTypeCounts.get(defId) ?? 0
+    const next = Math.max(0, prev + delta)
+    if (next === prev) return
+    if (next === 0) this.localUnitTypeCounts.delete(defId)
+    else this.localUnitTypeCounts.set(defId, next)
+    this.localUnitTypeCountsVersion++
+    this.localUnitTypeCountsDirty = true
+  }
+
+  private publishLocalUnitTypeCountsIfDirty(): void {
+    if (!this.localUnitTypeCountsDirty) return
+    this.publishLocalUnitTypeCounts()
+  }
+
+  private publishLocalUnitTypeCounts(): void {
+    const counts: Record<string, number> = {}
+    for (const [defId, count] of this.localUnitTypeCounts.entries()) {
+      if (count > 0) counts[defId] = count
+    }
+    this.registry.set('playerUnitTypeCounts', counts)
+    this.registry.set('playerUnitTypeCountsVersion', this.localUnitTypeCountsVersion)
+    this.localUnitTypeCountsDirty = false
+  }
+
   // ── Entity event wiring ───────────────────────────────────────
 
   private wireEntityEvents(): void {
@@ -687,6 +732,10 @@ export class GameScene extends Phaser.Scene {
     this.entityMgr.on('unit_created', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p && !p.entities.includes(entityId)) p.entities.push(entityId)
+      const unit = this.entityMgr.getUnit(entityId)
+      if (!unit) return
+      this.unitDefById.set(entityId, unit.def.id)
+      this.adjustLocalUnitTypeCount(playerId, unit.def.id, 1)
     })
 
     this.entityMgr.on('building_placed', ({ entityId, playerId }: { entityId: string; playerId: number }) => {
@@ -702,6 +751,12 @@ export class GameScene extends Phaser.Scene {
       this.staleMateBoostActive = false
       const p = this.gameState.players.find(pl => pl.id === playerId)
       if (p) p.entities = p.entities.filter(id => id !== entityId)
+      const defId = this.unitDefById.get(entityId)
+      if (defId) {
+        this.adjustLocalUnitTypeCount(playerId, defId, -1)
+        this.unitDefById.delete(entityId)
+      }
+      if (this.selectedIds.delete(entityId)) this.syncSelectionState()
       if (playerId !== this.gameState.localPlayerId) {
         this.playerUnitsKilled++
       }
@@ -765,6 +820,10 @@ export class GameScene extends Phaser.Scene {
   private wireHUDEvents(): void {
     // Clear selection when entering building placement mode
     this.events.on('clearSelection', () => this.deselectAll())
+    this.events.on('setSelection', (data: { ids: string[] }) => this.applySelectionIds(data.ids))
+    this.events.on('quickSelectUnitType', (data: { defId: string }) => {
+      this.selectAllOwnedUnitsOfType(data.defId)
+    })
 
     // Place building from HUD placement mode
     this.events.on('placeBuilding', (data: { defId: string; tileCol: number; tileRow: number }) => {
@@ -2114,6 +2173,44 @@ export class GameScene extends Phaser.Scene {
     return null
   }
 
+  private applySelectionIds(ids: string[]): void {
+    const nextSelection = new Set<string>()
+
+    for (const id of ids) {
+      if (nextSelection.has(id)) continue
+      const unit = this.entityMgr.getUnit(id)
+      if (unit && unit.playerId === this.gameState.localPlayerId && unit.state !== 'dying') {
+        nextSelection.add(id)
+        continue
+      }
+      const building = this.entityMgr.getBuilding(id)
+      if (building && building.playerId === this.gameState.localPlayerId && building.state !== 'dying') {
+        nextSelection.add(id)
+      }
+    }
+
+    for (const prevId of this.selectedIds) {
+      if (nextSelection.has(prevId)) continue
+      this.entityMgr.getUnit(prevId)?.setSelected(false)
+      this.entityMgr.getBuilding(prevId)?.setSelected(false)
+    }
+    for (const id of nextSelection) {
+      this.entityMgr.getUnit(id)?.setSelected(true)
+      this.entityMgr.getBuilding(id)?.setSelected(true)
+    }
+
+    this.selectedIds = nextSelection
+    this.syncSelectionState()
+  }
+
+  private selectAllOwnedUnitsOfType(defId: string): void {
+    const matchingUnitIds = this.entityMgr.getUnitsForPlayer(this.gameState.localPlayerId)
+      .filter(unit => unit.state !== 'dying' && unit.def.id === defId)
+      .map(unit => unit.id)
+
+    this.applySelectionIds(matchingUnitIds)
+  }
+
   private syncSelectionState(): void {
     this.refreshBuildingSelectionVisuals()
     this.gameState.selectedEntityIds = Array.from(this.selectedIds)
@@ -2122,12 +2219,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private deselectAll(): void {
-    this.selectedIds.forEach(id => {
-      this.entityMgr.getUnit(id)?.setSelected(false)
-      this.entityMgr.getBuilding(id)?.setSelected(false)
-    })
-    this.selectedIds.clear()
-    this.syncSelectionState()
+    this.applySelectionIds([])
   }
 
   private refreshBuildingSelectionVisuals(): void {
