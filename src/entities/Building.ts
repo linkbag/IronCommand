@@ -370,16 +370,6 @@ export class Building extends Phaser.GameObjects.Container {
     const g = this.bodyGraphic
     g.clear()
     const dims = this.getIsoDims()
-    console.log('[Building.drawBody] iso box coords', {
-      id: this.def.id,
-      halfW: dims.halfW,
-      halfH: dims.halfH,
-      wallH: dims.wallH,
-      baseY: dims.baseY,
-      topY: dims.topY,
-      northTop: { x: 0, y: dims.topY - dims.halfH },
-      southBottom: { x: 0, y: dims.baseY + dims.halfH },
-    })
     this.drawDropShadow(dims)
     const pct = this.hp / this.def.stats.maxHp
     const palette = this.getBuildingPalette(pct)
@@ -434,7 +424,16 @@ export class Building extends Phaser.GameObjects.Container {
     return { halfW, halfH, wallH, baseY, topY: baseY - wallH }
   }
 
-  private getBuildingPalette(pct: number): { top: number; left: number; right: number; line: number } {
+  private getBuildingPalette(pct: number): {
+    top: number
+    left: number
+    right: number
+    line: number
+    edgeHighlight: number
+    topSheen: number
+    ambientOcclusion: number
+    rightShadow: number
+  } {
     const lowPower = this.state === 'low_power'
     let main = lowPower ? 0x7a6a4e : this.factionColor
     if (pct < 0.5) main = adjustBrightness(main, -45)
@@ -447,10 +446,14 @@ export class Building extends Phaser.GameObjects.Container {
     }
 
     return {
-      top: adjustBrightness(main, 32),
-      left: adjustBrightness(main, 10),
-      right: adjustBrightness(main, -22),
-      line: adjustBrightness(main, -44),
+      top: adjustBrightness(main, 44),
+      left: adjustBrightness(main, 4),
+      right: adjustBrightness(main, -38),
+      line: adjustBrightness(main, -58),
+      edgeHighlight: adjustBrightness(main, 84),
+      topSheen: adjustBrightness(main, 66),
+      ambientOcclusion: adjustBrightness(main, -82),
+      rightShadow: adjustBrightness(main, -68),
     }
   }
 
@@ -470,7 +473,16 @@ export class Building extends Phaser.GameObjects.Container {
   private drawIsoBox(
     g: Phaser.GameObjects.Graphics,
     dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number },
-    palette: { top: number; left: number; right: number; line: number },
+    palette: {
+      top: number
+      left: number
+      right: number
+      line: number
+      edgeHighlight: number
+      topSheen: number
+      ambientOcclusion: number
+      rightShadow: number
+    },
   ): void {
     const { halfW, halfH, baseY, topY } = dims
 
@@ -501,7 +513,50 @@ export class Building extends Phaser.GameObjects.Container {
     g.fillStyle(palette.right, 1)
     g.fillPoints(rightFace, true)
 
-    g.lineStyle(1, palette.line, 0.5)
+    const topSheen = [
+      new Phaser.Geom.Point(0, topY - halfH + 2),
+      new Phaser.Geom.Point(halfW * 0.54, topY + halfH * 0.05),
+      new Phaser.Geom.Point(0, topY + halfH * 0.32),
+      new Phaser.Geom.Point(-halfW * 0.54, topY + halfH * 0.05),
+    ]
+    g.fillStyle(palette.topSheen, 0.2)
+    g.fillPoints(topSheen, true)
+
+    const leftTopHighlight = [
+      new Phaser.Geom.Point(-halfW, topY),
+      new Phaser.Geom.Point(-halfW + 4, topY + 2),
+      new Phaser.Geom.Point(-2, topY - halfH + 3),
+      new Phaser.Geom.Point(0, topY - halfH + 1),
+    ]
+    g.fillStyle(palette.edgeHighlight, 0.26)
+    g.fillPoints(leftTopHighlight, true)
+
+    const rightFaceShadow = [
+      new Phaser.Geom.Point(halfW, topY),
+      new Phaser.Geom.Point(halfW, baseY),
+      new Phaser.Geom.Point(halfW - 4, baseY + 2),
+      new Phaser.Geom.Point(halfW - 4, topY + 2),
+    ]
+    g.fillStyle(palette.rightShadow, 0.35)
+    g.fillPoints(rightFaceShadow, true)
+
+    const bottomAoLeft = [
+      new Phaser.Geom.Point(-halfW, baseY),
+      new Phaser.Geom.Point(0, baseY + halfH),
+      new Phaser.Geom.Point(0, baseY + halfH - 4),
+      new Phaser.Geom.Point(-halfW + 5, baseY + 1),
+    ]
+    const bottomAoRight = [
+      new Phaser.Geom.Point(halfW, baseY),
+      new Phaser.Geom.Point(0, baseY + halfH),
+      new Phaser.Geom.Point(0, baseY + halfH - 4),
+      new Phaser.Geom.Point(halfW - 5, baseY + 1),
+    ]
+    g.fillStyle(palette.ambientOcclusion, 0.24)
+    g.fillPoints(bottomAoLeft, true)
+    g.fillPoints(bottomAoRight, true)
+
+    g.lineStyle(1, palette.line, 0.82)
     g.lineBetween(0, topY - halfH, halfW, topY)
     g.lineBetween(halfW, topY, 0, topY + halfH)
     g.lineBetween(0, topY + halfH, -halfW, topY)
@@ -511,13 +566,20 @@ export class Building extends Phaser.GameObjects.Container {
     g.lineBetween(0, topY + halfH, 0, baseY + halfH)
     g.lineBetween(-halfW, baseY, 0, baseY + halfH)
     g.lineBetween(0, baseY + halfH, halfW, baseY)
+
+    g.lineStyle(1, palette.edgeHighlight, 0.5)
+    g.lineBetween(0, topY - halfH, -halfW, topY)
+    g.lineBetween(0, topY - halfH, halfW, topY)
+    g.lineBetween(-halfW, topY, -halfW, baseY)
   }
 
   private drawDropShadow(dims: { halfW: number; halfH: number; wallH: number; baseY: number; topY: number }): void {
     const s = this.dropShadow
     s.clear()
-    s.fillStyle(0x000000, 0.2)
-    s.fillEllipse(0, dims.baseY + 7, dims.halfW * 1.15, Math.max(6, dims.halfH * 0.8))
+    s.fillStyle(0x000000, 0.15)
+    s.fillEllipse(0, dims.baseY + 7, dims.halfW * 1.08, Math.max(6, dims.halfH * 0.75))
+    s.fillStyle(0x000000, 0.08)
+    s.fillEllipse(0, dims.baseY + 9, dims.halfW * 0.72, Math.max(5, dims.halfH * 0.45))
   }
 
   private drawBuildingDetails(
