@@ -101,10 +101,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   init(data: { config: SkirmishConfig }) {
-    this.skirmishCfg = data?.config ?? {
+    const incomingCfg = data?.config as (SkirmishConfig & { revealMap?: boolean }) | undefined
+    const fallbackCfg: SkirmishConfig = {
       playerFaction: 'usa',
       mapSize: 'small',
-      revealMap: false,
+      visibilityMode: 'fogOfWar',
       mapTemplate: 'continental',
       mapSeed: Math.floor(Math.random() * 99999) + 1,
       playerSpawn: -1,
@@ -112,6 +113,12 @@ export class GameScene extends Phaser.Scene {
       aiDifficulty: 'medium',
       startingCredits: STARTING_CREDITS,
       allyPlayerIds: [],
+    }
+    const resolvedVisibilityMode = incomingCfg?.visibilityMode ?? (incomingCfg?.revealMap ? 'allVisible' : 'fogOfWar')
+    this.skirmishCfg = {
+      ...fallbackCfg,
+      ...incomingCfg,
+      visibilityMode: resolvedVisibilityMode,
     }
     // Reset per-session state
     this.aiCommanders = []
@@ -2447,7 +2454,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private isMapRevealActive(): boolean {
-    return this.skirmishCfg.revealMap || this.forceFullMapReveal
+    return this.skirmishCfg.visibilityMode === 'allVisible' || this.forceFullMapReveal
   }
 
   private nudgeIdleBlocker(tile: TileCoord, excludeUnitId?: string): boolean {
