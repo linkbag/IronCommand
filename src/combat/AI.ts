@@ -14,6 +14,7 @@ import { BUILDING_DEFS, NEUTRAL_BUILDING_IDS, getPowerBuildingDefId } from '../e
 import { FACTIONS } from '../data/factions'
 import { Unit } from '../entities/Unit'
 import type { Building } from '../entities/Building'
+import { buildUltimateGoalPlan, type AIUltimateGoalDirective, type AIUltimateGoalSignals } from './AIGoals'
 
 export type AIDifficulty = 'easy' | 'medium' | 'hard'
 
@@ -321,7 +322,6 @@ export class AI {
     this.updatePhase()
     this.updateBattlefieldIntel(gameState)
     this.assessEnemyComposition(gameState)
-    this.ensureHarvesting(gameState)
     this.protectHarvesters(gameState)
     this.microSpecialUnits(gameState)
     this.handleAntiAirResponse(gameState)
@@ -331,23 +331,144 @@ export class AI {
     this.updateAttackGroups()
     this.retreatDamagedUnits()
     this.defendBase(gameState)
-    this.followTechTree(gameState)
-    this.expandEconomy(gameState)
-    this.buildDefenses()
-    this.buildArmy(gameState)
-    this.considerHarassment(gameState)
-    this.considerAttacking(gameState)
-    this.contestMapControl(gameState)
-    this.rebuildDestroyedBuildings(gameState)
+    const goalPlan = this.planUltimateGoals(gameState)
+    this.executeUltimateGoalPlan(goalPlan, gameState)
 
-    if (this.phase === 'mid' || this.phase === 'late') {
-      this.considerScouting(gameState)
-    }
-
-      // Superweapon management (medium/hard only)
+    // Superweapon management (medium/hard only)
     if (this.difficulty !== 'easy') {
       this.tickSuperweapons(gameState)
     }
+  }
+
+  private planUltimateGoals(gameState: GameState): AIUltimateGoalDirective[] {
+    const combatUnits = this.getCombatUnits()
+    const enemyCombat = this.getEnemyCombatUnits(gameState).length
+    const enemyBuildings = this.getKnownEnemyBuildingCount(gameState)
+    const { pressure: mineExhaustionPressure, hasUntappedMines } = this.estimateMineExhaustionPressure(gameState)
+    const scoutInterval = this.difficulty === 'hard' ? 12000 : 20000
+    const signals: AIUltimateGoalSignals = {
+      credits: this.economy.getCredits(this.playerId),
+      reserveCredits: this.getCreditReserveTarget(),
+      mineExhaustionPressure,
+      hasUntappedMines,
+      armyCount: combatUnits.length,
+      armyCap: MAX_ARMY[this.difficulty],
+      hasAnyProduction: this.countProductionStructures() > 0,
+      idleProductionSlots: this.countIdleProductionSlots(),
+      knownEnemyForceCount: enemyCombat + enemyBuildings,
+      nearbyEnemyForceCount: this.countNearbyEnemyForces(combatUnits, gameState),
+      idleCombatUnits: combatUnits.filter(u => u.state === 'idle').length,
+      scoutOverdue: this.scoutTimer >= scoutInterval,
+      currentlyAttacking: this.isAttacking,
+    }
+    const plan = buildUltimateGoalPlan(signals)
+    return plan
+  }
+
+  private executeUltimateGoalPlan(plan: AIUltimateGoalDirective[], gameState: GameState): void {
+    const executed = new Set<string>()
+    const runOnce = (id: string, fn: () => void) => {
+      if (executed.has(id)) return
+      executed.add(id)
+      fn()
+    }
+
+    for (const goal of plan) {
+      switch (goal.id) {
+        case 'spend_money_efficiently':
+          runOnce('followTechTree', () => this.followTechTree(gameState))
+          runOnce('expandEconomy', () => this.expandEconomy(gameState))
+          runOnce('buildDefenses', () => this.buildDefenses())
+          runOnce('rebuildDestroyedBuildings', () => this.rebuildDestroyedBuildings(gameState))
+          runOnce('buildArmy', () => this.buildArmy(gameState))
+          break
+        case 'exhaust_map_mines':
+          runOnce('ensureHarvesting', () => this.ensureHarvesting(gameState))
+          runOnce('expandEconomy', () => this.expandEconomy(gameState))
+          break
+        case 'maximize_unit_production':
+          runOnce('followTechTree', () => this.followTechTree(gameState))
+          runOnce('buildArmy', () => this.buildArmy(gameState))
+          break
+        case 'destroy_enemies':
+          runOnce('considerHarassment', () => this.considerHarassment(gameState))
+          runOnce('considerAttacking', () => this.considerAttacking(gameState))
+          break
+        case 'scout_enemy_forces':
+          runOnce('considerScouting', () => this.considerScouting(gameState))
+          runOnce('contestMapControl', () => this.contestMapControl(gameState))
+          break
+        case 'auto_engage_enemies':
+          runOnce('autoEngageVisibleOrNearbyEnemies', () => this.autoEngageVisibleOrNearbyEnemies(gameState))
+          break
+      }
+    }
+  }
+
+  private getCreditReserveTarget(): number {
+    if (this.difficulty === 'hard') return 2200
+    if (this.difficulty === 'medium') return 1700
+    return 1200
+  }
+
+  private countProductionStructures(): number {
+    return this.em.getBuildingsForPlayer(this.playerId).filter(
+      b => b.state === 'active' && b.def.category === 'production',
+    ).length
+  }
+
+  private countIdleProductionSlots(): number {
+    return this.em.getBuildingsForPlayer(this.playerId).filter(
+      b => b.state === 'active' && b.def.category === 'production' && b.productionQueue.length === 0,
+    ).length
+  }
+
+  private getKnownEnemyBuildingCount(gameState: GameState): number {
+    let count = 0
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      count += this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying').length
+    }
+    return count
+  }
+
+  private countNearbyEnemyForces(combatUnits: Unit[], gameState: GameState): number {
+    if (combatUnits.length === 0) return 0
+    const nearbyRadius = 10 * TILE_SIZE
+    const enemyCandidates: Array<Unit | Building> = [...this.getEnemyCombatUnits(gameState)]
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      enemyCandidates.push(...this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying'))
+    }
+
+    let nearby = 0
+    for (const enemy of enemyCandidates) {
+      for (const unit of combatUnits) {
+        if (!this.canUnitAttackEntity(unit, enemy)) continue
+        if (dist(unit.x, unit.y, enemy.x, enemy.y) <= nearbyRadius) {
+          nearby++
+          break
+        }
+      }
+    }
+    return nearby
+  }
+
+  private estimateMineExhaustionPressure(gameState: GameState): { pressure: number; hasUntappedMines: boolean } {
+    const oreAnchors = this.getOreFieldAnchors(gameState, 8)
+    const refineryCount = this.countBuildings('ore_refinery')
+    const baseOreLow = this.isBaseOreRunningLow()
+    const harvesterShort = this.shouldPrioritizeHarvesters()
+    const remoteGap = Math.max(0, oreAnchors.length - refineryCount)
+    const hasUntappedMines = baseOreLow || remoteGap > 0
+
+    let pressure = 0.15
+    if (baseOreLow) pressure += 0.5
+    if (harvesterShort) pressure += 0.2
+    if (hasUntappedMines) pressure += 0.15
+    pressure += Math.min(0.25, remoteGap * 0.06)
+
+    return { pressure: clamp(pressure, 0, 1), hasUntappedMines }
   }
 
   // ── Phase management ─────────────────────────────────────────
@@ -492,7 +613,9 @@ export class AI {
     const refCount = this.countBuildings('ore_refinery')
     const baseMaxRef = this.difficulty === 'hard' ? 5 : this.difficulty === 'medium' ? 4 : 3
     const maxRef = this.enemyIsTurtling ? baseMaxRef + 1 : baseMaxRef
-    if (refCount >= maxRef || !this.hasActiveBuilding('construction_yard')) return
+    const oreFieldCount = this.getOreFieldAnchors(gameState, 12).length
+    const dynamicRefineryCap = Math.max(maxRef, Math.min(10, oreFieldCount))
+    if (refCount >= dynamicRefineryCap || !this.hasActiveBuilding('construction_yard')) return
 
     const armyReady = this.getCombatUnits().length >= (this.difficulty === 'hard' ? 8 : 6)
     const baseOreDepleted = this.isBaseOreRunningLow()
@@ -500,6 +623,7 @@ export class AI {
     const ecoFloating = this.incomePerMinute > this.spendingPerMinute && credits > 2500
     const ecoStrained = this.incomePerMinute > 0 && this.incomePerMinute < this.spendingPerMinute
     const needMoreHarvesters = this.shouldPrioritizeHarvesters()
+    const untappedOreExists = oreFieldCount > refCount
 
     if (ecoStrained && needMoreHarvesters) {
       this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState)
@@ -507,7 +631,7 @@ export class AI {
     }
 
     const shouldExpand =
-      (baseOreDepleted || timedExpansion || (ecoFloating && credits > 3200) || credits > HIGH_CREDIT_THRESHOLD) &&
+      (untappedOreExists || baseOreDepleted || timedExpansion || (ecoFloating && credits > 3200) || credits > HIGH_CREDIT_THRESHOLD) &&
       (armyReady || credits > HIGH_CREDIT_THRESHOLD)
 
     if (!shouldExpand) return
@@ -1607,6 +1731,57 @@ export class AI {
     return null
   }
 
+  private autoEngageVisibleOrNearbyEnemies(gameState: GameState): void {
+    const committedUnitIds = new Set<string>()
+    for (const group of this.activeAttackGroups) {
+      for (const id of group.unitIds) committedUnitIds.add(id)
+    }
+    if (this.pendingWave) {
+      for (const group of this.pendingWave.groups) {
+        for (const id of group.unitIds) committedUnitIds.add(id)
+      }
+    }
+
+    const combatUnits = this.getCombatUnits().filter(
+      u =>
+        !committedUnitIds.has(u.id) &&
+        !this.isUnitInRetreatingGroup(u.id) &&
+        (u.state === 'idle' || u.state === 'moving'),
+    )
+    if (combatUnits.length === 0) return
+
+    const enemyTargets: Array<Unit | Building> = [...this.getEnemyCombatUnits(gameState)]
+    for (const p of gameState.players) {
+      if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+      enemyTargets.push(...this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying'))
+    }
+    if (enemyTargets.length === 0) return
+
+    const immediateEngageRadius = 9 * TILE_SIZE
+    const approachRadius = 18 * TILE_SIZE
+
+    for (const u of combatUnits) {
+      let nearest: Unit | Building | null = null
+      let nearestDistance = Number.POSITIVE_INFINITY
+      for (const enemy of enemyTargets) {
+        if (!this.canUnitAttackEntity(u, enemy)) continue
+        const d = dist(u.x, u.y, enemy.x, enemy.y)
+        if (d < nearestDistance) {
+          nearestDistance = d
+          nearest = enemy
+        }
+      }
+      if (!nearest) continue
+      if (nearestDistance <= immediateEngageRadius) {
+        u.giveOrder({ type: 'attack', targetEntityId: nearest.id })
+        continue
+      }
+      if (u.state === 'idle' && nearestDistance <= approachRadius) {
+        u.giveOrder({ type: 'attackMove', target: { x: nearest.x, y: nearest.y } })
+      }
+    }
+  }
+
   private applyGroupFocusFire(group: AttackGroup, units: Unit[]): void {
     const focusTarget = this.pickFocusTargetForGroup(units, group.focusTargetId)
     if (!focusTarget) {
@@ -1956,7 +2131,7 @@ export class AI {
   private findOreExpansionPlacement(gameState: GameState): { col: number; row: number } | null {
     const def = BUILDING_DEFS.ore_refinery
     if (!def) return null
-    const fields = this.getOreFieldAnchors(gameState, 6)
+    const fields = this.getOreFieldAnchors(gameState, 12)
     if (fields.length === 0) return null
     const ownBuildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state !== 'dying')
     if (ownBuildings.length === 0) return null
