@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 13:32*
+*Last updated: 2026-03-08 13:44*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -188,3 +188,8 @@ Doctrine-driven strategic AI layer reviewed. TypeScript build passes clean. One 
 ### Update: 2026-03-08 13:32
 ### codex-ic-pause-ui-quit-flow-r2 — 2026-03-08 13:32
 Pause menu and quit-flow implementation is correct. Full pause UI (pause panel, confirmation modal, Resume/Return-to-Setup/Return-to-Menu buttons) is cleanly implemented. All gameplay input handlers (pointer events, keyboard actions) guard on `this.paused`. `exitMatchTo` properly cleans up registry, HUD bridge listeners, and input listeners before scene transition. `onSceneShutdown` provides a safety net for any missed cleanup. `GamePhase` includes `paused` as a valid literal — `syncPauseUi()` sets it correctly. Build is tsc-clean.
+
+### Update: 2026-03-08 13:44
+### Integration Review — 2026-03-08 13:44
+**Subteams:** codex-ic-ore-regen-1pct-and-8p-colors-r2 codex-ic-pause-ui-quit-flow-r2 codex-ic-building-boxes-v3-symbol-labels-r2 codex-ic-ra2-ai-benchmark-and-upgrade-r2
+**Result:** All 4 subteam r2 branches integrated via cherry-pick (6 commits total). Key cross-team conflicts resolved: (1) P key binding conflict between pause-ui and ra2-hotkeys — kept P for unit selection, ESC/PAUSE for pause; (2) ore-regen import source conflict with skirmishConfig module — kept both imports; (3) SetupScene field removal artifact — preserved previewSize/previewX/previewY fields; (4) Building.ts getFacilityVisualType merged HEAD comprehensive patterns into r2 file; (5) ORE_REGEN_RATE set to 1 per spec; (6) fixed TypeScript narrowing error from unreachable switch case. Build passes (tsc --noEmit clean). Minor remaining: 4 minimap color constants in HUDScene.ts now unused (dead code, no errors).

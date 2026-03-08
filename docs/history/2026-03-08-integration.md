@@ -612,3 +612,379 @@
 - **Fixes applied:** Resolved GameScene.ts method conflict by keeping both sets of methods — enemy hover cursor methods from HEAD plus all selection hotkey methods from the hotkeys branch. HUDScene.ts merged cleanly (hasOwnUnitSelected guard and T-hotkey guard added without conflict). P-for-pause was already changed to keydown-PAUSE in HEAD prior to this merge.
 - **Status of 5 task branches:** Only 1 of 5 had unique commits to merge (feat/ic-ra2-hotkeys-onscreen-everywhere). The other 4 (ore-regen, pause-ui, building-boxes-v3, ra2-ai-benchmark) had no unique commits beyond the merge base (bead6ed) and do not exist on the remote — their work appears not yet delivered or was merged in an earlier integration pass under different branch names.
 - **Remaining concerns:** 4 branches listed in the task (ore-regen-1pct-and-8p-colors, pause-ui-quit-flow, building-boxes-v3-symbol-labels, ra2-ai-benchmark-and-upgrade) have zero unique commits and no remote counterpart. Their intended changes (8-player colors, pause menu UI, building symbol labels, AI upgrades) are NOT present in the integration branch. These subteams may not have submitted their work yet.
+
+---
+
+# Integration Log: IronCommand recovery batch after quota reset (4 incomplete streams)
+**Project:** IronCommand
+**Subteams:** codex-ic-ore-regen-1pct-and-8p-colors-r2 codex-ic-pause-ui-quit-flow-r2 codex-ic-building-boxes-v3-symbol-labels-r2 codex-ic-ra2-ai-benchmark-and-upgrade-r2
+**Started:** 2026-03-08 13:33:44
+
+## Subteam Summaries
+
+
+========================================
+## Subteam: codex-ic-ore-regen-1pct-and-8p-colors-r2
+========================================
+# Work Log: codex-ic-ore-regen-1pct-and-8p-colors-r2
+## Task: ic-ore-regen-1pct-and-8p-colors-r2 (IronCommand)
+## Branch: feat/ic-ore-regen-1pct-and-8p-colors-r2
+---
+
+### [Step 1] Initialized mandatory work log
+- **Files changed:** /tmp/worklog-codex-ic-ore-regen-1pct-and-8p-colors-r2.md
+- **What:** Created the session work log with task and branch header.
+- **Why:** Required by pipeline instructions for traceability across agents.
+- **Decisions:** Used exact template provided by the user.
+- **Issues found:** None.
+
+### [Step 2] Located ore regen, player count, and color code paths
+- **Files changed:** /tmp/worklog-codex-ic-ore-regen-1pct-and-8p-colors-r2.md
+- **What:** Searched repository for ore regeneration constants, player-count setup limits, and player color handling in gameplay/UI.
+- **Why:** Needed exact integration points before making behavior changes.
+- **Decisions:** Prioritized `src/types/index.ts`, `src/scenes/GameScene.ts`, `src/scenes/SetupScene.ts`, and color references in `HUDScene`/`EntityManager`.
+- **Issues found:** Broad grep produced many matches; narrowed to targeted files next.
+
+### [Step 3] Confirmed concrete implementation targets and update plan
+- **Files changed:** /tmp/worklog-codex-ic-ore-regen-1pct-and-8p-colors-r2.md
+- **What:** Inspected `GameMap`, `SetupScene`, `GameScene`, `HUDScene`, and `EntityManager` for exact constants and UI/gameplay color wiring.
+- **Why:** Needed to ensure 8-player support and slot-color consistency are applied across both runtime behavior and setup/HUD presentation.
+- **Decisions:** Implement a shared player-slot palette module and replace hardcoded player/enemy minimap colors with per-player slot colors.
+- **Issues found:** Setup currently hardcaps AI to 3 and alliance rows are hardcoded to 3 entries.
+
+### [Step 4] Implemented ore regen tuning + 8-slot player colors + 8-player setup support
+- **Files changed:**
+  - src/types/index.ts
+  - src/engine/GameMap.ts
+  - src/data/playerSlots.ts (new)
+  - src/scenes/GameScene.ts
+  - src/entities/EntityManager.ts
+  - src/scenes/SetupScene.ts
+  - src/scenes/HUDScene.ts
+- **What:**
+  - Set `ORE_REGEN_RATE` from `10` to `1` in `src/types/index.ts` (1% of `ORE_HARVEST_RATE=100`).
+  - Updated ore growth comment in `GameMap.ts` to reflect new regen throughput.
+  - Added shared slot palette in `src/data/playerSlots.ts` with `MAX_TOTAL_PLAYERS=8`, `MAX_AI_PLAYERS=7`, `getPlayerSlotColor()`, and `playerColorToCss()`.
+  - Replaced hardcoded player/AI tint constants in `GameScene.ts` with slot-color API; clamped runtime AI count to `MAX_AI_PLAYERS`.
+  - Updated `EntityManager.getFactionColor()` fallback path to use slot colors for non-negative player IDs when gameState colors are unavailable.
+  - Increased setup AI cap from 3 to 7 in `SetupScene.ts`; generalized alliance row loops to `MAX_AI_PLAYERS`.
+  - Reworked alliance picker layout in setup to compact 2-column rows so all 7 AI slots fit on common screen heights.
+  - Applied per-slot colors to setup alliance labels/toggle text and spawn markers in map preview.
+  - Updated minimap rendering in `HUDScene.ts` to use per-player colors (from `gameState.players`, fallback to slot color) for units and building outlines.
+- **Why:**
+  - Deliver requested economy balance change (1% ore mine recovery).
+  - Support up to 8 total players (1 human + 7 AI).
+  - Ensure each player slot has a distinct, deterministic color across runtime visuals and setup/HUD UI.
+- **Decisions:**
+  - Centralized slot colors in one module to avoid drift across scenes.
+  - Preserved existing setup minimum AI behavior (min 1 AI) and added clamp guards for out-of-range configs.
+  - Kept minimap fog/reveal gating unchanged; only color mapping logic changed.
+- **Issues found:**
+  - Straight 7-row alliance list overflowed panel height; fixed via 2-column compact layout.
+
+### [Step 5] Verified compilation/build
+- **Files changed:** /tmp/worklog-codex-ic-ore-regen-1pct-and-8p-colors-r2.md
+- **What:** Ran `npm run build` (`tsc --noEmit && vite build`) and confirmed successful build output.
+- **Why:** Validate TypeScript integrity and production bundling after gameplay/UI changes.
+- **Decisions:** Used full build script instead of only typecheck to catch bundling issues as well.
+- **Issues found:** No build errors; only existing Vite chunk-size warning (>500kB).
+
+### [Step 6] Captured UI screenshot artifact for PR
+- **Files changed:**
+  - docs/screenshots/ic-ore-regen-1pct-and-8p-colors-r2.png
+  - /tmp/worklog-codex-ic-ore-regen-1pct-and-8p-colors-r2.md
+- **What:** Generated and saved a screenshot using local `vite preview` + `npx playwright screenshot`.
+- **Why:** UI-related changes require a screenshot in the PR description.
+- **Decisions:** Stored screenshot under `docs/screenshots/` for direct repository linking from PR markdown.
+- **Issues found:** Interactive scripted click automation via ephemeral `playwright` module resolution failed in this environment; used CLI screenshot capture path successfully.
+
+### [Step 7] Committed, pushed branch, and opened PR
+- **Files changed:** /tmp/worklog-codex-ic-ore-regen-1pct-and-8p-colors-r2.md
+- **What:**
+  - Created commit `a9cc4d1` with ore regen + 8-player color/slot changes.
+  - Pushed branch `feat/ic-ore-regen-1pct-and-8p-colors-r2` to origin.
+  - Opened PR: https://github.com/linkbag/IronCommand/pull/41
+  - Updated PR body via `gh api` REST fallback due `gh pr edit` GraphQL `projectCards` deprecation error.
+- **Why:** Required delivery workflow for integration/review pipeline.
+- **Decisions:** Used REST patch for PR body reliability in this repo environment.
+- **Issues found:** `gh pr edit` failed with classic-project GraphQL deprecation; resolved with REST API update.
+
+## Summary
+- **Total files changed:** 8 (repository files in commit `a9cc4d1`)
+- **Key changes:**
+  - Reduced ore regeneration to 1% miner speed by setting `ORE_REGEN_RATE = 1` (`src/types/index.ts`).
+  - Added shared deterministic 8-slot player palette (`src/data/playerSlots.ts`) and applied it to player construction in `GameScene` and fallback tint resolution in `EntityManager`.
+  - Increased setup AI cap to 7 (`SetupScene`) and compacted alliance picker layout to show all 7 AI slots.
+  - Applied per-slot player colors in setup UI (alliance rows + spawn markers) and gameplay UI minimap rendering (`HUDScene`).
+  - Added PR screenshot artifact at `docs/screenshots/ic-ore-regen-1pct-and-8p-colors-r2.png`.
+- **Build status:** pass (`npm run build`)
+- **Known issues:**
+  - `gh pr edit` GraphQL path fails in this repo due classic Projects deprecation; PR body was updated successfully via `gh api` REST.
+- **Integration notes:**
+  - PR: https://github.com/linkbag/IronCommand/pull/41
+  - Branch is pushed and clean; no uncommitted working tree changes remain.
+
+### Review+Fix Round 1
+- **Reviewer:** codex-ic-ore-regen-1pct-and-8p-colors-r2-review-1
+- **Timestamp:** 2026-03-08 13:25:17
+- **Files reviewed:** src/types/index.ts, src/engine/GameMap.ts, src/data/playerSlots.ts (new), src/scenes/GameScene.ts, src/entities/EntityManager.ts, src/scenes/SetupScene.ts, src/scenes/HUDScene.ts
+- **Issues found:** One logic bug: getPlayerSlotColor(playerId) returned PLAYER_SLOT_COLORS[0] (0x4488ff, human blue) for any playerId < 0. NEUTRAL_PLAYER_ID = -1 is used for capturable/neutral buildings. These buildings would appear blue on the minimap, indistinguishable from the human player.
+- **Fixes applied:** Added NEUTRAL_SLOT_COLOR = 0x888888 in playerSlots.ts and returned it from getPlayerSlotColor() for all playerId < 0. Added JSDoc comment explaining the reasoning.
+- **Build status:** pass (tsc --noEmit clean both before and after fix)
+- **Remaining concerns:** None. All other changes (ORE_REGEN_RATE 10→1, MAX_AI_PLAYERS clamp, SetupScene 2-column alliance layout, HUDScene per-player minimap colors) are correct and clean.
+
+========================================
+## Subteam: codex-ic-pause-ui-quit-flow-r2
+========================================
+# Work Log: codex-ic-pause-ui-quit-flow-r2
+## Task: ic-pause-ui-quit-flow-r2 (IronCommand)
+## Branch: feat/ic-pause-ui-quit-flow-r2
+---
+
+### [Step 1] Initialized work log and mapped pause/quit flow touchpoints
+- **Files changed:** /tmp/worklog-codex-ic-pause-ui-quit-flow-r2.md
+- **What:** Created mandatory work log and scanned repository for pause/menu/setup/quit references, with focus on `src/scenes/GameScene.ts` and scene transitions.
+- **Why:** Needed to identify current pause UI behavior and where quit-to-menu/setup state can break.
+- **Decisions:** Prioritized `GameScene` input and overlay code paths first, then planned verification against `MenuScene`/`SetupScene` start flow.
+- **Issues found:** None yet; discovery phase only.
+
+### [Step 2] Rebuilt pause UI into actionable menu with confirmation-backed quit paths
+- **Files changed:** src/scenes/GameScene.ts
+- **What:** Replaced the old `PAUSED` text overlay with a full pause interface (`createPauseUi`) including Resume, Return to Setup, and Return to Menu actions. Added a destructive confirmation dialog (`openPauseQuitConfirmation` / `confirmPauseQuit`) before exiting a match.
+- **Why:** The previous pause implementation had no quit flow or confirmation, making it impossible to safely exit a paused game without abrupt scene transitions.
+- **Decisions:** Implemented pause UI entirely in `GameScene` and used per-button hover/press interactions for clarity; added `PauseExitTarget` typing to keep exit destinations explicit (`MenuScene` vs `SetupScene`).
+- **Issues found:** Needed to handle scene layering/input explicitly so pause interactions are authoritative while `HUDScene` is still running.
+
+### [Step 3] Added clean scene-exit path and anti-stale-state guards
+- **Files changed:** src/scenes/GameScene.ts
+- **What:** Added centralized `exitMatchTo()` + `cleanupMatchRuntimeState()` and reused it for pause-confirm quit and end-screen return to menu. Cleanup now clears match-scoped registry keys, selection state, cursor/drag state, and HUD bridge listeners. Also added shutdown cleanup (`onSceneShutdown`) and listener de-duplication (`clearHudBridgeListeners`) to prevent repeated handlers after restart.
+- **Why:** Returning to setup/menu from an active match previously risked stale registry data and duplicated scene events, leading to broken state on subsequent runs.
+- **Decisions:** Guarded all HUD->GameScene gameplay events and most hotkeys against paused state; reset input listeners in `setupInput()` because Phaser scene instances are reused.
+- **Issues found:** Needed to explicitly disable `HUDScene` input while paused and restore scene order on resume so pause UI remains authoritative.
+
+### [Step 4] Validated build and captured UI evidence for pause quit confirmation
+- **Files changed:** docs/history/screenshots/2026-03-08-pause-quit-confirm.png
+- **What:** Ran `npm run build` (TypeScript + Vite) successfully and captured a headless browser screenshot showing the new pause quit-confirmation dialog.
+- **Why:** Needed objective verification that code compiles cleanly and the UI flow is visible for reviewers in PR context.
+- **Decisions:** Used automated browser interaction (menu → setup → launch → pause → open quit confirm) to capture the exact in-game state.
+- **Issues found:** Temporary Playwright module resolution mismatch in local Node context; resolved by running Node with global `NODE_PATH` for the installed Playwright package.
+
+## Summary
+- **Total files changed:** 2
+- **Key changes:**
+  - Replaced simple pause overlay text with a structured pause menu in `src/scenes/GameScene.ts` including `Resume`, `Return to Setup`, and `Return to Menu` actions.
+  - Added confirmation modal flow for quitting from pause (`openPauseQuitConfirmation`, `confirmPauseQuit`) to prevent accidental match exits.
+  - Added centralized runtime cleanup (`exitMatchTo`, `cleanupMatchRuntimeState`, `onSceneShutdown`) to clear registry keys, selection/input states, and HUD bridge listeners before scene transitions.
+  - Added paused-state guards for gameplay input and HUD->GameScene action events to prevent command execution while paused.
+  - Captured UI evidence at `docs/history/screenshots/2026-03-08-pause-quit-confirm.png` and attached it in PR description.
+- **Build status:** pass (`npm run build`)
+- **Known issues:** None identified in this scope. Vite still reports pre-existing large bundle-size warning.
+- **Integration notes:**
+  - PR: https://github.com/linkbag/IronCommand/pull/42
+  - Branch pushed: `feat/ic-pause-ui-quit-flow-r2`
+  - Pause UI behavior depends on `HUDScene` being active for input disable/restore in `syncPauseUi`; this is now handled safely with scene activity checks.
+
+### Review+Fix Round 1
+- **Reviewer:** codex-ic-pause-ui-quit-flow-r2-review-1
+- **Timestamp:** 2026-03-08 13:27:39
+- **Files reviewed:** src/scenes/GameScene.ts, src/scenes/HUDScene.ts, src/types/index.ts
+- **Issues found:**
+  1. Minor: HUDScene keyboard handlers (ESC, S, A, G, Tab, etc.) fire while game is paused because `hudScene.input.enabled = false` only disables pointer input, not keyboard events. GameScene's HUD-bridge listeners already have `if (this.paused) return` guards so no game actions execute, but HUDScene's local ESC handler can still cancel placement mode or reset cursor mode redundantly. Not a blocker since placement mode is not possible to enter while paused and the guards prevent actual game mutations.
+  2. Not a bug: `syncPauseUi()` is called from `createPauseUi()` at the end of `_createInternal()`. At that point `gameState` is already assigned (section 9, line 310), so no null-access risk.
+  3. Not a bug: `setupInput()` calls `this.input.removeAllListeners()` before `createPauseUi()` adds the overlay's pointerdown listener — ordering in `_createInternal()` is correct (setupInput at ~461, createPauseUi at ~472).
+  4. Not a bug: `togglePause(false)` → `closePauseConfirmation()` → `if (this.paused)` correctly evaluates to false and doesn't re-show the panel before `syncPauseUi()` hides everything.
+  5. Not a bug: `onSceneShutdown` registered with `events.once(SHUTDOWN)` fires when `scene.start(target)` shuts down GameScene; harmless double-cleanup after `cleanupMatchRuntimeState()`.
+- **Fixes applied:** None needed — build is clean and logic is correct.
+- **Build status:** pass (tsc --noEmit clean)
+- **Remaining concerns:** HUDScene keyboard shortcuts (ESC in particular) still fire during pause. This is a known Phaser limitation (keyboard.enabled does not exist; input.enabled only covers pointer). If the ESC double-fire (HUDScene ESC + GameScene ESC) causes any observable UX weirdness (e.g., placement ghost not cancelling cleanly on re-enter), add an `if (!this.isGamePaused()) return` guard at the top of each HUDScene key handler. Not required for this PR to merge.
+
+========================================
+## Subteam: codex-ic-building-boxes-v3-symbol-labels-r2
+========================================
+# Work Log: codex-ic-building-boxes-v3-symbol-labels-r2
+## Task: ic-building-boxes-v3-symbol-labels-r2 (IronCommand)
+## Branch: feat/ic-building-boxes-v3-symbol-labels-r2
+---
+
+### [Step 1] Initialized required work log and scanned rendering-related files
+- **Files changed:** /tmp/worklog-codex-ic-building-boxes-v3-symbol-labels-r2.md
+- **What:** Created the mandatory session log and ran repository-wide searches for building/facility rendering and symbol/label code paths.
+- **Why:** Needed to identify the exact implementation points for rollback to block-style buildings with readable overlays.
+- **Decisions:** Focused on `src/entities/EntityManager.ts` and `src/entities/Building.ts` as likely render roots.
+- **Issues found:** None at this step.
+
+### [Step 2] Recovered block-style building renderer with class-based sizing and readable overlays
+- **Files changed:** src/entities/Building.ts, /tmp/worklog-codex-ic-building-boxes-v3-symbol-labels-r2.md
+- **What:** Restored the box/block visual pipeline and reintroduced facility visual typing (`factory`, `barracks`, `refinery`, `power`, `radar`, `lab`, `defense`) with palette + symbol rendering. Added class-size profiles to vary block dimensions by facility function and implemented large roof labels (`FAC`, `BAR`, `REF`, `PWR`, `RAD`, `LAB`, `DEF`) with high-contrast text styling.
+- **Why:** The current branch had regressed away from function-distinct block visuals and readable function overlays; this recovery returns role clarity and stronger at-a-glance recognition.
+- **Decisions:** Kept gameplay/combat behavior unchanged and scoped edits to `Building.ts` rendering methods (`drawBody`, `getIsoDims`, `drawBuildingDetails`, `drawFacilitySymbol`) plus text overlay styling.
+- **Issues found:** Prior regression included debug/noise logging in renderer/combat paths; removed as part of restore.
+
+### [Step 3] Validated build after renderer recovery
+- **Files changed:** /tmp/worklog-codex-ic-building-boxes-v3-symbol-labels-r2.md
+- **What:** Ran `npm run build` (TypeScript noEmit + Vite production build) successfully.
+- **Why:** Confirm the renderer refactor compiles cleanly and doesn’t break bundling.
+- **Decisions:** Used full production build path rather than isolated typecheck for stronger verification.
+- **Issues found:** Existing Vite chunk-size warning remains (>500 kB), pre-existing and unrelated.
+
+### [Step 4] Captured UI screenshot artifact for PR
+- **Files changed:** docs/screenshots/ic-building-boxes-v3-symbol-labels-r2.png, /tmp/worklog-codex-ic-building-boxes-v3-symbol-labels-r2.md
+- **What:** Started local Vite dev server and captured a 1280x720 screenshot via headless Playwright into `docs/screenshots/`.
+- **Why:** Task is UI-facing; PR description should include screenshot evidence.
+- **Decisions:** Stored screenshot in-repo for stable markdown linking in PR body.
+- **Issues found:** None blocking; capture completed on first attempt.
+
+### [Step 5] Committed recovery renderer and screenshot artifacts
+- **Files changed:** src/entities/Building.ts, docs/screenshots/ic-building-boxes-v3-symbol-labels-r2.png, /tmp/worklog-codex-ic-building-boxes-v3-symbol-labels-r2.md
+- **What:** Staged and committed renderer recovery plus screenshot in commit `e327216`.
+- **Why:** Provide an atomic change set that is reviewable and ready for integration.
+- **Decisions:** Kept commit scope to building visuals + proof artifact only.
+- **Issues found:** None.
+
+### [Step 6] Pushed branch and opened PR with screenshot section
+- **Files changed:** /tmp/worklog-codex-ic-building-boxes-v3-symbol-labels-r2.md
+- **What:** Pushed `feat/ic-building-boxes-v3-symbol-labels-r2` to origin, created PR #39, and patched PR body to include summary, validation command, and screenshot markdown.
+- **Why:** Complete delivery workflow for reviewer/integrator handoff with UI proof artifact.
+- **Decisions:** Used `gh api` PATCH for deterministic PR body update and direct raw GitHub image URL.
+- **Issues found:** None; push and PR operations succeeded.
+
+## Summary
+- **Total files changed:** 2
+- **Key changes:**
+  - Recovered `src/entities/Building.ts` to stable block/box rendering flow with class-driven visual typing.
+  - Added facility-class size profiles in `getFacilitySizeProfile()` and applied them in `getIsoDims()` so block width/depth/height differ by function class.
+  - Upgraded overlays with large, high-contrast roof labels (`FAC`, `BAR`, `REF`, `PWR`, `RAD`, `LAB`, `DEF`) via `updateStatusOverlay()`.
+  - Kept symbol primitives in `drawFacilitySymbol()` and increased symbol sizing/line thickness for readability.
+  - Captured screenshot artifact at `docs/screenshots/ic-building-boxes-v3-symbol-labels-r2.png` and embedded it in PR #39.
+- **Build status:** pass (`npm run build`)
+- **Known issues:** Existing Vite chunk-size warning remains (>500 kB), pre-existing and unrelated to this change.
+- **Integration notes:** Commit `e327216` is the full recovery payload on branch `feat/ic-building-boxes-v3-symbol-labels-r2`; PR URL: https://github.com/linkbag/IronCommand/pull/39
+
+### Review+Fix Round 1
+- **Reviewer:** codex-ic-building-boxes-v3-symbol-labels-r2-review-1
+- **Timestamp:** 2026-03-08 13:22:01
+- **Files reviewed:** src/entities/Building.ts (full file, 877 lines)
+- **Issues found:** One visual bug: `updateStatusOverlay()` always called `setVisible(true)` on `statusText`, but the text is not covered by the construction mask (only `bodyGraphic` and `crackOverlay` are masked). This caused the FAC/BAR/REF/etc. label to float visibly above a building during the bottom-up reveal construction animation, beginning at time 0 when no visual geometry is yet revealed.
+- **Fixes applied:** Added early return with `setVisible(false)` in `updateStatusOverlay()` when `this.state === 'constructing'`. Since `drawBody()` is not called during construction frames (only at completion when state transitions to 'active'), the label correctly stays hidden throughout construction and appears only on the fully-built building.
+- **Build status:** pass (tsc --noEmit clean before and after fix)
+- **Remaining concerns:** (1) Superweapon buildings (weather_device, chronosphere, nuclear_silo, iron_curtain) fall through to the 'factory' default and display "FAC" — acceptable generic fallback but worth noting for integrators. (2) Both the graphic symbol (drawFacilitySymbol) and text label are drawn at the same badge center — the text renders over the symbol icon. This is intentional per PR design ("readable overlays") but means the symbol is mostly obscured by the text. Minor design overlap, not a bug.
+
+========================================
+## Subteam: codex-ic-ra2-ai-benchmark-and-upgrade-r2
+========================================
+# Work Log: codex-ic-ra2-ai-benchmark-and-upgrade-r2
+## Task: ic-ra2-ai-benchmark-and-upgrade-r2 (IronCommand)
+## Branch: feat/ic-ra2-ai-benchmark-and-upgrade-r2
+---
+
+### [Step 1] Initialize mandatory session work log
+- **Files changed:** /tmp/worklog-codex-ic-ra2-ai-benchmark-and-upgrade-r2.md
+- **What:** Created the work log file with task and branch headers.
+- **Why:** Required for cross-agent traceability in this recovery run.
+- **Decisions:** Used the exact initialization template requested by the user.
+- **Issues found:** None.
+
+### [Step 2] Baseline repository and AI surface discovery
+- **Files changed:** /tmp/worklog-codex-ic-ra2-ai-benchmark-and-upgrade-r2.md
+- **What:** Captured branch status and enumerated AI/strategy/benchmark-related files.
+- **Why:** Needed to locate strategic AI logic and prior benchmark notes before making targeted upgrades.
+- **Decisions:** Focused discovery on `src/combat`, scenes, economy, and docs history entries tagged `ai`/`ra2`.
+- **Issues found:** Branch tracks `origin/main` rather than same-name remote branch; will push branch later.
+
+### [Step 3] Deep AI behavior analysis and upgrade prioritization
+- **Files changed:** /tmp/worklog-codex-ic-ra2-ai-benchmark-and-upgrade-r2.md
+- **What:** Performed end-to-end analysis of `src/combat/AI.ts`, `src/economy/Economy.ts`, `src/entities/EntityManager.ts`, and prior AI strategy docs to map strategic strengths/weaknesses against RA2-like RTS behavior.
+- **Why:** Needed to define high-impact, low-risk improvements to strategic competence instead of adding broad unscoped changes.
+- **Decisions:** Prioritized five upgrades: doctrine-driven targeting, opportunistic attack timing, wave composition safeguards, reserve-aware base defense allocation, and targeted scouting (instead of random-corner scouting).
+- **Issues found:** Current AI has rich tactical micro but strategic choices are still overly static in key areas (attack timing, target type focus, and defense commitment).
+
+### [Step 4] Implement prioritized strategic AI upgrades in `AI.ts`
+- **Files changed:** src/combat/AI.ts
+- **What:** Added doctrine-driven strategic layer (`AIStrategicDoctrine` + `EnemyMacroIntel`) and wired it into target selection, harassment, attack timing, scouting, and defense allocation.
+- **Why:** Improve strategic competence in areas where baseline AI remained static or overcommitted despite strong tactical micro.
+- **Decisions:** Kept changes in the AI strategy layer only (no engine/entity API changes) to reduce integration risk; focused on high-impact behavior upgrades over broad refactors.
+- **Issues found:** Existing AI had no explicit doctrine state and could over-pull units for base defense, reducing offensive pressure continuity.
+
+### [Step 5] Produce RA2-vs-IronCommand benchmark and upgrade blueprint
+- **Files changed:** docs/ai/2026-03-08-ra2-rts-ai-benchmark-upgrade-blueprint.md
+- **What:** Authored a benchmark comparison matrix, prioritized upgrade roadmap (P0/P1/P2), and documented implemented improvements from this run.
+- **Why:** User requested deep behavior analysis, direct comparison, and an actionable blueprint for strategic AI evolution.
+- **Decisions:** Used a behavior-axis scorecard grounded in current code paths and RTS strategic expectations rather than generic design commentary.
+- **Issues found:** None.
+
+### [Step 6] Validate compile/build after AI upgrades
+- **Files changed:** none
+- **What:** Ran `npm run build` (`tsc --noEmit && vite build`) successfully.
+- **Why:** Ensure strict TypeScript and production bundle paths remain healthy after major AI logic updates.
+- **Decisions:** Used full build instead of partial checks to validate bundle-time behavior too.
+- **Issues found:** Non-blocking Vite chunk size warning (>500 kB) persists (pre-existing).
+
+### [Step 7] Harden defender allocation edge case + revalidate build
+- **Files changed:** src/combat/AI.ts
+- **What:** Fixed defender selection fallback so base defense still responds when all units are currently attack-committed and distant; widened replacement candidates in wave composition stabilizer to all infantry.
+- **Why:** Prevent no-response defense edge case and improve reliability of capability injection into selected waves.
+- **Decisions:** Chose conservative fallback (`pool = combat`) rather than introducing additional state tracking complexity.
+- **Issues found:** None; build remains green.
+
+### [Step 8] Commit, push branch, and open PR
+- **Files changed:** none (VCS operations only)
+- **What:** Committed AI + benchmark blueprint changes, pushed branch `feat/ic-ra2-ai-benchmark-and-upgrade-r2`, and opened PR.
+- **Why:** Required delivery steps for integration pipeline handoff.
+- **Decisions:** Used commit message `feat(ai): add doctrine-driven strategic upgrades and RA2 benchmark blueprint` to reflect both implementation and analysis artifacts.
+- **Issues found:** Initial `gh` invocation used unsupported `-C` flag; retried with correct working directory.
+
+## Summary
+- **Total files changed:** 2
+- **Key changes:**
+  - Added doctrine-driven strategic AI layer in `src/combat/AI.ts` (`economy`/`power`/`production`/`collapse`) fed by per-tick enemy macro intel.
+  - Upgraded attack behavior with opportunistic launch logic and burst-size wave scaling to punish temporary enemy weakness.
+  - Reworked base defense force assignment to avoid overcommitting all combat units and preserve offensive momentum.
+  - Added wave composition stabilizer to enforce anti-air/siege/frontline capability presence when strategically needed.
+  - Replaced random-corner scouting with prioritized high-value scouting targets + revisit memory + danger-aware scoring.
+  - Authored benchmark and roadmap doc: `docs/ai/2026-03-08-ra2-rts-ai-benchmark-upgrade-blueprint.md`.
+- **Build status:** pass (`npm run build`)
+- **Known issues:** Non-blocking Vite chunk size warning (>500 kB) persists (pre-existing).
+- **Integration notes:**
+  - Commit: `38becbf`
+  - Branch pushed: `origin/feat/ic-ra2-ai-benchmark-and-upgrade-r2`
+  - PR created: https://github.com/linkbag/IronCommand/pull/40
+  - No UI screenshot included (task was AI strategy/logic + documentation, not UI rendering changes).
+
+### Review+Fix Round 1
+- **Reviewer:** codex-ic-ra2-ai-benchmark-and-upgrade-r2-review-1
+- **Timestamp:** 2026-03-08 13:25:19
+- **Files reviewed:** src/combat/AI.ts, docs/ai/2026-03-08-ra2-rts-ai-benchmark-upgrade-blueprint.md
+- **Issues found:**
+  1. Cosmetic: mis-indented comment `// Superweapon management (medium/hard only)` inside `tick()` had 6-space indent instead of 4-space (leftover from the merge of the old if-block structure). Fixed.
+  2. Pre-existing dead code: `considerMultiProng` / `triggerMultiProng` are never called from external callers. This predates this PR and was not introduced here — not fixed.
+  3. `autoEngageVisibleOrNearbyEnemies` was intentionally removed; verified units auto-acquire targets via Unit.ts built-in logic (line 1021), so no gameplay regression.
+  4. Power ratio formula in `updateStrategicDoctrine` (`generated / (generated + consumed)`) is unconventional but functionally correct for detecting low-power states.
+  5. `scoutTimer` resets even when no scout unit/targets found — intentional to avoid busy-looping.
+- **Fixes applied:** Fixed mis-indented superweapon comment in tick() (1-char whitespace fix, cosmetic only)
+- **Build status:** pass (tsc --noEmit clean before and after fix)
+- **Remaining concerns:** `triggerMultiProng`/`considerMultiProng` is dead code (public API not called anywhere) — minor tech debt, no functional impact. Power doctrine threshold (0.62) is conservative and may over-flag enemy as "low power"; acceptable design choice.
+
+---
+## Integration Review
+
+### Integration Round 1
+- **Timestamp:** 2026-03-08 13:33:49
+- **Cross-team conflicts found:**
+  1. **GameScene.ts — P key binding conflict**: pause-ui-r2 reassigned P to `handlePauseHotkey()`, conflicting with ra2-hotkeys (previous integration) which assigned P to "select all own units on-screen". Resolution: kept P for unit selection (prior dedicated feature), ESC/PAUSE both route to `handlePauseHotkey()`.
+  2. **GameScene.ts — imports conflict**: ore-regen-r2 tried to change SkirmishConfig import source from `./skirmishConfig` to `./SetupScene`. Resolution: kept skirmishConfig module imports (added in prev integration round) and added playerSlots imports alongside.
+  3. **SetupScene.ts — spawnLegend/previewSize field removal**: ore-regen-r2 cherry-pick diff wanted to remove these fields (not present in r2's older baseline), but HEAD uses them. Resolution: kept all three fields.
+  4. **Building.ts — getFacilityVisualType pattern coverage**: integration HEAD had more complete ID patterns (wall, turret, coil, missile, cannon, nuclear, air_force, chronosphere, iron_curtain). r2 had simpler patterns. Resolution: took r2 file wholesale for new features (FacilitySizeProfile, BuildingPalette, updateStatusOverlay, getFacilitySizeProfile) and patched getFacilityVisualType with HEAD's comprehensive patterns.
+  5. **ORE_REGEN_RATE value**: HEAD had 2 (from prev integration), r2 wants 1. Resolution: took r2's value (1% per task spec).
+  6. **Building.ts TypeScript narrowing error**: after merging HEAD's getFacilityVisualType (which handles 'production' in the if-chain) with r2's switch statement, `case 'production'` became an unreachable type error. Fixed by removing the dead case.
+- **Duplicated code merged:** None — all subteams touched distinct files except GameScene (ore-regen + pause-ui), resolved cleanly.
+- **Build verified:** pass (tsc --noEmit clean after fix)
+- **Fixes applied:**
+  1. Cherry-picked 6 commits (e327216, 8b8aed5 building-boxes; 38becbf, eaf59ea AI-benchmark; a9cc4d1 ore-regen; be3cdf8 pause-ui) via cherry-pick with manual conflict resolution.
+  2. Upgraded Building.ts getFacilityVisualType with more complete ID patterns from HEAD.
+  3. Preserved skirmishConfig module imports in GameScene.ts.
+  4. Preserved SetupScene.ts layout fields (spawnLegend, previewSize, previewX, previewY).
+  5. Resolved P key binding conflict (ESC/PAUSE for pause, P for unit-select).
+  6. Fixed TypeScript error: removed unreachable `case 'production'` in Building.getFacilityVisualType switch.
+- **Remaining concerns:**
+  - MINIMAP_ALLY_COLOR, MINIMAP_ENEMY_COLOR, MINIMAP_ALLY_OUTLINE, MINIMAP_ENEMY_OUTLINE constants in HUDScene.ts are now unused (minimap switched to per-player slot colors). These are dead code but cause no errors. Can be cleaned up in a follow-up.
+  - `considerScouting` was added to AI.ts tick() by the review-fix commit (eaf59ea) in addition to the indentation fix. The scouting method itself was added by 38becbf, so this is correct behavior.
