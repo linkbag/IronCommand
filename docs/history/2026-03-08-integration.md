@@ -454,3 +454,161 @@
   - GameScene.ts auto-merged cleanly outside the 2 field-declaration conflicts.
   - AI.ts auto-merged cleanly (engineer repair fallback from controls-mcv + goal-planner refactor from ai-grand-strategy-v2 operate on different sections).
   - No semantic/logic conflicts detected beyond the syntactic merge conflicts above.
+
+---
+
+# Integration Log: IronCommand batch: economy/hotkeys/pause/building-visuals/RA2-AI-upgrade
+**Project:** IronCommand
+**Subteams:** codex-ic-ore-regen-1pct-and-8p-colors codex-ic-ra2-hotkeys-onscreen-everywhere codex-ic-pause-ui-quit-flow codex-ic-building-boxes-v3-symbol-labels codex-ic-ra2-ai-benchmark-and-upgrade
+**Started:** 2026-03-08 11:19:20
+
+## Subteam Summaries
+
+
+========================================
+## Subteam: codex-ic-ore-regen-1pct-and-8p-colors
+========================================
+# Work Log: codex-ic-ore-regen-1pct-and-8p-colors
+## Task: ic-ore-regen-1pct-and-8p-colors (IronCommand)
+## Branch: feat/ic-ore-regen-1pct-and-8p-colors
+---
+
+### [Step 1] Located ore regen, player cap, and color wiring points
+- **Files changed:** none
+- **What:** Inspected `src/types/index.ts` (ore constants), `src/scenes/SetupScene.ts` (AI cap and alliance UI), `src/scenes/GameScene.ts` (player creation/colors), `src/entities/EntityManager.ts` (runtime tint fallback), and `src/scenes/HUDScene.ts` (minimap colors).
+- **Why:** Needed exact integration points to implement 1% ore regen, 8 total players, and stable distinct player colors across gameplay + UI.
+- **Decisions:** Use a shared player-slot color palette constant to avoid divergent color logic between systems.
+- **Issues found:** Setup currently hard-caps AI at 3 and alliance rows at 3; HUD minimap collapses colors to own-vs-enemy rather than per-player.
+
+### [Step 2] Implemented 1% ore regen and 8-player color/palette foundations
+- **Files changed:** `src/types/index.ts`, `src/engine/GameMap.ts`, `src/scenes/GameScene.ts`, `src/entities/EntityManager.ts`, `src/scenes/HUDScene.ts`, `src/scenes/SetupScene.ts`
+- **What:** Added shared player-slot constants (`MAX_PLAYERS`, `MAX_AI_PLAYERS`, `PLAYER_SLOT_COLORS`), changed `ORE_REGEN_RATE` to 1% of `ORE_HARVEST_RATE` (now 1), updated `GameMap` spawn-count logic to target 8 starts with fallback fill, switched `GameScene` player color assignment to slot palette and clamped AI count to 7, updated `EntityManager.getFactionColor()` fallback to stable slot colors, and changed HUD minimap entity/footprint colors to per-player colors.
+- **Why:** Needed a single stable source of truth for 8 player slots and color consistency across gameplay rendering + HUD while enforcing the requested ore regeneration ratio.
+- **Decisions:** Kept slot colors close to existing visual language to minimize surprise; retained fog visibility rules while only changing minimap color assignment.
+- **Issues found:** Existing setup/alliance UI layout was built for max 3 AI, requiring a layout reflow to represent AI 1-7.
+
+### [Step 3] Verified build integrity
+- **Files changed:** none
+- **What:** Ran `npm run build` (`tsc --noEmit && vite build`).
+- **Why:** Confirmed all cross-file changes compile and bundle successfully.
+- **Decisions:** Used full build instead of type-check only to validate no downstream bundling regressions.
+- **Issues found:** None blocking; Vite emitted existing large-chunk warning only.
+
+========================================
+## Subteam: codex-ic-ra2-hotkeys-onscreen-everywhere
+========================================
+# Work Log: codex-ic-ra2-hotkeys-onscreen-everywhere
+## Task: ic-ra2-hotkeys-onscreen-everywhere (IronCommand)
+## Branch: feat/ic-ra2-hotkeys-onscreen-everywhere
+---
+
+### [Step 1] Locate selection and shortcut control points
+- **Files changed:** /tmp/worklog-codex-ic-ra2-hotkeys-onscreen-everywhere.md
+- **What:** Inspected `src/scenes/GameScene.ts`, `src/scenes/HUDScene.ts`, and `src/engine/Selection.ts` to identify where click selection, drag selection, and keyboard hotkeys are actually handled.
+- **Why:** Needed to implement T/P behavior in the active input path (GameScene) and avoid conflicts with existing HUD build hotkeys.
+- **Decisions:** Chose to implement in `GameScene` (primary runtime selection system) and add a small guard in `HUDScene` for `T` to preserve existing build hotkey UX without accidental build queueing.
+- **Issues found:** `P` is currently bound to pause in `GameScene`; `T` is currently used by HUD build-grid hotkeys, so direct additions would conflict without coordination.
+
+### [Step 2] Implement RA2 selection hotkeys and map-wide type selection
+- **Files changed:** src/scenes/GameScene.ts, src/scenes/HUDScene.ts, /tmp/worklog-codex-ic-ra2-hotkeys-onscreen-everywhere.md
+- **What:** Added `GameScene` selection helpers for on-screen and map-wide own-unit queries, wired `T` to same-type selection (double-tap `T` = map-wide), wired `P` to select all own units currently on-screen, and changed double-clicking an own unit to select that type map-wide. Added timestamp/type tracking for double-tap and double-click detection.
+- **Why:** Needed Red Alert-style selection behavior while preserving current selection state sync and visual updates.
+- **Decisions:** Reused existing selection synchronization (`syncSelectionState`) and selection visuals; switched pause hotkey binding from `P` to `PauseBreak` while keeping `ESC` pause toggle intact.
+- **Issues found:** HUD build-grid still listens for `T` as a build hotkey, which conflicted with gameplay selection.
+
+### [Step 3] Preserve shortcut UX compatibility and validate build
+- **Files changed:** src/scenes/HUDScene.ts, /tmp/worklog-codex-ic-ra2-hotkeys-onscreen-everywhere.md
+- **What:** Added `HUDScene.hasOwnUnitSelected()` and guarded build-hotkey handling so `T` is ignored by build queue hotkeys when own units are selected (allowing gameplay type-selection hotkey to take precedence). Updated build-hotkey comment to match actual key set.
+- **Why:** Prevents accidental production queue actions when using the new `T` selection hotkey.
+- **Decisions:** Scoped guard only to `T` and only when own units are selected, preserving existing build-hotkey behavior in non-selection contexts.
+- **Issues found:** `npm run -s tsc -- --noEmit` failed because no `tsc` script exists; validated with `npx tsc --noEmit` instead and `npm run -s build`.
+
+### [Step 4] Commit, push, and open pull request
+- **Files changed:** src/scenes/GameScene.ts, src/scenes/HUDScene.ts, /tmp/worklog-codex-ic-ra2-hotkeys-onscreen-everywhere.md
+- **What:** Committed changes as `51c8b99` (`Add RA2-style T/P on-screen selection hotkeys`), pushed branch `feat/ic-ra2-hotkeys-onscreen-everywhere`, and opened PR #38: https://github.com/linkbag/IronCommand/pull/38.
+- **Why:** Complete delivery workflow for review/integration.
+- **Decisions:** Updated PR body via `gh api` REST patch after `gh pr edit` failed with the known Projects Classic GraphQL deprecation error path.
+- **Issues found:** `gh pr edit` command path remains unreliable in this environment due GraphQL `projectCards` deprecation query.
+
+## Summary
+- **Total files changed:** 2
+- **Key changes:**
+  - Added RA2-style same-type selection in `GameScene`: `T` selects same selected-unit type on-screen; double-tap `T` selects map-wide.
+  - Changed own-unit double-click behavior to map-wide same-type selection.
+  - Added `P` hotkey in `GameScene` to select all own units currently visible on-screen.
+  - Added HUD hotkey compatibility guard so build-hotkey `T` does not fire while own units are selected.
+  - Shifted pause hotkey mapping from `P` to `Pause/Break` while keeping `ESC` pause toggle.
+- **Build status:** pass (`npx tsc --noEmit`, `npm run -s build`)
+- **Known issues:** None blocking; PR body updates should continue using REST API (`gh api`) if `gh pr edit` fails in this environment.
+- **Integration notes:** Review focus is `src/scenes/GameScene.ts` selection helper paths (`handleSelectSameTypeHotkey`, `selectUnitsOfType`, `selectAllOwnUnitsOnScreen`, double-click branch in `handleLeftClick`) and `src/scenes/HUDScene.ts` `hasOwnUnitSelected` guard for `T` build hotkey coexistence.
+
+========================================
+## Subteam: codex-ic-pause-ui-quit-flow
+========================================
+# Work Log: codex-ic-pause-ui-quit-flow
+## Task: ic-pause-ui-quit-flow (IronCommand)
+## Branch: feat/ic-pause-ui-quit-flow
+---
+
+### [Step 1] Audit current pause/game exit flow
+- **Files changed:** none
+- **What:** Inspected `src/scenes/GameScene.ts`, `src/scenes/HUDScene.ts`, `src/scenes/SetupScene.ts`, and `src/scenes/MenuScene.ts` to map pause behavior and scene transition paths.
+- **Why:** Needed to identify existing pause UI/state handling and the safest cleanup path for quitting a live match.
+- **Decisions:** Target changes in `GameScene` (pause overlay/menu + quit confirm + centralized match-exit transition) and avoid broad unrelated scene refactors.
+- **Issues found:** Pause currently only toggles a dim overlay/text; no pause menu actions, no quit confirmation, and no dedicated “leave match” cleanup path.
+
+### [Step 2] Implement pause menu quit flow + unified match exit cleanup
+- **Files changed:** src/scenes/GameScene.ts
+- **What:** Replaced basic pause overlay behavior with a pause menu UI (`RESUME`, `QUIT MATCH`), added quit confirmation UI (`CANCEL` / `QUIT` with `Y/N/Enter/Esc` keyboard handling), paused HUD scene while game is paused, and introduced `leaveMatch(nextScene)` to centralize cleanup and scene transition (`SetupScene` from pause quit, `MenuScene` from end screen).
+- **Why:** Needed a safe quit path from pause that confirms intent and avoids stale HUD/gameplay state when leaving an active match.
+- **Decisions:** Kept implementation inside `GameScene` to minimize cross-scene coupling; reused centralized `leaveMatch` for end-screen return too, so all match exits stop HUD and reset pause/selection state consistently.
+- **Issues found:** Existing input handlers remained active during pause; added pause guards on pointer/key control handlers to prevent gameplay commands while paused.
+
+========================================
+## Subteam: codex-ic-building-boxes-v3-symbol-labels
+========================================
+# Work Log: codex-ic-building-boxes-v3-symbol-labels
+## Task: ic-building-boxes-v3-symbol-labels (IronCommand)
+## Branch: feat/ic-building-boxes-v3-symbol-labels
+---
+
+### [Step 1] Audited current building renderer and prior visual history
+- **Files changed:** /tmp/worklog-codex-ic-building-boxes-v3-symbol-labels.md
+- **What:** Reviewed `src/entities/Building.ts`, `src/entities/BuildingDefs.ts`, minimap/map renderer files, and historical notes in `docs/history/2026-03-07-codex-ic-bldg-symbols.md` and `docs/history/2026-03-08-codex-ic-bldg-box-symbols-v2.md`.
+- **Why:** Needed to identify the exact rendering path and compare current prism-like visuals against prior box/symbol iterations.
+- **Decisions:** Scope changes to `Building.ts` rendering methods only, preserving gameplay/combat/economy logic.
+- **Issues found:** Current `drawBody()` includes detailed prism shading and small text labels (`def.name.slice(0,4)`), which is less readable than requested large overlays.
+
+========================================
+## Subteam: codex-ic-ra2-ai-benchmark-and-upgrade
+========================================
+# Work Log: codex-ic-ra2-ai-benchmark-and-upgrade
+## Task: ic-ra2-ai-benchmark-and-upgrade (IronCommand)
+## Branch: feat/ic-ra2-ai-benchmark-and-upgrade
+---
+
+### [Step 1] Initialized mandatory work log
+- **Files changed:** /tmp/worklog-codex-ic-ra2-ai-benchmark-and-upgrade.md
+- **What:** Created the work log header with task and branch metadata.
+- **Why:** Required by task instructions for cross-agent visibility.
+- **Decisions:** Kept format exactly as requested for parser compatibility.
+- **Issues found:** None.
+
+### [Step 2] Baseline audit of current IronCommand AI + RA2 behavior research
+- **Files changed:** none
+- **What:** Inspected `src/combat/AI.ts`, `src/entities/Unit.ts`, `src/entities/BuildingDefs.ts`, and `src/types/index.ts` to map current behavior; researched RA2 AI behavior patterns through ModEnc references (`AI`, `AITriggerTypes`, `ScriptTypes/ScriptActions`, `UseMinDefenseRule`, `MinimumAIDefensiveTeams`, `MaximumAIDefensiveTeams`, `IsBaseDefense`, `ComputerBaseDefenseResponse`, `AIHateDelays`, `TeamDelays`).
+- **Why:** Needed a reliable source-backed benchmark of RA2 decision patterns before implementing upgrades.
+- **Decisions:** Prioritized patterns with high leverage and direct implementability in current engine: enemy-focus targeting, defensive team floor, objective-based wave targeting, and reactive AA defenses.
+- **Issues found:** Several legacy ratio flags from RA2 docs are marked obsolete; avoided copying obsolete knobs and focused on behavior patterns still reflected in team/script logic.
+
+---
+## Integration Review
+
+### Integration Round 1
+- **Timestamp:** 2026-03-08 11:19:25
+- **Cross-team conflicts found:** One syntactic conflict in GameScene.ts — the hotkeys branch (feat/ic-ra2-hotkeys-onscreen-everywhere) added selection helper methods (getAliveOwnUnits, getOwnUnitsOnScreen, applyUnitSelection, etc.) in the same region where the integration branch (HEAD) had combat-ux enemy hover cursor methods (updateHoverCursor, setEnemyHoverCursor, isHoveringEnemyEntity). Git placed both sets at the same insertion point, causing a conflict. No semantic/logic cross-team conflicts found.
+- **Duplicated code merged:** None.
+- **Build verified:** pass (tsc --noEmit exits clean)
+- **Fixes applied:** Resolved GameScene.ts method conflict by keeping both sets of methods — enemy hover cursor methods from HEAD plus all selection hotkey methods from the hotkeys branch. HUDScene.ts merged cleanly (hasOwnUnitSelected guard and T-hotkey guard added without conflict). P-for-pause was already changed to keydown-PAUSE in HEAD prior to this merge.
+- **Status of 5 task branches:** Only 1 of 5 had unique commits to merge (feat/ic-ra2-hotkeys-onscreen-everywhere). The other 4 (ore-regen, pause-ui, building-boxes-v3, ra2-ai-benchmark) had no unique commits beyond the merge base (bead6ed) and do not exist on the remote — their work appears not yet delivered or was merged in an earlier integration pass under different branch names.
+- **Remaining concerns:** 4 branches listed in the task (ore-regen-1pct-and-8p-colors, pause-ui-quit-flow, building-boxes-v3-symbol-labels, ra2-ai-benchmark-and-upgrade) have zero unique commits and no remote counterpart. Their intended changes (8-player colors, pause menu UI, building symbol labels, AI upgrades) are NOT present in the integration branch. These subteams may not have submitted their work yet.
