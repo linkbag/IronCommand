@@ -19,8 +19,8 @@ const POWER_BAR_H     = 22
 const POWER_BAR_W     = 12
 const TAB_H           = 28
 const BTN_W           = 96
-const BTN_H           = 56
-const BTN_GAP         = 4
+const BTN_H           = 62
+const BTN_GAP         = 6
 const BTN_PAD         = 6
 const SELECTED_H      = 90
 const ACTION_H        = 30
@@ -74,6 +74,7 @@ interface BuildBtn extends Phaser.GameObjects.Container {
   _item: BuildableItem
   _bg: Phaser.GameObjects.Graphics
   _progressBar: Phaser.GameObjects.Graphics
+  _costTxt: Phaser.GameObjects.Text
   _queueTxt: Phaser.GameObjects.Text
   _readyTxt: Phaser.GameObjects.Text
   _hotkeyTxt: Phaser.GameObjects.Text
@@ -524,40 +525,45 @@ export class HUDScene extends Phaser.Scene {
 
       const bg          = this.add.graphics()
       const progressBar = this.add.graphics()
+      progressBar.setY(4)
 
       // Draw iconic symbol for this item
       const iconGfx = this.add.graphics()
+      iconGfx.setY(4)
       this.drawBuildIcon(iconGfx, item.id, item.tab)
 
-      // Short readable name (truncated to fit)
-      const shortName = this.getShortName(item.id)
-      const abbTxt = this.add.text(0, -18, shortName, {
-        fontFamily: 'monospace', fontSize: '7px', color: '#aabbcc',
+      const label = this.formatBuildLabel(item.label)
+      const nameTxt = this.add.text(0, -16, label, {
+        fontFamily: 'monospace', fontSize: '9px', color: '#c8d7ef',
+        stroke: '#000', strokeThickness: 2, align: 'center',
+        lineSpacing: 1,
+      }).setOrigin(0.5)
+
+      const costTxt = this.add.text(0, 22, `$${item.cost}`, {
+        fontFamily: 'monospace', fontSize: '9px', color: '#ffd700',
         stroke: '#000', strokeThickness: 1,
       }).setOrigin(0.5)
 
-      const costTxt = this.add.text(0, 18, `$${item.cost}`, {
-        fontFamily: 'monospace', fontSize: '7px', color: '#ffd700',
-      }).setOrigin(0.5)
-
-      const queueTxt = this.add.text(BTN_W / 2 - 2, -BTN_H / 2 + 2, '', {
-        fontFamily: 'monospace', fontSize: '8px', color: '#ffffff',
+      const queueTxt = this.add.text(BTN_W / 2 - 3, -BTN_H / 2 + 3, '', {
+        fontFamily: 'monospace', fontSize: '9px', color: '#ffffff',
         backgroundColor: '#e94560', padding: { x: 2, y: 1 },
       }).setOrigin(1, 0)
       const hotkey = this.tabHotkeys[idx] ?? ''
-      const hotkeyTxt = this.add.text(-BTN_W / 2 + 4, -BTN_H / 2 + 2, hotkey, {
-        fontFamily: 'monospace', fontSize: '8px', color: '#ccd8ff',
+      const hotkeyTxt = this.add.text(-BTN_W / 2 + 4, -BTN_H / 2 + 3, hotkey, {
+        fontFamily: 'monospace', fontSize: '9px', color: '#ccd8ff',
         backgroundColor: '#1a2848', padding: { x: 2, y: 1 },
       }).setOrigin(0, 0)
 
-      const readyTxt = this.add.text(0, 20, '', {
-        fontFamily: 'monospace', fontSize: '8px', color: '#4ade80',
+      const readyTxt = this.add.text(0, 22, '', {
+        fontFamily: 'monospace', fontSize: '9px', color: '#4ade80',
+        stroke: '#000', strokeThickness: 1,
       }).setOrigin(0.5)
 
-      ctr.add([bg, progressBar, iconGfx, abbTxt, costTxt, queueTxt, hotkeyTxt, readyTxt])
+      ctr.add([bg, progressBar, iconGfx, nameTxt, costTxt, queueTxt, hotkeyTxt, readyTxt])
       ctr._item        = item
       ctr._bg          = bg
       ctr._progressBar = progressBar
+      ctr._costTxt     = costTxt
       ctr._queueTxt    = queueTxt
       ctr._readyTxt    = readyTxt
       ctr._hotkeyTxt   = hotkeyTxt
@@ -712,50 +718,40 @@ export class HUDScene extends Phaser.Scene {
     btn.setAlpha((hasPrereqs && !swAlreadyOwned) ? 1.0 : 0.35)
   }
 
-  /** Get a short readable name for build buttons */
-  private getShortName(defId: string): string {
-    const names: Record<string, string> = {
-      // Buildings
-      construction_yard: 'CON YARD', power_plant: 'POWER', tesla_reactor: 'TESLA PWR',
-      barracks: 'BARRACKS', war_factory: 'WAR FACT', ore_refinery: 'REFINERY',
-      airfield: 'AIRFIELD', air_force_hq: 'AIR HQ', naval_shipyard: 'SHIPYARD',
-      radar_tower: 'RADAR', service_depot: 'DEPOT', battle_lab: 'BATTLE LAB',
-      tech_center: 'TECH LAB', ore_purifier: 'PURIFIER', nuclear_reactor: 'NUKE PWR',
-      cloning_vats: 'CLONING', spy_satellite: 'SPY SAT',
-      // Defenses
-      fortress_wall: 'WALL', wall: 'WALL', pillbox: 'PILLBOX', sentry_gun: 'SENTRY',
-      prism_tower: 'PRISM', tesla_coil: 'TESLA', patriot_missile: 'PATRIOT',
-      flak_cannon: 'FLAK', aa_gun: 'AA GUN', turret: 'TURRET',
-      gap_generator: 'GAP GEN', psychic_sensor: 'PSYCHIC',
-      // Superweapons
-      weather_device: 'WEATHER', chronosphere: 'CHRONO', superweapon: 'S.WEAPON',
-      iron_curtain: 'CURTAIN', nuclear_silo: 'NUKE SILO',
-      advanced_power: 'ADV PWR',
-      // Infantry
-      gi: 'GI', conscript: 'CONSCRIPT', rifle_soldier: 'RIFLE',
-      rocket_soldier: 'ROCKET', flak_trooper: 'FLAK INF',
-      engineer: 'ENGINEER', attack_dog: 'DOG', spy: 'SPY',
-      rocketeer: 'ROCKETEER', tesla_trooper: 'TESLA INF',
-      crazy_ivan: 'C. IVAN', sniper: 'SNIPER', tanya: 'TANYA',
-      // Vehicles
-      grizzly_tank: 'GRIZZLY', rhino_tank: 'RHINO', light_tank: 'LT TANK',
-      heavy_tank: 'HV TANK', ifv: 'IFV', flak_track: 'FLAK TRK',
-      v3_launcher: 'V3', artillery: 'ARTLLRY', apc: 'APC',
-      prism_tank: 'PRISM TK', mirage_tank: 'MIRAGE',
-      apocalypse_tank: 'APOC', chrono_miner: 'MINER', war_miner: 'WAR MINE',
-      harvester: 'HARVEST', mcv: 'MCV',
-      tank_destroyer: 'TK DESTR', tesla_tank: 'TESLA TK',
-      demolition_truck: 'DEMO TRK',
-      // Aircraft
-      harrier: 'HARRIER', fighter_jet: 'FIGHTER', bomber: 'BOMBER',
-      kirov: 'KIROV', black_eagle: 'BLK EAGLE',
-      nighthawk: 'NIGHTHWK',
-      // Naval
-      destroyer: 'DESTROYR', aegis: 'AEGIS', carrier: 'CARRIER',
-      typhoon_sub: 'TYPHOON', dreadnought: 'DREADNOT', gunboat: 'GUNBOAT',
-      giant_squid: 'SQUID', dolphin: 'DOLPHIN',
+  /** Wrap and safely truncate long labels so button names stay readable. */
+  private formatBuildLabel(label: string, maxCharsPerLine = 12, maxLines = 2): string {
+    const cleaned = label.trim().replace(/\s+/g, ' ').toUpperCase()
+    if (!cleaned) return ''
+
+    const words = cleaned.split(' ')
+    const lines: string[] = []
+    let idx = 0
+
+    while (idx < words.length && lines.length < maxLines) {
+      let line = words[idx]
+      idx += 1
+
+      if (line.length > maxCharsPerLine) {
+        line = `${line.slice(0, Math.max(1, maxCharsPerLine - 3))}...`
+      } else {
+        while (idx < words.length) {
+          const next = words[idx]
+          if (line.length + 1 + next.length > maxCharsPerLine) break
+          line = `${line} ${next}`
+          idx += 1
+        }
+      }
+
+      lines.push(line)
     }
-    return names[defId] ?? defId.replace(/_/g, ' ').slice(0, 8).toUpperCase()
+
+    if (idx < words.length && lines.length > 0) {
+      const last = lines.length - 1
+      const clipped = lines[last].slice(0, Math.max(1, maxCharsPerLine - 3)).trimEnd()
+      lines[last] = `${clipped}...`
+    }
+
+    return lines.join('\n')
   }
 
   /** Draw a recognizable icon for each build item */
@@ -2038,7 +2034,9 @@ export class HUDScene extends Phaser.Scene {
         bar.strokePath()
       }
 
-      btn._readyTxt?.setText(pending ? 'PLACE' : '')
+      const readyLabel = pending ? 'PLACE' : ''
+      btn._readyTxt?.setText(readyLabel)
+      btn._costTxt?.setVisible(!readyLabel)
 
       const q = UNIT_BUILD_TABS.includes(item.tab)
         ? this.getUnitQueue(item.tab).filter(defId => defId === item.id).length
@@ -2103,6 +2101,8 @@ export class HUDScene extends Phaser.Scene {
         btn._readyTxt?.setColor('#4ade80')
         btn.setAlpha(pulse)
       }
+
+      btn._costTxt?.setVisible(!btn._readyTxt.text)
     }
 
     // ── Superweapon countdown overlay (top-left of screen) ──
