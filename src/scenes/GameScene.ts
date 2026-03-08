@@ -30,6 +30,18 @@ const ACK_LINES: Record<string, string[]> = {
 const PLAYER_TINT = 0x4488ff
 const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff, 0x44cc44, 0xffdd00, 0x44dddd, 0xff66aa] // red, orange, purple, green, yellow, cyan, pink
 const PRODUCER_BUILDING_IDS = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery'] as const
+type PauseExitTarget = 'MenuScene' | 'SetupScene'
+const HUD_BRIDGE_EVENT_NAMES = [
+  'clearSelection',
+  'placeBuilding',
+  'sellBuilding',
+  'unitProduced',
+  'issueOrder',
+  'cursorModeChanged',
+  'startProduction',
+  'cancelProduction',
+  'fireSuperweapon',
+] as const
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
@@ -92,7 +104,10 @@ export class GameScene extends Phaser.Scene {
   private staleMateBoostActive = false
   private paused = false
   private pauseOverlay?: Phaser.GameObjects.Rectangle
-  private pauseText?: Phaser.GameObjects.Text
+  private pausePanel?: Phaser.GameObjects.Container
+  private pauseConfirmPanel?: Phaser.GameObjects.Container
+  private pauseConfirmText?: Phaser.GameObjects.Text
+  private pendingPauseExitTarget: PauseExitTarget | null = null
   private blockerNudgeCooldownMs: Map<string, number> = new Map()
   private forceFullMapReveal = false
 
@@ -139,8 +154,12 @@ export class GameScene extends Phaser.Scene {
     this.paused = false
     this.pauseOverlay?.destroy()
     this.pauseOverlay = undefined
-    this.pauseText?.destroy()
-    this.pauseText = undefined
+    this.pausePanel?.destroy()
+    this.pausePanel = undefined
+    this.pauseConfirmPanel?.destroy()
+    this.pauseConfirmPanel = undefined
+    this.pauseConfirmText = undefined
+    this.pendingPauseExitTarget = null
     this.rallyOverlay?.destroy()
     this.blockerNudgeCooldownMs = new Map()
     this.forceFullMapReveal = false
@@ -159,6 +178,7 @@ export class GameScene extends Phaser.Scene {
 
   private _createInternal() {
     const cfg = this.skirmishCfg
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onSceneShutdown, this)
 
     // ── 1. Procedural map ─────────────────────────────────────
     try {
@@ -449,21 +469,7 @@ export class GameScene extends Phaser.Scene {
     this.rallyOverlay.setScrollFactor(0).setDepth(190)
     this.edgeFadeOverlay = this.add.graphics().setScrollFactor(0).setDepth(189)
 
-    this.pauseOverlay = this.add.rectangle(
-      this.scale.width / 2,
-      this.scale.height / 2,
-      this.scale.width,
-      this.scale.height,
-      0x000000,
-      0.45,
-    ).setScrollFactor(0).setDepth(9000).setVisible(false)
-    this.pauseText = this.add.text(this.scale.width / 2, this.scale.height / 2, 'PAUSED', {
-      fontFamily: 'monospace',
-      fontSize: '48px',
-      color: '#ffffff',
-      stroke: '#000000',
-      strokeThickness: 4,
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(9001).setVisible(false)
+    this.createPauseUi()
 
     // ── 14. Camera at player spawn (convert to iso coords) ────
     const startPos = this.getSpawnPositionForPlayer(this.gameState.localPlayerId)
@@ -763,11 +769,14 @@ export class GameScene extends Phaser.Scene {
   // ── HUD → GameScene event wiring ──────────────────────────────
 
   private wireHUDEvents(): void {
+    this.clearHudBridgeListeners()
+
     // Clear selection when entering building placement mode
     this.events.on('clearSelection', () => this.deselectAll())
 
     // Place building from HUD placement mode
     this.events.on('placeBuilding', (data: { defId: string; tileCol: number; tileRow: number }) => {
+      if (this.paused) return
       const def = BUILDING_DEFS[data.defId]
       if (!def) return
       if (!this.isDefAvailableToPlayer(0, data.defId)) {
@@ -840,6 +849,7 @@ export class GameScene extends Phaser.Scene {
 
     // Sell building
     this.events.on('sellBuilding', (data: { entityId: string }) => {
+      if (this.paused) return
       const building = this.entityMgr.getBuilding(data.entityId)
       if (!building || building.playerId !== 0) return
       const refund = building.sell()
@@ -856,6 +866,7 @@ export class GameScene extends Phaser.Scene {
 
     // Unit produced from HUD build panel
     this.events.on('unitProduced', (data: { defId: string }) => {
+      if (this.paused) return
       console.log('[Pipeline] HUD -> GameScene unitProduced', data)
       if (!this.isDefAvailableToPlayer(0, data.defId)) {
         console.warn(`[Pipeline] Faction-restricted unit blocked: ${data.defId}`)
@@ -896,6 +907,7 @@ export class GameScene extends Phaser.Scene {
 
     // Issue order from HUD (guard, stop, etc.)
     this.events.on('issueOrder', (data: { ids: string[]; type: string; target?: Position }) => {
+      if (this.paused) return
       for (const id of data.ids) {
         const unit = this.entityMgr.getUnit(id)
         if (!unit || unit.playerId !== 0) continue
@@ -905,22 +917,26 @@ export class GameScene extends Phaser.Scene {
 
     // Cursor mode changed from HUD
     this.events.on('cursorModeChanged', (data: { mode: string }) => {
+      if (this.paused) return
       this.cursorMode = data.mode
     })
 
     // Start production event from HUD (for build queue tracking)
     this.events.on('startProduction', (data: { defId: string; type: string }) => {
+      if (this.paused) return
       // HUDScene currently owns the progress bar timing; GameScene receives this for pipeline tracing.
       console.log('[Pipeline] HUD -> GameScene startProduction', data)
     })
 
     // Cancel production event from HUD (for queue/progress tracking)
     this.events.on('cancelProduction', (_data: { defId: string; type: string; refund: number }) => {
+      if (this.paused) return
       // HUDScene currently owns player build queue/progress state.
     })
 
     // Superweapon fired from HUD
     this.events.on('fireSuperweapon', (data: { defId: string; targetX: number; targetY: number }) => {
+      if (this.paused) return
       this.executeSuperweapon(data.defId, data.targetX, data.targetY, 0)
     })
   }
@@ -1578,11 +1594,16 @@ export class GameScene extends Phaser.Scene {
   // ── Input ─────────────────────────────────────────────────────
 
   private setupInput(): void {
+    // Defensive reset: scene instances are reused across starts.
+    this.input.removeAllListeners()
+    this.input.keyboard?.removeAllListeners()
+
     this.cursors = this.input.keyboard!.createCursorKeys()
     this.wasdKeys = this.input.keyboard!.addKeys('W,A,S,D,H') as Record<string, Phaser.Input.Keyboard.Key>
     this.input.mouse?.disableContextMenu()
 
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
+      if (this.paused) return
       const mouseEvent = ptr.event as MouseEvent | undefined
       const button = ptr.button ?? mouseEvent?.button ?? -1
 
@@ -1613,11 +1634,13 @@ export class GameScene extends Phaser.Scene {
     })
 
     this.input.on('pointermove', (ptr: Phaser.Input.Pointer) => {
+      if (this.paused) return
       if (!this.isLeftPointerActive || !ptr.leftButtonDown()) return
       this.updateDragSelect(ptr)
     })
 
     this.input.on('pointerup', (ptr: Phaser.Input.Pointer) => {
+      if (this.paused) return
       if (!this.isLeftPointerActive) return
 
       if (this.isDragging) {
@@ -1631,12 +1654,13 @@ export class GameScene extends Phaser.Scene {
       this.selectionRect.clear()
     })
 
-    // ESC / P — toggle pause
-    this.input.keyboard!.on('keydown-ESC', () => this.togglePause())
-    this.input.keyboard!.on('keydown-P', () => this.togglePause())
+    // ESC / P — toggle pause (or cancel quit confirmation if open)
+    this.input.keyboard!.on('keydown-ESC', () => this.handlePauseHotkey())
+    this.input.keyboard!.on('keydown-P', () => this.handlePauseHotkey())
 
     // S — stop selected units (only if units selected; otherwise let WASD handle camera)
     this.input.keyboard!.on('keydown-S', () => {
+      if (this.paused) return
       if (this.selectedIds.size > 0) {
         this.selectedIds.forEach(id => {
           this.entityMgr.getUnit(id)?.giveOrder({ type: 'stop' })
@@ -1646,6 +1670,7 @@ export class GameScene extends Phaser.Scene {
 
     // H — snap camera to home base
     this.input.keyboard!.on('keydown-H', () => {
+      if (this.paused) return
       const home = this.getSpawnPositionForPlayer(this.gameState.localPlayerId)
       if (home) {
         const isoHome = cartToScreen(home.x, home.y)
@@ -1656,12 +1681,14 @@ export class GameScene extends Phaser.Scene {
 
     // A — attack-move: enter attack-move cursor mode
     this.input.keyboard!.on('keydown-A', () => {
+      if (this.paused) return
       if (this.selectedIds.size === 0) return
       this.cursorMode = 'attackMove'
     })
 
     // G — guard mode: units hold position and auto-engage
     this.input.keyboard!.on('keydown-G', () => {
+      if (this.paused) return
       this.selectedIds.forEach(id => {
         const unit = this.entityMgr.getUnit(id)
         if (unit && unit.playerId === 0) {
@@ -1673,6 +1700,7 @@ export class GameScene extends Phaser.Scene {
 
     // D — deploy (GI/Conscript toggle fortified, MCV deploy/undeploy)
     this.input.keyboard!.on('keydown-D', () => {
+      if (this.paused) return
       this.selectedIds.forEach(id => {
         const unit = this.entityMgr.getUnit(id)
         if (!unit || unit.playerId !== 0) return
@@ -1695,6 +1723,7 @@ export class GameScene extends Phaser.Scene {
 
     // X — scatter: units spread out (anti-splash)
     this.input.keyboard!.on('keydown-X', () => {
+      if (this.paused) return
       this.selectedIds.forEach(id => {
         const unit = this.entityMgr.getUnit(id)
         if (unit && unit.playerId === 0) {
@@ -1715,19 +1744,256 @@ export class GameScene extends Phaser.Scene {
 
     // Z — waypoint mode: hold Z, click multiple points, units queue move orders
     this.input.keyboard!.on('keydown-Z', () => {
+      if (this.paused) return
       if (this.selectedIds.size === 0) return
       this.waypointMode = true
       this.showUnitAck('Waypoint mode')
     })
     this.input.keyboard!.on('keyup-Z', () => {
+      if (this.paused) return
       this.waypointMode = false
     })
   }
 
-  private togglePause(): void {
-    this.paused = !this.paused
+  private handlePauseHotkey(): void {
+    if (this.gameOver) return
+    if (this.paused && this.pauseConfirmPanel?.visible) {
+      this.closePauseConfirmation()
+      return
+    }
+    this.togglePause()
+  }
+
+  private togglePause(forceState?: boolean): void {
+    if (this.gameOver) return
+    const nextPaused = forceState ?? !this.paused
+    if (nextPaused === this.paused) return
+
+    this.paused = nextPaused
+    if (!this.paused) {
+      this.pendingPauseExitTarget = null
+      this.closePauseConfirmation()
+    } else {
+      this.isLeftPointerActive = false
+      this.isDragging = false
+      this.selectionRect?.clear()
+      this.pausePanel?.setVisible(true)
+    }
+    this.syncPauseUi()
+  }
+
+  private createPauseUi(): void {
+    const { width, height } = this.scale
+
+    this.pauseOverlay = this.add.rectangle(
+      width / 2,
+      height / 2,
+      width,
+      height,
+      0x000000,
+      0.58,
+    )
+      .setScrollFactor(0)
+      .setDepth(9000)
+      .setVisible(false)
+      .setInteractive({ useHandCursor: false })
+
+    this.pauseOverlay.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      const ev = pointer.event as Event | undefined
+      ev?.stopPropagation?.()
+    })
+
+    const panelBg = this.add.rectangle(0, 0, 430, 325, 0x0e1524, 0.97)
+      .setStrokeStyle(3, 0x46618f, 0.95)
+    const panelTitle = this.add.text(0, -118, 'PAUSED', {
+      fontFamily: 'monospace',
+      fontSize: '52px',
+      color: '#ffffff',
+      stroke: '#000000',
+      strokeThickness: 4,
+    }).setOrigin(0.5)
+    const panelSubtitle = this.add.text(0, -74, 'Match controls', {
+      fontFamily: 'monospace',
+      fontSize: '22px',
+      color: '#a8c1e8',
+    }).setOrigin(0.5)
+    const resumeBtn = this.createPauseButton('Resume', () => this.togglePause(false))
+    resumeBtn.setPosition(0, -10)
+    const setupBtn = this.createPauseButton('Return to Setup', () => this.openPauseQuitConfirmation('SetupScene'))
+    setupBtn.setPosition(0, 55)
+    const menuBtn = this.createPauseButton('Return to Menu', () => this.openPauseQuitConfirmation('MenuScene'))
+    menuBtn.setPosition(0, 120)
+
+    this.pausePanel = this.add.container(width / 2, height / 2, [
+      panelBg,
+      panelTitle,
+      panelSubtitle,
+      resumeBtn,
+      setupBtn,
+      menuBtn,
+    ])
+      .setScrollFactor(0)
+      .setDepth(9001)
+      .setVisible(false)
+
+    const confirmBg = this.add.rectangle(0, 0, 480, 270, 0x0b1220, 0.98)
+      .setStrokeStyle(3, 0x8a3a3a, 0.95)
+    const confirmTitle = this.add.text(0, -92, 'CONFIRM QUIT', {
+      fontFamily: 'monospace',
+      fontSize: '38px',
+      color: '#ffd0d0',
+      stroke: '#000000',
+      strokeThickness: 4,
+    }).setOrigin(0.5)
+    this.pauseConfirmText = this.add.text(0, -18, '', {
+      fontFamily: 'monospace',
+      fontSize: '21px',
+      align: 'center',
+      color: '#f0f4ff',
+      wordWrap: { width: 420 },
+    }).setOrigin(0.5)
+
+    const cancelBtn = this.createPauseButton('Cancel', () => this.closePauseConfirmation())
+    cancelBtn.setPosition(-120, 88)
+    const quitBtn = this.createPauseButton('Quit Match', () => this.confirmPauseQuit(), {
+      baseColor: 0x5f1d25,
+      hoverColor: 0x7e2832,
+      borderColor: 0xd46a74,
+    })
+    quitBtn.setPosition(120, 88)
+
+    this.pauseConfirmPanel = this.add.container(width / 2, height / 2, [
+      confirmBg,
+      confirmTitle,
+      this.pauseConfirmText,
+      cancelBtn,
+      quitBtn,
+    ])
+      .setScrollFactor(0)
+      .setDepth(9002)
+      .setVisible(false)
+
+    this.syncPauseUi()
+  }
+
+  private createPauseButton(
+    label: string,
+    onClick: () => void,
+    options?: { baseColor?: number; hoverColor?: number; borderColor?: number },
+  ): Phaser.GameObjects.Container {
+    const baseColor = options?.baseColor ?? 0x203453
+    const hoverColor = options?.hoverColor ?? 0x2f4a74
+    const borderColor = options?.borderColor ?? 0x8eaad8
+
+    const bg = this.add.rectangle(0, 0, 260, 46, baseColor, 1)
+      .setStrokeStyle(2, borderColor, 0.82)
+      .setInteractive({ useHandCursor: true })
+    const txt = this.add.text(0, 0, label, {
+      fontFamily: 'monospace',
+      fontSize: '23px',
+      color: '#ffffff',
+    }).setOrigin(0.5)
+
+    bg.on('pointerover', () => bg.setFillStyle(hoverColor, 1))
+    bg.on('pointerout', () => bg.setFillStyle(baseColor, 1))
+    bg.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      const ev = pointer.event as Event | undefined
+      ev?.stopPropagation?.()
+      onClick()
+    })
+
+    return this.add.container(0, 0, [bg, txt])
+  }
+
+  private openPauseQuitConfirmation(target: PauseExitTarget): void {
+    if (!this.paused) return
+    this.pendingPauseExitTarget = target
+    const targetLabel = target === 'SetupScene' ? 'skirmish setup' : 'main menu'
+    this.pauseConfirmText?.setText(`Quit current match and return to ${targetLabel}?\nProgress in this match will be lost.`)
+    this.pausePanel?.setVisible(false)
+    this.pauseConfirmPanel?.setVisible(true)
+  }
+
+  private closePauseConfirmation(): void {
+    this.pendingPauseExitTarget = null
+    this.pauseConfirmPanel?.setVisible(false)
+    if (this.paused) this.pausePanel?.setVisible(true)
+  }
+
+  private confirmPauseQuit(): void {
+    const target = this.pendingPauseExitTarget
+    if (!target) return
+    this.exitMatchTo(target)
+  }
+
+  private syncPauseUi(): void {
     this.pauseOverlay?.setVisible(this.paused)
-    this.pauseText?.setVisible(this.paused)
+    this.pausePanel?.setVisible(this.paused && !(this.pauseConfirmPanel?.visible ?? false))
+    if (!this.paused) this.pauseConfirmPanel?.setVisible(false)
+
+    if (this.scene.isActive('HUDScene')) {
+      const hudScene = this.scene.get('HUDScene')
+      hudScene.input.enabled = !this.paused
+    }
+
+    if (this.paused) {
+      this.scene.bringToTop('GameScene')
+    } else if (this.scene.isActive('HUDScene')) {
+      this.scene.bringToTop('HUDScene')
+    }
+
+    this.gameState.phase = this.paused ? 'paused' : 'playing'
+  }
+
+  private exitMatchTo(target: PauseExitTarget): void {
+    this.cleanupMatchRuntimeState()
+    this.scene.stop('HUDScene')
+    this.scene.start(target)
+  }
+
+  private cleanupMatchRuntimeState(): void {
+    this.paused = false
+    this.pendingPauseExitTarget = null
+    this.clearHudBridgeListeners()
+    this.pauseConfirmPanel?.setVisible(false)
+    this.pausePanel?.setVisible(false)
+    this.pauseOverlay?.setVisible(false)
+    this.cursorMode = 'normal'
+    this.waypointMode = false
+    this.isLeftPointerActive = false
+    this.isDragging = false
+    this.selectedIds.clear()
+    this.gameState.selectedEntityIds = []
+    this.gameState.phase = 'menu'
+    this.registry.set('selectedIds', [])
+
+    // Registry values are global across scenes; clear match-scoped references before leaving.
+    this.registry.remove('gameState')
+    this.registry.remove('economy')
+    this.registry.remove('production')
+    this.registry.remove('entityMgr')
+    this.registry.remove('camX')
+    this.registry.remove('camY')
+    this.registry.remove('camTargetX')
+    this.registry.remove('camTargetY')
+    this.registry.remove('lastAlertPos')
+  }
+
+  private clearHudBridgeListeners(): void {
+    for (const eventName of HUD_BRIDGE_EVENT_NAMES) {
+      this.events.removeAllListeners(eventName)
+    }
+  }
+
+  private onSceneShutdown(): void {
+    this.clearHudBridgeListeners()
+    this.input.removeAllListeners()
+    this.input.keyboard?.removeAllListeners()
+    this.pendingPauseExitTarget = null
+    this.paused = false
+    this.pauseOverlay?.setVisible(false)
+    this.pausePanel?.setVisible(false)
+    this.pauseConfirmPanel?.setVisible(false)
   }
 
   // ── Isometric input helper ───────────────────────────────────────
@@ -2381,8 +2647,7 @@ export class GameScene extends Phaser.Scene {
     btnBg.on('pointerover', () => btnBg.setFillStyle(0x2d3d64, 1))
     btnBg.on('pointerout', () => btnBg.setFillStyle(0x1f2a44, 1))
     btnBg.on('pointerdown', () => {
-      this.scene.stop('HUDScene')
-      this.scene.start('MenuScene')
+      this.exitMatchTo('MenuScene')
     })
 
     void btnLabel
