@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 05:07*
+*Last updated: 2026-03-08 05:09*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -158,3 +158,7 @@ One bug fixed: buildExtraPower() was called on any mild credit overflow (not jus
 ### Update: 2026-03-08 05:07
 ### codex-ic-hud-font-readability — 2026-03-08 05:07
 Two issues found and fixed: (1) dead abbrev field in BuildableItem removed — it was computed but never read after getShortName was replaced by formatBuildLabel; (2) non-optional _readyTxt.text access in tickSuperweapons changed to _readyTxt?.text for consistency and safety. TypeScript passes cleanly. Layout, logic, and performance are sound.
+
+### Update: 2026-03-08 05:09
+### codex-ic-mcv-deploy-undeploy — 2026-03-08 05:09
+All changes compile cleanly (tsc --noEmit: zero errors). Deploy/pack loop is logically sound: footprint validation, unit-blocking check, tile occupancy management, entity despawn/create, selection sync, and construction-workflow guards all implemented correctly. One harmless redundancy found: setBuildingTileOccupancy is called twice in deployMCV and placeBuilding paths (once via building_placed event listener, once directly) — setOccupied is idempotent so no functional impact. No dead code, missing imports, security issues, or memory leaks identified.
