@@ -122,3 +122,7 @@ All changes confined to visual helpers in Building.ts. Palette expansion, sheen/
 ### Update: 2026-03-07 22:39
 ### codex-ic-move-feedback-cursor — 2026-03-07 22:39
 Clean implementation. TypeScript passes (exit 0). Two transient Graphics objects properly destroyed via onComplete tweens — no leak. Trigger paths (handleLeftClick vs issueOrder event) are mutually exclusive — no double-trigger. Chord-line ring segments (22.5° span, radius 18) produce ~0.35px deviation — visually correct. Tween sequencing (pop-in 0-140ms, fade-out 150-580ms) is clean with no conflicting alpha.
+
+### Update: 2026-03-07 22:39
+### codex-ic-bldg-symbols — 2026-03-07 22:39
+One issue found and fixed: a leftover console.log in updateCombat() that fired every time grand_cannon attacked. Removed the 8-line debug block. All other checks passed — no per-frame drawBody calls, no TypeScript errors (tsc --noEmit clean), getBuildingFunction() is called only on state changes (not per-frame), drawing primitives are correct, overlay z-order is correct (drawn after drawBuildingDetails in the same bodyGraphic pass), unknown building categories fall back to factory safely. Build passes cleanly.
