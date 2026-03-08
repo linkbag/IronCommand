@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 11:25*
+*Last updated: 2026-03-08 13:27*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -172,3 +172,7 @@ All changes compile cleanly (tsc --noEmit: zero errors). Deploy/pack loop is log
 ### Integration Review — 2026-03-08 11:25
 **Subteams:** codex-ic-ore-regen-1pct-and-8p-colors codex-ic-ra2-hotkeys-onscreen-everywhere codex-ic-pause-ui-quit-flow codex-ic-building-boxes-v3-symbol-labels codex-ic-ra2-ai-benchmark-and-upgrade
 **Result:** Merged feat/ic-ra2-hotkeys-onscreen-everywhere (the only branch with unique commits). One syntactic conflict in GameScene.ts resolved: both the enemy-hover-cursor method group (HEAD) and the selection-hotkey method group (hotkeys branch) were preserved. HUDScene.ts merged cleanly, adding hasOwnUnitSelected() guard and T-hotkey build-panel guard. P-for-pause was already remapped to keydown-PAUSE in HEAD. Build passes (tsc --noEmit clean). 4 of 5 task branches (ore-regen, pause-ui, building-boxes-v3, ra2-ai-benchmark) had zero unique commits and no remote counterpart — their work is not yet present in the codebase.
+
+### Update: 2026-03-08 13:27
+### codex-ic-building-boxes-v3-symbol-labels-r2 — 2026-03-08 13:27
+One visual bug fixed: statusText label (FAC/BAR/etc.) was always shown via setVisible(true) in updateStatusOverlay() but lacks a construction mask, causing it to float above the building during the bottom-up reveal animation. Fixed by returning early with setVisible(false) when state is constructing. Build passes (tsc --noEmit clean). All new methods (getFacilitySizeProfile, getIsoDims, drawBuildingDetails, drawFacilitySymbol, updateStatusOverlay) compile cleanly and are logically sound. Visual type routing covers all 26 building IDs correctly; superweapon buildings (weather_device, chronosphere, nuclear_silo, iron_curtain) fall back to factory/FAC which is acceptable.
