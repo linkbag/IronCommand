@@ -47,6 +47,10 @@ const HUD_GOLD    = 0xffd700
 const POWER_GREEN  = 0x44cc44
 const POWER_YELLOW = 0xcccc44
 const POWER_RED    = 0xcc4444
+const MINIMAP_ALLY_COLOR = 0x39d97a
+const MINIMAP_ENEMY_COLOR = 0xe94560
+const MINIMAP_ALLY_OUTLINE = 0x88ffb0
+const MINIMAP_ENEMY_OUTLINE = 0xff9ab0
 
 // ── Types ──────────────────────────────────────────────────────────────
 type BuildTab   = 'buildings' | 'defenses' | 'infantry' | 'vehicles' | 'aircraft'
@@ -1877,6 +1881,7 @@ export class HUDScene extends Phaser.Scene {
     const em = this.registry.get('entityMgr') as {
       getAllEntities(): E[]
       getAllBuildings(): E[]
+      isEnemy(playerA: number, playerB: number): boolean
     } | undefined
     if (em) {
       const localId = this.gameState?.localPlayerId ?? 0
@@ -1892,8 +1897,8 @@ export class HUDScene extends Phaser.Scene {
           if (fog === FogState.HIDDEN) return
         }
 
-        // RA2 minimap colors: own blue, enemy red.
-        const color = isOwn ? 0x4488ff : 0xe94560
+        const isEnemy = em.isEnemy(localId, e.playerId)
+        const color = isEnemy ? MINIMAP_ENEMY_COLOR : MINIMAP_ALLY_COLOR
         const tc = Phaser.Math.Clamp(e.x / TILE_SIZE, 0, map.width)
         const tr = Phaser.Math.Clamp(e.y / TILE_SIZE, 0, map.height)
         const mx = ox + (tc / map.width) * this.mmW
@@ -1915,6 +1920,7 @@ export class HUDScene extends Phaser.Scene {
       for (const b of em.getAllBuildings()) {
         if (!b.isAlive) continue
         const isOwn = b.playerId === localId
+        const isEnemy = em.isEnemy(localId, b.playerId)
         if (!isOwn && map.tiles) {
           const tc = Math.floor(b.x / TILE_SIZE)
           const tr = Math.floor(b.y / TILE_SIZE)
@@ -1927,7 +1933,7 @@ export class HUDScene extends Phaser.Scene {
         const my = oy + (tr / map.height) * this.mmH
         const fw = Math.max(2, ((b.def?.footprint?.w ?? 2) / map.width) * this.mmW)
         const fh = Math.max(2, ((b.def?.footprint?.h ?? 2) / map.height) * this.mmH)
-        g.lineStyle(1, isOwn ? 0x77aaff : 0xff8899, 0.9)
+        g.lineStyle(1, isEnemy ? MINIMAP_ENEMY_OUTLINE : MINIMAP_ALLY_OUTLINE, 0.9)
         g.strokeRect(mx - fw / 2, my - fh / 2, fw, fh)
       }
     }
