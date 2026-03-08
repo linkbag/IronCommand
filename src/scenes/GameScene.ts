@@ -30,6 +30,8 @@ const ACK_LINES: Record<string, string[]> = {
 const PLAYER_TINT = 0x4488ff
 const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff, 0x44cc44, 0xffdd00, 0x44dddd, 0xff66aa] // red, orange, purple, green, yellow, cyan, pink
 const PRODUCER_BUILDING_IDS = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery'] as const
+const MOVE_MARKER_RING_COLOR = 0x66f6ff
+const MOVE_MARKER_CROSS_COLOR = 0xd9fdff
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
@@ -896,10 +898,15 @@ export class GameScene extends Phaser.Scene {
 
     // Issue order from HUD (guard, stop, etc.)
     this.events.on('issueOrder', (data: { ids: string[]; type: string; target?: Position }) => {
+      let movedSelectedUnit = false
       for (const id of data.ids) {
         const unit = this.entityMgr.getUnit(id)
         if (!unit || unit.playerId !== 0) continue
+        if (data.type === 'move' && !!data.target && this.selectedIds.has(id)) movedSelectedUnit = true
         unit.giveOrder({ type: data.type as any, target: data.target })
+      }
+      if (data.type === 'move' && data.target && movedSelectedUnit) {
+        this.showMoveOrderMarker(data.target.x, data.target.y)
       }
     })
 
@@ -1916,6 +1923,77 @@ export class GameScene extends Phaser.Scene {
     })
   }
 
+  private drawSegmentedMoveRing(g: Phaser.GameObjects.Graphics, radius: number): void {
+    const segments = 16
+    for (let i = 0; i < segments; i += 2) {
+      const a0 = (i / segments) * Math.PI * 2
+      const a1 = ((i + 1) / segments) * Math.PI * 2
+      g.beginPath()
+      g.moveTo(Math.cos(a0) * radius, Math.sin(a0) * radius * 0.58)
+      g.lineTo(Math.cos(a1) * radius, Math.sin(a1) * radius * 0.58)
+      g.strokePath()
+    }
+  }
+
+  private drawMoveCrosshair(g: Phaser.GameObjects.Graphics): void {
+    g.lineStyle(2, MOVE_MARKER_CROSS_COLOR, 1)
+    g.lineBetween(-10, 0, -3, 0)
+    g.lineBetween(3, 0, 10, 0)
+    g.lineBetween(0, -10, 0, -3)
+    g.lineBetween(0, 3, 0, 10)
+    g.lineStyle(1, MOVE_MARKER_CROSS_COLOR, 0.95)
+    g.strokeTriangle(0, -14, -3, -9, 3, -9)
+    g.strokeTriangle(14, 0, 9, -3, 9, 3)
+    g.strokeTriangle(0, 14, -3, 9, 3, 9)
+    g.strokeTriangle(-14, 0, -9, -3, -9, 3)
+  }
+
+  private showMoveOrderMarker(targetX: number, targetY: number): void {
+    const clampedX = Phaser.Math.Clamp(targetX, TILE_SIZE * 0.5, this.gameMap.worldWidth - TILE_SIZE * 0.5)
+    const clampedY = Phaser.Math.Clamp(targetY, TILE_SIZE * 0.5, this.gameMap.worldHeight - TILE_SIZE * 0.5)
+    const iso = cartToScreen(clampedX, clampedY)
+    const markerDepth = iso.y + 6
+
+    const ring = this.add.graphics()
+    ring.setPosition(iso.x, iso.y).setDepth(markerDepth).setAlpha(0.95).setScale(0.45)
+    ring.lineStyle(2, MOVE_MARKER_RING_COLOR, 1)
+    this.drawSegmentedMoveRing(ring, 18)
+
+    const crosshair = this.add.graphics()
+    crosshair.setPosition(iso.x, iso.y).setDepth(markerDepth + 0.1).setAlpha(0).setScale(0.3)
+    this.drawMoveCrosshair(crosshair)
+
+    this.tweens.add({
+      targets: ring,
+      scaleX: 1.5,
+      scaleY: 1.5,
+      alpha: 0,
+      duration: 560,
+      ease: 'Cubic.Out',
+      onComplete: () => ring.destroy(),
+    })
+
+    this.tweens.add({
+      targets: crosshair,
+      alpha: 1,
+      scaleX: 1.05,
+      scaleY: 1.05,
+      duration: 140,
+      ease: 'Back.Out',
+    })
+
+    this.tweens.add({
+      targets: crosshair,
+      alpha: 0,
+      scaleX: 0.92,
+      scaleY: 0.92,
+      duration: 430,
+      delay: 150,
+      ease: 'Cubic.Out',
+      onComplete: () => crosshair.destroy(),
+    })
+  }
+
   private startDragSelect(ptr: Phaser.Input.Pointer): void {
     this.isLeftPointerActive = true
     this.isDragging = false
@@ -2082,6 +2160,8 @@ export class GameScene extends Phaser.Scene {
 
     if (harvestIssued && !moveIssued) this.showUnitAck('Harvesting')
     else this.showUnitAck('Moving out')
+
+    if (moveIssued) this.showMoveOrderMarker(worldX, worldY)
   }
 
   private getOwnUnitAt(worldX: number, worldY: number): import('../entities/Unit').Unit | null {
