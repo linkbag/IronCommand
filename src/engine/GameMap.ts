@@ -9,7 +9,7 @@ import {
   GEMS_TILE_MAX,
   ORE_REGEN_RATE,
 } from '../types'
-import type { TileData, GameMap as GameMapData, Position, TileCoord } from '../types'
+import type { TileData, GameMap as GameMapData, Position, TileCoord, StartDistanceMode } from '../types'
 import type { MapTemplate } from '../types'
 import { tileToScreen, screenToTile, getIsoWorldBounds, setMapOffset, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from './IsoUtils'
 
@@ -117,8 +117,9 @@ export function generatePreviewData(
   height: number,
   seed: number,
   template: MapTemplate = 'continental',
+  startDistanceMode: StartDistanceMode = 'long_range',
 ): { tiles: TileData[][]; startPositions: Position[] } {
-  const data = generateMapData(width, height, seed, template)
+  const data = generateMapData(width, height, seed, template, startDistanceMode)
   return { tiles: data.tiles, startPositions: data.startPositions }
 }
 
@@ -147,6 +148,7 @@ function generateMapData(
   height = MAP_DEFAULT_HEIGHT,
   seed = 12345,
   template: MapTemplate = 'continental',
+  startDistanceMode: StartDistanceMode = 'long_range',
 ): GameMapData {
   const rng = makePRNG(seed)
   const resolved = resolveTemplate(template, rng)
@@ -578,7 +580,7 @@ function generateMapData(
   }
 
   // Compute deterministic template-aware start positions.
-  const startPositions: Position[] = computeStartPositions(tiles, width, height, seed, resolved)
+  const startPositions: Position[] = computeStartPositions(tiles, width, height, seed, resolved, startDistanceMode)
 
   // Clear terrain around start positions (make them buildable grass)
   for (const sp of startPositions) {
@@ -618,7 +620,10 @@ function generateMapData(
 }
 
 const SPAWN_EDGE_MARGIN = 6
-const SPAWN_MIN_DISTANCE_RATIO = 0.25
+const SPAWN_CLOSE_MIN_DISTANCE_RATIO = 0.14
+const SPAWN_LONG_MIN_DISTANCE_RATIO = 0.3
+const SPAWN_CLOSE_TARGET_RADIUS_RATIO = 0.2
+const SPAWN_LONG_TARGET_RADIUS_RATIO = 0.36
 const SPAWN_ORE_RADIUS_TILES = 15
 const SPAWN_ORE_CLUSTER_RADIUS = 3
 
@@ -646,6 +651,10 @@ function spawnTemplateOffset(template: ResolvedMapTemplate): number {
     case 'arctic': return 0x44f00d4
     case 'urban': return 0x55f00d5
   }
+}
+
+function spawnDistanceOffset(mode: StartDistanceMode): number {
+  return mode === 'close_battle' ? 0x66a12f3 : 0x9bb31d7
 }
 
 function isSpawnableTile(tile: TileData): boolean {
@@ -742,6 +751,7 @@ function pickDistributedSpawns(
   w: number,
   h: number,
   minDistance: number,
+  targetRadiusRatio: number,
   rng: () => number,
 ): TileCoord[] {
   if (count <= 0 || candidates.length === 0) return []
@@ -749,7 +759,7 @@ function pickDistributedSpawns(
   const used = new Set<number>()
   const centerCol = (w - 1) * 0.5
   const centerRow = (h - 1) * 0.5
-  const targetRadius = Math.min(w, h) * 0.34
+  const targetRadius = Math.min(w, h) * targetRadiusRatio
   const baseAngle = rng() * Math.PI * 2
 
   while (selected.length < count) {
@@ -930,10 +940,17 @@ function computeStartPositions(
   h: number,
   seed: number,
   template: ResolvedMapTemplate,
+  startDistanceMode: StartDistanceMode,
 ): Position[] {
   const count = computeSpawnCountForSize(w, h)
-  const rng = makePRNG((seed ^ spawnTemplateOffset(template) ^ (w << 16) ^ h) >>> 0)
-  const minDistance = Math.hypot(w, h) * SPAWN_MIN_DISTANCE_RATIO
+  const rng = makePRNG((seed ^ spawnTemplateOffset(template) ^ spawnDistanceOffset(startDistanceMode) ^ (w << 16) ^ h) >>> 0)
+  const minDistanceRatio = startDistanceMode === 'close_battle'
+    ? SPAWN_CLOSE_MIN_DISTANCE_RATIO
+    : SPAWN_LONG_MIN_DISTANCE_RATIO
+  const targetRadiusRatio = startDistanceMode === 'close_battle'
+    ? SPAWN_CLOSE_TARGET_RADIUS_RATIO
+    : SPAWN_LONG_TARGET_RADIUS_RATIO
+  const minDistance = Math.hypot(w, h) * minDistanceRatio
   const candidates = collectSpawnCandidates(tiles, w, h, template)
 
   const selectedTiles: TileCoord[] = []
@@ -947,7 +964,7 @@ function computeStartPositions(
     const remaining = count - selectedTiles.length
     const selectedKey = new Set(selectedTiles.map((s) => s.row * w + s.col))
     const pool = candidates.filter((c) => !selectedKey.has(c.row * w + c.col))
-    const extra = pickDistributedSpawns(pool, remaining, w, h, minDistance, rng)
+    const extra = pickDistributedSpawns(pool, remaining, w, h, minDistance, targetRadiusRatio, rng)
     selectedTiles.push(...extra)
   }
 
@@ -1091,9 +1108,16 @@ export class GameMap {
   private depletedOreTiles: Set<number> = new Set()
   private debugGridEnabled = false
 
-  constructor(scene: Phaser.Scene, width?: number, height?: number, seed?: number, template?: MapTemplate) {
+  constructor(
+    scene: Phaser.Scene,
+    width?: number,
+    height?: number,
+    seed?: number,
+    template?: MapTemplate,
+    startDistanceMode: StartDistanceMode = 'long_range',
+  ) {
     this.scene = scene
-    this.data = generateMapData(width, height, seed, template)
+    this.data = generateMapData(width, height, seed, template, startDistanceMode)
     this.terrainGraphics = scene.add.graphics()
     this.animLayer = scene.add.graphics()
     this.fogLayer = scene.add.graphics()

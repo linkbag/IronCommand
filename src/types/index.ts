@@ -231,3 +231,4 @@ export const ORE_REGEN_RATE = 10        // ore units regenerated per tick (10% o
 export const NEUTRAL_PLAYER_ID = -1     // neutral/capturable buildings
 
 export type MapTemplate = 'continental' | 'islands' | 'desert' | 'arctic' | 'urban' | 'random'
+export type StartDistanceMode = 'close_battle' | 'long_range'
