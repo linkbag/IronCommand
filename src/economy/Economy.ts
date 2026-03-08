@@ -6,7 +6,7 @@
 import Phaser from 'phaser'
 import type { EntityManager } from '../entities/EntityManager'
 import type { GameState } from '../types'
-import { STARTING_CREDITS, POWER_LOW_THRESHOLD, NEUTRAL_PLAYER_ID } from '../types'
+import { STARTING_CREDITS, POWER_LOW_THRESHOLD, LOW_POWER_PRODUCTION_MULT, NEUTRAL_PLAYER_ID } from '../types'
 
 interface PowerState {
   generated: number
@@ -82,7 +82,7 @@ export class Economy extends Phaser.Events.EventEmitter {
 
   /** Speed multiplier for production when power is low */
   getProductionSpeedMultiplier(playerId: number): number {
-    return this.isPowerLow(playerId) ? 0.35 : 1.0
+    return this.isPowerLow(playerId) ? LOW_POWER_PRODUCTION_MULT : 1.0
   }
 
   setAIDifficulty(playerId: number, difficulty: Difficulty): void {

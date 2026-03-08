@@ -2537,6 +2537,11 @@ export class AI {
       }
     }
 
+    // RA2 parity: superweapon countdown is paused while in low power.
+    if (this.economy.isPowerLow(this.playerId)) {
+      return
+    }
+
     // Tick down timers
     for (const [swId, remaining] of this.superweaponTimers) {
       const newRemaining = remaining - interval
