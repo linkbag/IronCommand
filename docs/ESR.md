@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 13:44*
+*Last updated: 2026-03-08 14:10*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -193,3 +193,7 @@ Pause menu and quit-flow implementation is correct. Full pause UI (pause panel, 
 ### Integration Review — 2026-03-08 13:44
 **Subteams:** codex-ic-ore-regen-1pct-and-8p-colors-r2 codex-ic-pause-ui-quit-flow-r2 codex-ic-building-boxes-v3-symbol-labels-r2 codex-ic-ra2-ai-benchmark-and-upgrade-r2
 **Result:** All 4 subteam r2 branches integrated via cherry-pick (6 commits total). Key cross-team conflicts resolved: (1) P key binding conflict between pause-ui and ra2-hotkeys — kept P for unit selection, ESC/PAUSE for pause; (2) ore-regen import source conflict with skirmishConfig module — kept both imports; (3) SetupScene field removal artifact — preserved previewSize/previewX/previewY fields; (4) Building.ts getFacilityVisualType merged HEAD comprehensive patterns into r2 file; (5) ORE_REGEN_RATE set to 1 per spec; (6) fixed TypeScript narrowing error from unreachable switch case. Build passes (tsc --noEmit clean). Minor remaining: 4 minimap color constants in HUDScene.ts now unused (dead code, no errors).
+
+### Update: 2026-03-08 14:10
+### codex-ic-ore-regen-hardlock-1pct — 2026-03-08 14:10
+Clean implementation. Single regen path enforced, fully depleted tiles become grass (no regen), partially depleted tiles recover at exactly 1 ore/tick (1% of harvest rate). TypeScript clean, both invariant tests pass. No dangling references to removed code.
