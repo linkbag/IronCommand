@@ -30,6 +30,15 @@ const ACK_LINES: Record<string, string[]> = {
 const PLAYER_TINT = 0x4488ff
 const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff, 0x44cc44, 0xffdd00, 0x44dddd, 0xff66aa] // red, orange, purple, green, yellow, cyan, pink
 const PRODUCER_BUILDING_IDS = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery'] as const
+const MOVE_TRAJECTORY_DURATION_MS = 1400
+const MOVE_TRAJECTORY_MAX_LINES = 64
+
+type MoveTrajectoryLine = {
+  from: Position
+  to: Position
+  createdAtMs: number
+  durationMs: number
+}
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
@@ -74,6 +83,8 @@ export class GameScene extends Phaser.Scene {
   // ── Selection ───────────────────────────────────────────────
   private selectionRect!: Phaser.GameObjects.Graphics
   private rallyOverlay!: Phaser.GameObjects.Graphics
+  private moveTrajectoryOverlay?: Phaser.GameObjects.Graphics
+  private moveTrajectoryLines: MoveTrajectoryLine[] = []
   private selectedIds: Set<string> = new Set()
   private selectionPulseTweens: Map<string, Phaser.Tweens.Tween> = new Map()
 
@@ -142,6 +153,9 @@ export class GameScene extends Phaser.Scene {
     this.pauseText?.destroy()
     this.pauseText = undefined
     this.rallyOverlay?.destroy()
+    this.moveTrajectoryOverlay?.destroy()
+    this.moveTrajectoryOverlay = undefined
+    this.moveTrajectoryLines = []
     this.blockerNudgeCooldownMs = new Map()
     this.forceFullMapReveal = false
   }
@@ -447,6 +461,8 @@ export class GameScene extends Phaser.Scene {
     this.selectionRect.setScrollFactor(0).setDepth(200)
     this.rallyOverlay = this.add.graphics()
     this.rallyOverlay.setScrollFactor(0).setDepth(190)
+    this.moveTrajectoryOverlay = this.add.graphics()
+    this.moveTrajectoryOverlay.setScrollFactor(0).setDepth(191)
     this.edgeFadeOverlay = this.add.graphics().setScrollFactor(0).setDepth(189)
 
     this.pauseOverlay = this.add.rectangle(
@@ -578,6 +594,7 @@ export class GameScene extends Phaser.Scene {
     if (Math.abs(this.camY - this.camTargetY) < 0.4) this.camY = this.camTargetY
     this.cameras.main.setScroll(this.camX, this.camY)
     this.drawRallyOverlay()
+    this.drawMoveTrajectoryOverlay()
     this.drawEdgeBoundaryFade(Math.max(0, maxX), Math.max(0, maxY))
 
     // Pathfinder cache maintenance
@@ -896,10 +913,15 @@ export class GameScene extends Phaser.Scene {
 
     // Issue order from HUD (guard, stop, etc.)
     this.events.on('issueOrder', (data: { ids: string[]; type: string; target?: Position }) => {
+      const movedUnitIds: string[] = []
       for (const id of data.ids) {
         const unit = this.entityMgr.getUnit(id)
         if (!unit || unit.playerId !== 0) continue
         unit.giveOrder({ type: data.type as any, target: data.target })
+        if (data.type === 'move') movedUnitIds.push(unit.id)
+      }
+      if (data.type === 'move' && data.target && movedUnitIds.length > 0) {
+        this.queueMoveTrajectoryLines(data.target, movedUnitIds)
       }
     })
 
@@ -2057,6 +2079,7 @@ export class GameScene extends Phaser.Scene {
     const appendOrder = this.waypointMode
     let harvestIssued = false
     let moveIssued = false
+    const movedUnitIds: string[] = []
 
     // Compute formation offsets so units spread out around the target
     const unitIds = Array.from(this.selectedIds)
@@ -2077,9 +2100,13 @@ export class GameScene extends Phaser.Scene {
       } else {
         unit.giveOrder({ type: 'move', target: { x: worldX + offset.dx, y: worldY + offset.dy } }, appendOrder)
         moveIssued = true
+        movedUnitIds.push(unit.id)
       }
     })
 
+    if (moveIssued) {
+      this.queueMoveTrajectoryLines({ x: worldX, y: worldY }, movedUnitIds)
+    }
     if (harvestIssued && !moveIssued) this.showUnitAck('Harvesting')
     else this.showUnitAck('Moving out')
   }
@@ -2176,6 +2203,64 @@ export class GameScene extends Phaser.Scene {
       g.lineStyle(1, 0xdaf5ff, alpha)
       g.strokeCircle(toX, toY, 6 + pulse * 2)
     }
+  }
+
+  private queueMoveTrajectoryLines(target: Position, unitIds: string[]): void {
+    if (unitIds.length === 0) return
+
+    const now = this.time.now
+    const newLines: MoveTrajectoryLine[] = []
+    for (const unitId of unitIds) {
+      const unit = this.entityMgr.getUnit(unitId)
+      if (!unit || unit.playerId !== 0) continue
+      newLines.push({
+        from: { x: unit.x, y: unit.y },
+        to: { x: target.x, y: target.y },
+        createdAtMs: now,
+        durationMs: MOVE_TRAJECTORY_DURATION_MS,
+      })
+      if (newLines.length >= MOVE_TRAJECTORY_MAX_LINES) break
+    }
+    if (newLines.length === 0) return
+
+    this.moveTrajectoryLines.push(...newLines)
+    if (this.moveTrajectoryLines.length > MOVE_TRAJECTORY_MAX_LINES) {
+      this.moveTrajectoryLines.splice(0, this.moveTrajectoryLines.length - MOVE_TRAJECTORY_MAX_LINES)
+    }
+  }
+
+  private drawMoveTrajectoryOverlay(): void {
+    const g = this.moveTrajectoryOverlay
+    if (!g) return
+    g.clear()
+    if (this.moveTrajectoryLines.length === 0) return
+
+    const now = this.time.now
+    const activeLines: MoveTrajectoryLine[] = []
+    for (const line of this.moveTrajectoryLines) {
+      const ageMs = now - line.createdAtMs
+      if (ageMs >= line.durationMs) continue
+      activeLines.push(line)
+
+      const fade = 1 - ageMs / line.durationMs
+      const alpha = 0.08 + (fade * fade) * 0.22
+      const fromIso = cartToScreen(line.from.x, line.from.y)
+      const toIso = cartToScreen(line.to.x, line.to.y)
+      const fromX = fromIso.x - this.camX
+      const fromY = fromIso.y - this.camY
+      const toX = toIso.x - this.camX
+      const toY = toIso.y - this.camY
+
+      g.lineStyle(1, 0xd7f3ff, alpha)
+      g.beginPath()
+      g.moveTo(fromX, fromY)
+      g.lineTo(toX, toY)
+      g.strokePath()
+      g.fillStyle(0xd7f3ff, alpha * 0.6)
+      g.fillCircle(toX, toY, 1.5 + fade)
+    }
+
+    this.moveTrajectoryLines = activeLines
   }
 
   private updateSelectionPulse(): void {
