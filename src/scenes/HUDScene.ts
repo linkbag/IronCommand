@@ -1760,13 +1760,26 @@ export class HUDScene extends Phaser.Scene {
       })
     })
 
-    // Build hotkeys per active tab slot (Q,W,E,R,T,Y,U,I,O,P)
+    // Build hotkeys per active tab slot (Q,W,E,R,T,Y,U,I,O).
     this.tabHotkeys.forEach((letter) => {
-      kb.on(`keydown-${letter}`, () => {
+      kb.on(`keydown-${letter}`, (ev: KeyboardEvent) => {
+        if (ev.repeat) return
+        // Keep RA2-style selection hotkey free when units are selected.
+        if (letter === 'T' && this.hasOwnUnitSelected()) return
         const btn = this.buildBtns.find(b => b._hotkey === letter)
         if (btn) this.onBuildClick(btn._item)
       })
     })
+  }
+
+  private hasOwnUnitSelected(): boolean {
+    const selectedIds = (this.registry.get('selectedIds') as string[]) ?? []
+    if (selectedIds.length === 0) return false
+    type UnitRef = { playerId: number }
+    type EntityMgrRef = { getUnit(id: string): UnitRef | undefined }
+    const entityMgr = this.registry.get('entityMgr') as EntityMgrRef | undefined
+    if (!entityMgr) return false
+    return selectedIds.some(id => (entityMgr.getUnit(id)?.playerId ?? -1) === 0)
   }
 
   // ════════════════════════════════════════════════════════════════════
