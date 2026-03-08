@@ -424,7 +424,7 @@ function generateMapData(
   if (resolved === 'continental') {
     // Keep continent maps mostly connected: avoid guaranteed rivers/lakes that fragment land.
     if (rng() > 0.9) {
-      carveMeanderingRiver(rng() > 0.5, 0)
+      carveMeanderingRiver(rng() > 0.5, 1)
     }
   } else if (resolved === 'islands') {
     connectIslandStraits(4 + Math.floor(rng() * 3))
