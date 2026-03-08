@@ -220,6 +220,7 @@ export const GEMS_PER_LOAD = 50
 export const HARVESTER_CAPACITY = 20
 export const REFINERY_PROCESS_RATE = 1 // loads/sec
 export const POWER_LOW_THRESHOLD = 0.5  // build/production slows below this
+export const LOW_POWER_PRODUCTION_MULT = 0.5
 
 // ── Ore system constants ─────────────────────────────────────
 export const ORE_TILE_MAX = 2000        // max ore amount per tile

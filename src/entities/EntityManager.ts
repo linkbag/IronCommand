@@ -289,6 +289,21 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     return nearest
   }
 
+  /** Find nearest airfield for a player */
+  getNearestAirfield(x: number, y: number, playerId: number): Building | null {
+    let nearest: Building | null = null
+    let nearestDist = Infinity
+    for (const b of this.buildings.values()) {
+      if (b.playerId !== playerId || b.def.id !== 'air_force_command' || b.state === 'dying') continue
+      const d = Phaser.Math.Distance.Between(x, y, b.x, b.y)
+      if (d < nearestDist) {
+        nearestDist = d
+        nearest = b
+      }
+    }
+    return nearest
+  }
+
   /** Check if a player has a specific building type active */
   playerHasBuilding(playerId: number, defId: string): boolean {
     return Array.from(this.buildings.values()).some(
@@ -444,6 +459,10 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     // Find nearest refinery
     unit.on('find_refinery', (playerId: number, cb: (ref: Building | null) => void) => {
       cb(this.getNearestRefinery(unit.x, unit.y, playerId))
+    })
+
+    unit.on('find_airfield', (playerId: number, cb: (airfield: Building | null) => void) => {
+      cb(this.getNearestAirfield(unit.x, unit.y, playerId))
     })
 
     // Fire at target — forwarded to Combat system via EntityManager event

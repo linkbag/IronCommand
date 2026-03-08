@@ -5,7 +5,7 @@
 
 import Phaser from 'phaser'
 import type { Player, GameState, FactionSide } from '../types'
-import { FogState, TILE_SIZE } from '../types'
+import { FogState, TILE_SIZE, LOW_POWER_PRODUCTION_MULT } from '../types'
 import { FACTIONS } from '../data/factions'
 import { UNIT_DEFS, getAvailableUnitIds } from '../entities/UnitDefs'
 import { BUILDING_DEFS, getAvailableBuildingIds, NEUTRAL_BUILDING_IDS, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
@@ -1240,6 +1240,10 @@ export class HUDScene extends Phaser.Scene {
 
     // Superweapon activation: if ready, enter target selection mode
     if (SUPERWEAPON_IDS.has(item.id) && this.superweaponReady.has(item.id)) {
+      if (this.isLowPowerState()) {
+        this.showAlert('Insufficient power: superweapon offline', 'danger')
+        return
+      }
       this.superweaponTargetMode = true
       this.superweaponActiveId = item.id
       this.ghost.setVisible(true)
@@ -1597,6 +1601,11 @@ export class HUDScene extends Phaser.Scene {
     }
     if (!ptr.leftButtonDown()) return
     if (ptr.x >= this.sidebarX) return
+    if (this.isLowPowerState()) {
+      this.showAlert('Superweapon offline: low power', 'danger')
+      this.exitSuperweaponTarget()
+      return
+    }
 
     const world = this.pointerScreenToCart(ptr.x, ptr.y)
     const worldX = world.x
@@ -2051,6 +2060,8 @@ export class HUDScene extends Phaser.Scene {
   }
 
   private tickSuperweapons(delta: number) {
+    const lowPower = this.isLowPowerState()
+
     // Check for newly placed superweapon buildings and start timers
     type E = { defId: string; playerId: number; isAlive: boolean }
     const em = this.registry.get('entityMgr') as { getAllEntities(): E[] } | undefined
@@ -2070,15 +2081,17 @@ export class HUDScene extends Phaser.Scene {
       }
     }
 
-    // Tick down active timers
-    for (const [defId, remaining] of this.superweaponTimers) {
-      const newRemaining = remaining - delta
-      if (newRemaining <= 0) {
-        this.superweaponTimers.delete(defId)
-        this.superweaponReady.add(defId)
-        this.showAlert(`${defId.replace(/_/g, ' ').toUpperCase()} READY!`, 'success')
-      } else {
-        this.superweaponTimers.set(defId, newRemaining)
+    // RA2 parity: superweapon countdown pauses while power is low.
+    if (!lowPower) {
+      for (const [defId, remaining] of this.superweaponTimers) {
+        const newRemaining = remaining - delta
+        if (newRemaining <= 0) {
+          this.superweaponTimers.delete(defId)
+          this.superweaponReady.add(defId)
+          this.showAlert(`${defId.replace(/_/g, ' ').toUpperCase()} READY!`, 'success')
+        } else {
+          this.superweaponTimers.set(defId, newRemaining)
+        }
       }
     }
 
@@ -2086,22 +2099,35 @@ export class HUDScene extends Phaser.Scene {
     for (const btn of this.buildBtns) {
       const id = btn._item.id
       if (!SUPERWEAPON_IDS.has(id)) continue
+      btn.setAlpha(1)
 
       const remaining = this.superweaponTimers.get(id)
       const ready = this.superweaponReady.has(id)
 
       if (remaining !== undefined) {
-        const secs = Math.ceil(remaining / 1000)
-        const min = Math.floor(secs / 60)
-        const sec = secs % 60
-        btn._readyTxt?.setText(`${min}:${sec.toString().padStart(2, '0')}`)
-        btn._readyTxt?.setColor('#ffdd44')
+        if (lowPower) {
+          btn._readyTxt?.setText('PWR')
+          btn._readyTxt?.setColor('#ff6666')
+        } else {
+          const secs = Math.ceil(remaining / 1000)
+          const min = Math.floor(secs / 60)
+          const sec = secs % 60
+          btn._readyTxt?.setText(`${min}:${sec.toString().padStart(2, '0')}`)
+          btn._readyTxt?.setColor('#ffdd44')
+        }
       } else if (ready) {
         // Pulse effect
-        const pulse = 0.7 + Math.sin(Date.now() / 200) * 0.3
-        btn._readyTxt?.setText('FIRE!')
-        btn._readyTxt?.setColor('#4ade80')
-        btn.setAlpha(pulse)
+        if (lowPower) {
+          btn._readyTxt?.setText('PWR')
+          btn._readyTxt?.setColor('#ff6666')
+        } else {
+          const pulse = 0.7 + Math.sin(Date.now() / 200) * 0.3
+          btn._readyTxt?.setText('FIRE!')
+          btn._readyTxt?.setColor('#4ade80')
+          btn.setAlpha(pulse)
+        }
+      } else {
+        btn._readyTxt?.setText('')
       }
     }
 
@@ -2110,8 +2136,6 @@ export class HUDScene extends Phaser.Scene {
       nuclear_silo: 'NUKE', weather_device: 'WEATHER',
       iron_curtain: 'CURTAIN', chronosphere: 'CHRONO',
     }
-    // Collect active superweapons (charging + ready)
-    const activeIds = [...this.superweaponTimers.keys(), ...this.superweaponReady]
     let idx = 0
     for (const defId of SUPERWEAPON_IDS) {
       const remaining = this.superweaponTimers.get(defId)
@@ -2134,19 +2158,28 @@ export class HUDScene extends Phaser.Scene {
       txt.setY(6 + idx * 18)
       const label = SW_LABELS[defId] ?? defId.toUpperCase()
       if (ready) {
-        const pulse = Math.sin(Date.now() / 200) > 0
-        txt.setText(`${label}: READY!`)
-        txt.setColor(pulse ? '#4ade80' : '#ffffff')
+        if (lowPower) {
+          txt.setText(`${label}: LOW POWER`)
+          txt.setColor('#ff6666')
+        } else {
+          const pulse = Math.sin(Date.now() / 200) > 0
+          txt.setText(`${label}: READY!`)
+          txt.setColor(pulse ? '#4ade80' : '#ffffff')
+        }
       } else if (remaining !== undefined) {
-        const secs = Math.ceil(remaining / 1000)
-        const min = Math.floor(secs / 60)
-        const sec = secs % 60
-        txt.setText(`${label}: ${min}:${sec.toString().padStart(2, '0')}`)
-        txt.setColor('#ffdd44')
+        if (lowPower) {
+          txt.setText(`${label}: PAUSED`)
+          txt.setColor('#ff6666')
+        } else {
+          const secs = Math.ceil(remaining / 1000)
+          const min = Math.floor(secs / 60)
+          const sec = secs % 60
+          txt.setText(`${label}: ${min}:${sec.toString().padStart(2, '0')}`)
+          txt.setColor('#ffdd44')
+        }
       }
       idx++
     }
-    void activeIds // suppress unused
   }
 
   private tickSelectedInfo() {
@@ -2377,12 +2410,16 @@ export class HUDScene extends Phaser.Scene {
     if (gs) gs.events.emit('cursorModeChanged', { mode })
   }
 
+  private isLowPowerState(player: Player | undefined = this.humanPlayer): boolean {
+    if (!player) return false
+    const generated = Math.max(0, player.powerGenerated)
+    const consumed = Math.max(0, player.powerConsumed)
+    return consumed > 0 && consumed > generated
+  }
+
   /** RA2: Production slows to 50% when power is low */
   private getPowerSpeedMultiplier(): number {
-    if (!this.humanPlayer) return 1
-    const { powerGenerated, powerConsumed } = this.humanPlayer
-    if (powerGenerated <= 0) return 0.5
-    return powerConsumed > powerGenerated ? 0.5 : 1.0
+    return this.isLowPowerState() ? LOW_POWER_PRODUCTION_MULT : 1.0
   }
 
   private pointerScreenToCart(screenX: number, screenY: number): { x: number; y: number } {

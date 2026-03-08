@@ -19,6 +19,13 @@ function adjustBrightness(color: number, amount: number): number {
   return (r << 16) | (g << 8) | b
 }
 
+const AIRCRAFT_REARM_PROFILE: Record<string, { ammo: number; rearmMs: number }> = {
+  harrier: { ammo: 1, rearmMs: 5500 },
+  black_eagle: { ammo: 2, rearmMs: 6500 },
+}
+const AIRFIELD_DOCK_RANGE = TILE_SIZE * 2
+const AIRFIELD_RETURN_RETRY_MS = 1200
+
 // Minimal scene interface — Agent 1 will provide the concrete implementation
 export interface IRTSScene extends Phaser.Scene {
   findPath?: (from: TileCoord, to: TileCoord, playerId?: number, unitId?: string) => TileCoord[]
@@ -83,6 +90,13 @@ export class Unit extends Phaser.GameObjects.Container {
   private unloadTimer: number
   private harvestCapacity: number
   private refineryId: string | null
+  private aircraftAmmo: number | null
+  private aircraftMaxAmmo: number
+  private aircraftRearmTimerMs: number
+  private aircraftReturningToAirfield: boolean
+  private aircraftRearming: boolean
+  private aircraftAirfieldId: string | null
+  private aircraftReturnRetryMs: number
 
   // Visuals
   facing = 0 // 0: NE, 1: SE, 2: SW, 3: NW
@@ -138,8 +152,22 @@ export class Unit extends Phaser.GameObjects.Container {
     this.unloadTimer = 0
     this.harvestCapacity = HARVESTER_CAPACITY
     this.refineryId = null
+    this.aircraftAmmo = null
+    this.aircraftMaxAmmo = 0
+    this.aircraftRearmTimerMs = 0
+    this.aircraftReturningToAirfield = false
+    this.aircraftRearming = false
+    this.aircraftAirfieldId = null
+    this.aircraftReturnRetryMs = 0
 
     this.isSelected = false
+
+    const aircraftRearm = AIRCRAFT_REARM_PROFILE[this.def.id]
+    if (aircraftRearm && this.def.category === 'aircraft' && this.def.attack) {
+      this.aircraftAmmo = aircraftRearm.ammo
+      this.aircraftMaxAmmo = aircraftRearm.ammo
+      this.aircraftRearmTimerMs = 0
+    }
 
     // ── Build visuals ───────────────────────────────────────────
     this.visualRoot = scene.add.container(0, 0)
@@ -344,6 +372,127 @@ export class Unit extends Phaser.GameObjects.Container {
     return this.state !== 'dying' && this.hp > 0
   }
 
+  private hasFiniteAircraftAmmo(): boolean {
+    return this.aircraftAmmo !== null
+  }
+
+  private canUsePrimaryWeapon(): boolean {
+    if (!this.def.attack) return false
+    if (!this.hasFiniteAircraftAmmo()) return true
+    return !this.aircraftRearming
+      && !this.aircraftReturningToAirfield
+      && (this.aircraftAmmo ?? 0) > 0
+  }
+
+  private beginReturnToAirfield(): void {
+    if (!this.hasFiniteAircraftAmmo()) return
+    if (this.aircraftRearming || this.aircraftReturnRetryMs > 0) return
+
+    this.emit('find_airfield', this.playerId, (airfield: IEntityRef | null) => {
+      if (!airfield) {
+        this.aircraftReturningToAirfield = false
+        this.aircraftAirfieldId = null
+        this.aircraftReturnRetryMs = AIRFIELD_RETURN_RETRY_MS
+        this.target = null
+        this.currentOrder = null
+        this.path = []
+        this.state = 'idle'
+        return
+      }
+
+      this.aircraftAirfieldId = airfield.id
+      this.aircraftReturningToAirfield = true
+      this.target = null
+      this.orders = []
+
+      const dist = Phaser.Math.Distance.Between(this.x, this.y, airfield.x, airfield.y)
+      if (dist <= AIRFIELD_DOCK_RANGE) {
+        this.startAircraftRearm()
+        return
+      }
+
+      const target = { x: airfield.x, y: airfield.y }
+      this.currentOrder = { type: 'move', target }
+      this.startMoveTo(target)
+    })
+  }
+
+  private startAircraftRearm(): void {
+    if (!this.hasFiniteAircraftAmmo()) return
+    const profile = AIRCRAFT_REARM_PROFILE[this.def.id]
+    if (!profile) return
+
+    this.aircraftRearming = true
+    this.aircraftReturningToAirfield = false
+    this.aircraftRearmTimerMs = profile.rearmMs
+    this.attackCooldown = 0
+    this.target = null
+    this.orders = []
+    this.currentOrder = null
+    this.path = []
+    this.state = 'idle'
+  }
+
+  private onAircraftWeaponFired(): void {
+    if (!this.hasFiniteAircraftAmmo()) return
+    this.aircraftAmmo = Math.max(0, (this.aircraftAmmo ?? 0) - 1)
+    if ((this.aircraftAmmo ?? 0) <= 0) {
+      this.beginReturnToAirfield()
+    }
+  }
+
+  private updateAircraftRearmState(delta: number): void {
+    if (!this.hasFiniteAircraftAmmo()) return
+
+    this.aircraftReturnRetryMs = Math.max(0, this.aircraftReturnRetryMs - delta)
+
+    if (this.aircraftRearming) {
+      this.aircraftRearmTimerMs = Math.max(0, this.aircraftRearmTimerMs - delta)
+      if (this.aircraftRearmTimerMs <= 0) {
+        this.aircraftAmmo = this.aircraftMaxAmmo
+        this.aircraftRearming = false
+        this.aircraftReturningToAirfield = false
+        this.aircraftAirfieldId = null
+        this.state = 'idle'
+      }
+      return
+    }
+
+    if ((this.aircraftAmmo ?? 0) > 0) return
+
+    if (!this.aircraftAirfieldId) {
+      if (this.aircraftReturnRetryMs <= 0) this.beginReturnToAirfield()
+      return
+    }
+
+    this.emit('get_entity_pos', this.aircraftAirfieldId, (pos: Position | null) => {
+      if (!pos) {
+        this.aircraftReturningToAirfield = false
+        this.aircraftAirfieldId = null
+        this.aircraftReturnRetryMs = AIRFIELD_RETURN_RETRY_MS
+        this.currentOrder = null
+        this.path = []
+        this.state = 'idle'
+        return
+      }
+
+      const dist = Phaser.Math.Distance.Between(this.x, this.y, pos.x, pos.y)
+      if (dist <= AIRFIELD_DOCK_RANGE) {
+        this.startAircraftRearm()
+        return
+      }
+
+      if (!this.aircraftReturningToAirfield || this.state !== 'moving') {
+        const target = { x: pos.x, y: pos.y }
+        this.aircraftReturningToAirfield = true
+        this.target = null
+        this.orders = []
+        this.currentOrder = { type: 'move', target }
+        this.startMoveTo(target)
+      }
+    })
+  }
+
   // ── Main update loop ─────────────────────────────────────────
 
   update(delta: number): void {
@@ -380,6 +529,12 @@ export class Unit extends Phaser.GameObjects.Container {
       this.heal((delta / 1000) * 4)
     }
 
+    this.updateAircraftRearmState(delta)
+    if (this.aircraftRearming) {
+      this.syncRenderTransform()
+      return
+    }
+
     switch (this.state) {
       case 'idle':
         this.updateIdle()
@@ -387,7 +542,7 @@ export class Unit extends Phaser.GameObjects.Container {
       case 'moving':
         this.updateMovement(delta)
         // Auto-attack while moving (RA2-style: units fire on the move)
-        if (this.def.attack && this.attackCooldown <= 0) {
+        if (this.canUsePrimaryWeapon() && this.attackCooldown <= 0) {
           this.tryFireWhileMoving()
         }
         break
@@ -678,7 +833,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
   /** Fire at nearby enemies while moving — doesn't stop movement */
   private tryFireWhileMoving(): void {
-    if (!this.def.attack) return
+    if (!this.canUsePrimaryWeapon()) return
     const rangePixels = this.getEffectiveAttackRangePixels()
 
     this.emit('find_enemy', this.x, this.y, rangePixels, this.playerId, (enemies: IEntityRef[]) => {
@@ -696,6 +851,7 @@ export class Unit extends Phaser.GameObjects.Container {
         this.playWeaponEffect(nearest.x, nearest.y)
         this.updateTurretFacingFromVector(nearest.x - this.x, nearest.y - this.y)
         this.attackCooldown = 1 / this.def.attack!.fireRate
+        this.onAircraftWeaponFired()
       }
     })
   }
@@ -753,6 +909,10 @@ export class Unit extends Phaser.GameObjects.Container {
       this.state = 'idle'
       return
     }
+    if (!this.canUsePrimaryWeapon()) {
+      this.beginReturnToAirfield()
+      return
+    }
 
     // Validate target still alive
     if (!this.target || this.target.hp <= 0) {
@@ -808,10 +968,16 @@ export class Unit extends Phaser.GameObjects.Container {
       this.attackCooldown = cooldown
       this.emit('fire_at_target', this, this.target)
       this.playWeaponEffect(this.target.x, this.target.y)
+      this.onAircraftWeaponFired()
     }
   }
 
   private updateAttackMove(): boolean {
+    if (!this.canUsePrimaryWeapon()) {
+      this.beginReturnToAirfield()
+      return false
+    }
+
     const unitTarget = this.findNearbyEnemyUnit()
     if (unitTarget) {
       this.target = unitTarget
@@ -830,7 +996,7 @@ export class Unit extends Phaser.GameObjects.Container {
   }
 
   private findNearbyEnemy(): IEntityRef | null {
-    if (!this.def.attack) return null
+    if (!this.canUsePrimaryWeapon()) return null
     const rangePixels = this.getEffectiveAttackRangePixels()
     let nearest: IEntityRef | null = null
     let nearestDist = Infinity
@@ -851,7 +1017,7 @@ export class Unit extends Phaser.GameObjects.Container {
   }
 
   private findNearbyEnemyUnit(): IEntityRef | null {
-    if (!this.def.attack) return null
+    if (!this.canUsePrimaryWeapon()) return null
     const rangePixels = this.getEffectiveAttackRangePixels()
     let nearest: IEntityRef | null = null
     let nearestDist = Infinity
@@ -873,7 +1039,7 @@ export class Unit extends Phaser.GameObjects.Container {
   }
 
   private findNearbyEnemyBuilding(): IEntityRef | null {
-    if (!this.def.attack) return null
+    if (!this.canUsePrimaryWeapon()) return null
     const rangePixels = this.getEffectiveAttackRangePixels()
     let nearest: IEntityRef | null = null
     let nearestDist = Infinity
@@ -897,10 +1063,12 @@ export class Unit extends Phaser.GameObjects.Container {
   }
 
   private canAttackEntityRef(target: IEntityRef): boolean {
-    if (!this.def.attack) return false
+    if (!this.canUsePrimaryWeapon()) return false
+    const attack = this.def.attack
+    if (!attack) return false
     const targetCategory = (target as { def?: { category?: string } }).def?.category
     const isAir = targetCategory === 'aircraft'
-    return isAir ? this.def.attack.canAttackAir : this.def.attack.canAttackGround
+    return isAir ? attack.canAttackAir : attack.canAttackGround
   }
 
   private getEffectiveAttackRangePixels(): number {
@@ -1019,7 +1187,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
   private updateIdle(): void {
     // Auto-acquire targets when idle (all units auto-engage by default)
-    if (this.def.attack && this.orders.length === 0) {
+    if (this.canUsePrimaryWeapon() && this.orders.length === 0) {
       const nearbyEnemy = this.findNearbyEnemy()
       if (nearbyEnemy) {
         this.target = nearbyEnemy
@@ -1039,7 +1207,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
   private canAttackTarget(target: IEntityRef): boolean {
     const attack = this.def.attack
-    if (!attack) return false
+    if (!attack || !this.canUsePrimaryWeapon()) return false
 
     const category = target.def?.category ?? 'vehicle'
     const isAir = category === 'aircraft'
