@@ -8,7 +8,7 @@ import type { EntityManager } from '../entities/EntityManager'
 import type { Economy } from '../economy/Economy'
 import type { Production } from '../economy/Production'
 import type { GameState, FactionSide, FactionId } from '../types'
-import { TILE_SIZE } from '../types'
+import { TILE_SIZE, TerrainType } from '../types'
 import { UNIT_DEFS, getBasicInfantryDefId, getMainTankDefId, getHarvesterDefId, getFactionUnitIds } from '../entities/UnitDefs'
 import { BUILDING_DEFS, NEUTRAL_BUILDING_IDS, getPowerBuildingDefId } from '../entities/BuildingDefs'
 import { FACTIONS } from '../data/factions'
@@ -45,6 +45,12 @@ type TargetChoice = {
   x: number
   y: number
   entityId?: string
+}
+
+type ResourceHotspot = {
+  x: number
+  y: number
+  score: number
 }
 
 // ── Constants ──────────────────────────────────────────────────
@@ -138,6 +144,31 @@ const DANGER_ZONE_TTL_MS = 120000
 const DANGER_ZONE_DECAY_PER_TICK = 0.93
 const FOCUS_FIRE_INTERVAL_MS = 900
 const MAP_CONTROL_INTERVAL_MS = 15000
+const CREDIT_FLOAT_SOFT_THRESHOLD = 1400
+const CREDIT_FLOAT_HARD_THRESHOLD = 4200
+const CREDIT_RESERVE_TARGET: Record<AIDifficulty, number> = {
+  easy: 900,
+  medium: 650,
+  hard: 450,
+}
+const RESOURCE_CLUSTER_RADIUS_TILES = 4
+const RESOURCE_HOTSPOT_CACHE_MS = 8000
+const RESOURCE_REBALANCE_INTERVAL_MS = 6000
+const RESOURCE_REASSIGN_COOLDOWN_MS = 9000
+const RESOURCE_NEARBY_SCAN_RADIUS_TILES = 3
+const RESOURCE_RETASK_DISTANCE_TILES = 6
+const RESOURCE_HARVESTER_SATURATION_WEIGHT = 450
+const RESOURCE_NEARBY_VALUE_THRESHOLD = 950
+const RESOURCE_RETASK_BETTER_RATIO = 1.35
+const RESOURCE_RETASK_BETTER_FLAT = 750
+const RESOURCE_REMOTE_EXPANSION_SCORE_THRESHOLD = 5500
+const RESOURCE_REMOTE_EXPANSION_COUNT_THRESHOLD = 2
+const RESOURCE_HOTSPOT_TRACK_LIMIT = 20
+const HUNT_INTERVAL_MS: Record<AIDifficulty, number> = {
+  easy: 18000,
+  medium: 13000,
+  hard: 9000,
+}
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -213,6 +244,13 @@ export class AI {
   private unitKiteUntilMs: Map<string, number>
   private antiAirEmergencyUntilMs: number
   private lastEmergencySellMs: number
+  private resourceRebalanceTimer: number
+  private huntTimer: number
+  private harvesterReassignUntilMs: Map<string, number>
+  private huntRetaskUntilMs: Map<string, number>
+  private huntSweepIndex: number
+  private resourceHotspotCache: ResourceHotspot[]
+  private resourceHotspotCacheUntilMs: number
 
   private static readonly SW_COOLDOWNS: Record<string, number> = {
     nuclear_silo: 300000,
@@ -280,6 +318,13 @@ export class AI {
     this.unitKiteUntilMs = new Map()
     this.antiAirEmergencyUntilMs = 0
     this.lastEmergencySellMs = -EMERGENCY_SELL_COOLDOWN_MS
+    this.resourceRebalanceTimer = 0
+    this.huntTimer = 0
+    this.harvesterReassignUntilMs = new Map()
+    this.huntRetaskUntilMs = new Map()
+    this.huntSweepIndex = 0
+    this.resourceHotspotCache = []
+    this.resourceHotspotCacheUntilMs = 0
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -300,6 +345,8 @@ export class AI {
     this.focusFireTimer += delta
     this.mapControlTimer += delta
     this.matchTimer += delta
+    this.resourceRebalanceTimer += delta
+    this.huntTimer += delta
     this.updateEconomyTelemetry(delta)
 
     this.updatePendingWave(delta)
@@ -321,22 +368,26 @@ export class AI {
     this.updatePhase()
     this.updateBattlefieldIntel(gameState)
     this.assessEnemyComposition(gameState)
-    this.ensureHarvesting(gameState)
-    this.protectHarvesters(gameState)
-    this.microSpecialUnits(gameState)
-    this.handleAntiAirResponse(gameState)
 
     if (this.handleLastStand(gameState)) return
 
     this.updateAttackGroups()
     this.retreatDamagedUnits()
     this.defendBase(gameState)
-    this.followTechTree(gameState)
-    this.expandEconomy(gameState)
-    this.buildDefenses()
-    this.buildArmy(gameState)
+
+    // Strategic priority ladder:
+    // 1) Spend available credits aggressively.
+    // 2) Exhaust ore/gem resources via expansion + harvester reassignment.
+    // 3) Keep all production categories under queue pressure.
+    // 4) Scale offense by army strength/timing to destroy all enemies.
+    // 5) Hunt/scout the map when no actionable target exists.
+    this.executePriorityLadder(gameState)
+
+    this.protectHarvesters(gameState)
+    this.microSpecialUnits(gameState)
+    this.handleAntiAirResponse(gameState)
+
     this.considerHarassment(gameState)
-    this.considerAttacking(gameState)
     this.contestMapControl(gameState)
     this.rebuildDestroyedBuildings(gameState)
 
@@ -347,6 +398,26 @@ export class AI {
       // Superweapon management (medium/hard only)
     if (this.difficulty !== 'easy') {
       this.tickSuperweapons(gameState)
+    }
+  }
+
+  private executePriorityLadder(gameState: GameState): void {
+    // Priority 1: spend credits aggressively without bypassing prerequisite checks.
+    this.followTechTree(gameState)
+    this.expandEconomy(gameState)
+    this.buildDefenses()
+    this.spendFloatingCredits(gameState)
+
+    // Priority 2: deplete map resources by keeping harvesters working rich fields.
+    this.ensureHarvesting(gameState)
+    this.rebalanceHarvesterAssignments(gameState)
+
+    // Priority 3: pressure all production categories continuously.
+    this.buildArmy(gameState)
+
+    // Priority 4 + 5: attack if targets exist; otherwise send map hunt sweeps.
+    if (!this.considerAttacking(gameState)) {
+      this.issueHuntOrders(gameState)
     }
   }
 
@@ -453,30 +524,37 @@ export class AI {
     const harvesters = this.em.getUnitsForPlayer(this.playerId).filter(
       u => u.def.category === 'harvester' && u.state !== 'dying',
     )
+    const hotspots = this.getResourceHotspots(gameState, 10)
 
     const refineries = this.em.getBuildingsForPlayer(this.playerId).filter(
-      b => b.def.id === 'ore_refinery' && b.state === 'active',
+      b => b.def.id === 'ore_refinery' && (b.state === 'active' || b.state === 'low_power'),
     )
+    const remotePressure = this.getRemoteResourcePressure(hotspots, refineries)
 
-    const perRefTarget = this.difficulty === 'hard' ? 3 : 2
-    const desiredHarvesters = Math.max(2, refineries.length * perRefTarget)
+    const perRefTarget = this.difficulty === 'hard' ? 4 : 3
+    const hotspotBonus = Math.min(3, Math.floor(hotspots.length / 3))
+    const remoteBonus = Math.min(3, remotePressure.uncoveredCount)
+    const desiredHarvesters = Math.max(2, refineries.length * perRefTarget + hotspotBonus + remoteBonus)
     const openingNeedsSecondHarvester =
       this.matchTimer <= OPENING_SECOND_HARVESTER_DEADLINE_MS &&
       harvesters.length < 2 &&
       this.hasActiveBuilding('ore_refinery')
 
     if (openingNeedsSecondHarvester && !this.openingHarvesterQueued) {
-      this.openingHarvesterQueued = this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState)
+      this.openingHarvesterQueued = this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState, 5)
     } else if (harvesters.length < desiredHarvesters) {
-      this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState)
+      this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState, 5)
     }
 
     for (const h of harvesters) {
       if (h.state !== 'idle') continue
-      h.emit('find_ore_field', h.x, h.y, (target: { x: number; y: number } | null) => {
-        if (target) {
-          h.giveOrder({ type: 'harvest', target })
-        }
+      const target = this.pickBestResourceHotspotForHarvester(h, hotspots, harvesters)
+      if (target) {
+        h.giveOrder({ type: 'harvest', target: { x: target.x, y: target.y } })
+        continue
+      }
+      h.emit('find_ore_field', h.x, h.y, (nearest: { x: number; y: number } | null) => {
+        if (nearest) h.giveOrder({ type: 'harvest', target: nearest })
       })
     }
 
@@ -489,17 +567,24 @@ export class AI {
 
   private expandEconomy(gameState: GameState): void {
     const credits = this.economy.getCredits(this.playerId)
-    const refCount = this.countBuildings('ore_refinery')
+    const refineries = this.em.getBuildingsForPlayer(this.playerId).filter(
+      b => b.def.id === 'ore_refinery' && b.state !== 'dying',
+    )
+    const refCount = refineries.length
+    const hotspots = this.getResourceHotspots(gameState, 12)
+    const remotePressure = this.getRemoteResourcePressure(hotspots, refineries)
     const baseMaxRef = this.difficulty === 'hard' ? 5 : this.difficulty === 'medium' ? 4 : 3
-    const maxRef = this.enemyIsTurtling ? baseMaxRef + 1 : baseMaxRef
+    const dynamicRemoteCap = Math.min(3, Math.floor(remotePressure.uncoveredCount / 2))
+    const maxRef = Math.min(8, baseMaxRef + dynamicRemoteCap + (this.enemyIsTurtling ? 1 : 0))
     if (refCount >= maxRef || !this.hasActiveBuilding('construction_yard')) return
 
     const armyReady = this.getCombatUnits().length >= (this.difficulty === 'hard' ? 8 : 6)
     const baseOreDepleted = this.isBaseOreRunningLow()
     const timedExpansion = this.shouldExpandByTime()
-    const ecoFloating = this.incomePerMinute > this.spendingPerMinute && credits > 2500
+    const remoteHotspotPressure = this.shouldExpandForRemoteResources(gameState, hotspots, refineries, remotePressure)
+    const ecoFloating = this.incomePerMinute > this.spendingPerMinute && credits > CREDIT_FLOAT_SOFT_THRESHOLD
     const ecoStrained = this.incomePerMinute > 0 && this.incomePerMinute < this.spendingPerMinute
-    const needMoreHarvesters = this.shouldPrioritizeHarvesters()
+    const needMoreHarvesters = this.shouldPrioritizeHarvesters(gameState, hotspots, refineries, remotePressure)
 
     if (ecoStrained && needMoreHarvesters) {
       this.queueUnitIfPossible(getHarvesterDefId(this.side), gameState)
@@ -507,8 +592,8 @@ export class AI {
     }
 
     const shouldExpand =
-      (baseOreDepleted || timedExpansion || (ecoFloating && credits > 3200) || credits > HIGH_CREDIT_THRESHOLD) &&
-      (armyReady || credits > HIGH_CREDIT_THRESHOLD)
+      (baseOreDepleted || timedExpansion || remoteHotspotPressure || (ecoFloating && credits > 3200) || credits > HIGH_CREDIT_THRESHOLD) &&
+      (armyReady || credits > HIGH_CREDIT_THRESHOLD || remoteHotspotPressure)
 
     if (!shouldExpand) return
 
@@ -740,6 +825,44 @@ export class AI {
     }
   }
 
+  private spendFloatingCredits(gameState: GameState): void {
+    const credits = this.economy.getCredits(this.playerId)
+    const reserve = this.getCreditReserveTarget()
+    const overflow = credits - reserve
+    const mildFloat = overflow > 0
+    const severeFloat = overflow > CREDIT_FLOAT_SOFT_THRESHOLD
+
+    if (this.needsMorePower()) {
+      this.buildExtraPower()
+    }
+
+    if (mildFloat && this.hasActiveBuilding('construction_yard')) {
+      const warFactoryTarget = this.difficulty === 'hard' ? 3 : 2
+      const barracksTarget = this.difficulty === 'hard' ? 2 : 1
+      const midTechId = this.side === 'alliance' ? 'air_force_command' : 'radar_tower'
+
+      if (this.shouldExpandForRemoteResources(gameState) && this.tryBuildBuilding('ore_refinery', true)) {
+        // Prefer economy spend first when resource pressure is present.
+      } else if (this.countBuildings('war_factory') < warFactoryTarget) {
+        this.tryBuildBuilding('war_factory', true)
+      } else if (this.countBuildings('barracks') < barracksTarget) {
+        this.tryBuildBuilding('barracks', true)
+      } else if (this.hasActiveBuilding(midTechId) && this.countBuildings(midTechId) < 2) {
+        this.tryBuildBuilding(midTechId, true)
+      } else {
+        this.tryBuildBuilding('ore_refinery', true)
+      }
+    }
+
+    const queueDepth = severeFloat ? 5 : mildFloat ? 4 : 3
+    const queueBudget = severeFloat
+      ? (this.difficulty === 'hard' ? 14 : 10)
+      : mildFloat
+        ? (this.difficulty === 'hard' ? 9 : 6)
+        : (this.difficulty === 'hard' ? 6 : 4)
+    this.applyQueuePressureByCategory(gameState, queueDepth, queueBudget)
+  }
+
   // ── Base defense reaction ────────────────────────────────────
 
   private defendBase(gameState: GameState): void {
@@ -795,31 +918,131 @@ export class AI {
   private buildArmy(gameState: GameState): void {
     const combatUnits = this.getCombatUnits()
     const emergencySpend = this.shouldEmergencySpendOnArmy(gameState)
-    if (!emergencySpend && combatUnits.length >= MAX_ARMY[this.difficulty]) return
+    const credits = this.economy.getCredits(this.playerId)
+    const armyCap = this.getDynamicArmyCap(credits)
+    const aggressiveOverflowSpend = credits > this.getCreditReserveTarget() + 500
+    if (!emergencySpend && combatUnits.length >= armyCap && !aggressiveOverflowSpend) return
 
-    // AI should continuously build and spend credits — queue multiple units per tick
-    // Queue units from all available production buildings simultaneously
     const maxQueuePerTick = emergencySpend
-      ? (this.difficulty === 'hard' ? 8 : 6)
-      : this.difficulty === 'hard' ? 5 : this.difficulty === 'medium' ? 3 : 2
-    let queued = 0
+      ? (this.difficulty === 'hard' ? 12 : 8)
+      : this.difficulty === 'hard' ? 7 : this.difficulty === 'medium' ? 5 : 3
+    const queueDepth = emergencySpend
+      ? 4
+      : credits >= CREDIT_FLOAT_HARD_THRESHOLD ? 4 : credits >= CREDIT_FLOAT_SOFT_THRESHOLD ? 3 : 2
 
-    for (let i = 0; i < maxQueuePerTick; i++) {
+    // Keep each production category busy first (barracks/war factory/air/naval/refinery).
+    let queued = this.applyQueuePressureByCategory(gameState, queueDepth, maxQueuePerTick)
+    if (!emergencySpend && combatUnits.length + queued >= armyCap && !aggressiveOverflowSpend) return
+
+    const burstTries = Math.max(0, maxQueuePerTick - queued)
+    for (let i = 0; i < burstTries; i++) {
       const unitToBuild = this.chooseUnitToBuild()
       if (!unitToBuild) break
-
-      const player = gameState.players.find(p => p.id === this.playerId)
       const unitDef = UNIT_DEFS[unitToBuild]
-      if (!player || !unitDef || player.credits < unitDef.stats.cost) break
+      if (!unitDef || this.economy.getCredits(this.playerId) < unitDef.stats.cost) break
 
-      if (this.queueUnitIfPossible(unitToBuild, gameState)) {
+      if (this.queueUnitIfPossible(unitToBuild, gameState, queueDepth)) {
         queued++
-        // Don't let credits sit idle — keep spending
-        if (!emergencySpend && combatUnits.length + queued >= MAX_ARMY[this.difficulty]) break
+        if (!emergencySpend && combatUnits.length + queued >= armyCap && !aggressiveOverflowSpend) break
       } else {
         break
       }
     }
+  }
+
+  private getDynamicArmyCap(credits: number): number {
+    const base = MAX_ARMY[this.difficulty]
+    const creditBonus = Math.min(14, Math.floor(Math.max(0, credits - CREDIT_FLOAT_SOFT_THRESHOLD) / 1500))
+    const timeBonus = Math.min(12, Math.floor(this.matchTimer / 240000))
+    return base + creditBonus + timeBonus
+  }
+
+  private applyQueuePressureByCategory(
+    gameState: GameState,
+    queueDepth: number,
+    maxQueueAdds: number,
+  ): number {
+    if (maxQueueAdds <= 0) return 0
+    let queued = 0
+    const producers = this.getQueuePressureProducers()
+    for (const producer of producers) {
+      while (producer.productionQueue.length < queueDepth && queued < maxQueueAdds) {
+        const nextUnit = this.chooseUnitForProducer(producer.def.id)
+        if (!nextUnit) break
+        if (!this.queueUnitAtProducerIfPossible(producer, nextUnit, gameState, queueDepth)) break
+        queued++
+      }
+      if (queued >= maxQueueAdds) break
+    }
+    return queued
+  }
+
+  private getQueuePressureProducers(): Building[] {
+    const supported = new Set(['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery'])
+    return this.em.getBuildingsForPlayer(this.playerId)
+      .filter(b => supported.has(b.def.id) && (b.state === 'active' || b.state === 'low_power'))
+      .sort((a, b) => a.productionQueue.length - b.productionQueue.length)
+  }
+
+  private chooseUnitForProducer(producerDefId: string): string | null {
+    const basicInf = getBasicInfantryDefId(this.side)
+    const mainTank = getMainTankDefId(this.side)
+
+    if (this.matchTimer < this.antiAirEmergencyUntilMs) {
+      const emergencyAA = this.chooseEmergencyAntiAirUnit()
+      const producerCategory = producerDefId === 'barracks'
+        ? 'infantry'
+        : producerDefId === 'war_factory'
+          ? 'vehicle'
+          : producerDefId === 'air_force_command'
+            ? 'aircraft'
+            : null
+      if (producerCategory && emergencyAA && UNIT_DEFS[emergencyAA]?.category === producerCategory) {
+        return emergencyAA
+      }
+    }
+
+    if (producerDefId === 'ore_refinery') {
+      const harvesters = this.countUnitsByCategory('harvester')
+      const refs = Math.max(1, this.countBuildings('ore_refinery'))
+      const softHarvesterCap = refs * (this.difficulty === 'hard' ? 4 : 3)
+      if (harvesters >= softHarvesterCap && this.economy.getCredits(this.playerId) < CREDIT_FLOAT_SOFT_THRESHOLD) {
+        return null
+      }
+      return this.canProduceUnit(getHarvesterDefId(this.side)) ? getHarvesterDefId(this.side) : null
+    }
+    if (producerDefId === 'barracks') {
+      return this.pickUnitFromPoolByCategory('infantry') ?? (this.canProduceUnit(basicInf) ? basicInf : null)
+    }
+    if (producerDefId === 'war_factory') {
+      return this.pickUnitFromPoolByCategory('vehicle') ?? (this.canProduceUnit(mainTank) ? mainTank : null)
+    }
+    if (producerDefId === 'air_force_command') {
+      return this.pickUnitFromPoolByCategory('aircraft')
+    }
+    if (producerDefId === 'naval_shipyard') {
+      return this.pickUnitFromPoolByCategory('naval')
+    }
+    return null
+  }
+
+  private pickUnitFromPoolByCategory(category: 'infantry' | 'vehicle' | 'aircraft' | 'naval'): string | null {
+    const pool = this.buildUnitPool().filter(id => UNIT_DEFS[id]?.category === category)
+    if (pool.length === 0) return null
+    return pool[randomInt(0, pool.length - 1)] ?? null
+  }
+
+  private queueUnitAtProducerIfPossible(
+    producer: Building,
+    defId: string,
+    gameState: GameState,
+    maxQueueDepth: number,
+  ): boolean {
+    const def = UNIT_DEFS[defId]
+    if (!def) return false
+    if (producer.productionQueue.length >= maxQueueDepth) return false
+    if (this.economy.getCredits(this.playerId) < def.stats.cost) return false
+    return this.production.queueProduction(this.playerId, producer.id, defId, gameState)
   }
 
   private chooseUnitToBuild(): string | null {
@@ -1091,30 +1314,41 @@ export class AI {
 
   // ── Attack logic ─────────────────────────────────────────────
 
-  private considerAttacking(gameState: GameState): void {
-    if (this.pendingWave) return
+  private considerAttacking(gameState: GameState): boolean {
+    if (this.pendingWave) return true
 
     const combatUnits = this.getCombatUnits()
     if (combatUnits.length === 0) {
       this.isAttacking = false
-      return
+      return false
     }
 
-    if (this.matchTimer < FIRST_ATTACK_MS[this.difficulty]) return
-    if (this.matchTimer < this.rebuildUntilMs) return
-    if (this.attackTimer < this.nextAttackWindowMs) return
-
     const target = this.findAttackTarget(gameState)
-    if (!target) return
+    if (!target) return false
+
+    const armyStrength = this.getArmyStrengthScore(combatUnits)
+    const requiredStrength = this.getRequiredAttackStrength()
+    const firstAttackGate = FIRST_ATTACK_MS[this.difficulty]
+    const scaledFirstAttackGate = armyStrength >= requiredStrength * 1.35
+      ? Math.floor(firstAttackGate * 0.75)
+      : firstAttackGate
+
+    if (this.matchTimer < scaledFirstAttackGate) return true
+    if (this.matchTimer < this.rebuildUntilMs) return true
+
+    const cooldownScale = this.getAttackCooldownScale(armyStrength, combatUnits.length, requiredStrength)
+    const requiredCooldownMs = Math.max(10000, Math.floor(this.nextAttackWindowMs * cooldownScale))
+    if (armyStrength < requiredStrength && this.attackTimer < Math.floor(requiredCooldownMs * 1.15)) return true
+    if (this.attackTimer < requiredCooldownMs) return true
 
     const waveSizeTarget = this.getScaledWaveSize(combatUnits.length)
-    if (waveSizeTarget <= 0) return
+    if (waveSizeTarget <= 0) return true
 
     const waveUnits = this.pickWaveUnits(combatUnits, waveSizeTarget)
-    if (waveUnits.length === 0) return
+    if (waveUnits.length === 0) return true
     const fallback = this.getFallbackPosition()
     if (fallback && waveUnits.length < 7 && this.isRouteHighRisk(fallback, target)) {
-      return
+      return true
     }
 
     const waveId = this.nextWaveId++
@@ -1153,6 +1387,36 @@ export class AI {
     console.log(
       `[AI] Player ${this.playerId} staged attack (${waveUnits.length} units, ${groups.length} prong(s), wave ${waveId})`,
     )
+    return true
+  }
+
+  private getArmyStrengthScore(units: Unit[]): number {
+    let score = 0
+    for (const u of units) {
+      score += 1
+      if (u.def.category === 'vehicle' || u.def.category === 'aircraft' || u.def.category === 'naval') {
+        score += 0.35
+      }
+      score += u.veterancy * 0.2
+      score += (u.hp / Math.max(1, u.def.stats.maxHp)) * 0.15
+    }
+    return score
+  }
+
+  private getRequiredAttackStrength(): number {
+    const base = this.difficulty === 'easy' ? 4.5 : this.difficulty === 'medium' ? 6.25 : 8
+    const timeDrop = Math.min(2, Math.floor(this.matchTimer / 360000))
+    return Math.max(3.5, base - timeDrop)
+  }
+
+  private getAttackCooldownScale(armyStrength: number, unitCount: number, requiredStrength: number): number {
+    let scale = 1
+    if (armyStrength >= requiredStrength * 1.15) scale -= 0.18
+    if (unitCount >= MAX_ARMY[this.difficulty] * 0.75) scale -= 0.15
+    if (this.economy.getCredits(this.playerId) >= CREDIT_FLOAT_HARD_THRESHOLD) scale -= 0.12
+    if (this.matchTimer >= 600000) scale -= 0.08
+    if (armyStrength < requiredStrength * 0.9) scale += 0.12
+    return clamp(scale, 0.58, 1.3)
   }
 
   private updatePendingWave(delta: number): void {
@@ -1184,7 +1448,10 @@ export class AI {
     const dynamicMin = Math.min(cfg.max, cfg.min + Math.floor((cfg.max - cfg.min) * growth))
     const dynamicMax = Math.min(cfg.max, dynamicMin + Math.max(2, Math.floor((cfg.max - cfg.min) * 0.35)))
     const requested = randomInt(dynamicMin, dynamicMax)
-    return Math.min(available, requested)
+    const pressureBonus = this.economy.getCredits(this.playerId) >= CREDIT_FLOAT_HARD_THRESHOLD ? 2 : 0
+    const capPressureBonus = available >= MAX_ARMY[this.difficulty] * 0.8 ? 2 : 0
+    const totalRequested = requested + pressureBonus + capPressureBonus
+    return Math.min(available, totalRequested)
   }
 
   private buildAttackGroups(
@@ -1330,15 +1597,26 @@ export class AI {
   private findAttackTarget(gameState: GameState): TargetChoice | null {
     const allEnemyBuildings: Building[] = []
     const enemyHarvesters: Unit[] = []
+    const enemyCombatUnits: Unit[] = []
+    const enemySupportUnits: Unit[] = []
     for (const p of gameState.players) {
       if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
       allEnemyBuildings.push(
         ...this.em.getBuildingsForPlayer(p.id).filter(b => b.state !== 'dying'),
       )
-      enemyHarvesters.push(
-        ...this.em.getUnitsForPlayer(p.id).filter(u => u.state !== 'dying' && u.def.category === 'harvester'),
-      )
+      for (const u of this.em.getUnitsForPlayer(p.id)) {
+        if (u.state === 'dying') continue
+        if (u.def.category === 'harvester') {
+          enemyHarvesters.push(u)
+        } else if (u.def.attack) {
+          enemyCombatUnits.push(u)
+        } else {
+          enemySupportUnits.push(u)
+        }
+      }
     }
+
+    const ownAnchor = this.getFallbackPosition()
 
     // Economy starvation: harvesters first when available.
     if (enemyHarvesters.length > 0 && this.difficulty !== 'easy') {
@@ -1348,10 +1626,6 @@ export class AI {
       const h = sortedHarvesters[0]
       return { x: h.x, y: h.y, entityId: h.id }
     }
-
-    if (allEnemyBuildings.length === 0) return null
-
-    const ownAnchor = this.getFallbackPosition()
     let best: Building | null = null
     let bestScore = -Infinity
 
@@ -1372,8 +1646,41 @@ export class AI {
       }
     }
 
-    if (!best) return null
-    return { x: best.x, y: best.y, entityId: best.id }
+    if (best) {
+      return { x: best.x, y: best.y, entityId: best.id }
+    }
+
+    const unitFallback = this.pickEnemyUnitTarget([...enemyCombatUnits, ...enemySupportUnits], ownAnchor)
+    if (unitFallback) {
+      return { x: unitFallback.x, y: unitFallback.y, entityId: unitFallback.id }
+    }
+
+    return null
+  }
+
+  private pickEnemyUnitTarget(units: Unit[], ownAnchor: { x: number; y: number } | null): Unit | null {
+    if (units.length === 0) return null
+    return units
+      .slice()
+      .sort((a, b) => {
+        const as = this.getEnemyUnitStrategicValue(a, ownAnchor)
+        const bs = this.getEnemyUnitStrategicValue(b, ownAnchor)
+        return bs - as
+      })[0]
+  }
+
+  private getEnemyUnitStrategicValue(unit: Unit, ownAnchor: { x: number; y: number } | null): number {
+    let score = unit.def.attack ? 10 : 5
+    if (unit.def.category === 'aircraft') score += 3
+    if (unit.def.category === 'vehicle') score += 2
+    if (unit.def.category === 'harvester') score += 6
+    const hpFactor = 1 - unit.hp / Math.max(1, unit.def.stats.maxHp)
+    score += hpFactor * 2.5
+    score -= this.getDangerScore(unit.x, unit.y) * 0.7
+    if (ownAnchor) {
+      score -= dist(ownAnchor.x, ownAnchor.y, unit.x, unit.y) / (18 * TILE_SIZE)
+    }
+    return score
   }
 
   private getBuildingStrategicValue(b: Building): number {
@@ -1846,16 +2153,16 @@ export class AI {
     )
     if (!fastUnit) return
 
-    const mapW = gameState.map.width * TILE_SIZE
-    const mapH = gameState.map.height * TILE_SIZE
-    const corners = [
-      { x: TILE_SIZE, y: TILE_SIZE },
-      { x: mapW - TILE_SIZE, y: TILE_SIZE },
-      { x: TILE_SIZE, y: mapH - TILE_SIZE },
-      { x: mapW - TILE_SIZE, y: mapH - TILE_SIZE },
-    ]
+    const waypoints = this.getHuntWaypoints(gameState)
+    if (waypoints.length === 0) return
+    const target = waypoints[this.huntSweepIndex % waypoints.length]
+    this.huntSweepIndex++
 
-    const target = corners[randomInt(0, corners.length - 1)]
+    const currentTarget = fastUnit.currentOrder?.target
+    const alreadyHeadingThere = !!currentTarget &&
+      (fastUnit.currentOrder?.type === 'move' || fastUnit.currentOrder?.type === 'attackMove') &&
+      dist(currentTarget.x, currentTarget.y, target.x, target.y) <= 3 * TILE_SIZE
+    if (alreadyHeadingThere) return
     fastUnit.giveOrder({ type: 'move', target })
   }
 
@@ -1993,7 +2300,7 @@ export class AI {
             if (neighbor && neighbor.oreAmount > 0) localOre += neighbor.oreAmount
           }
         }
-        if (localOre < 6000) continue
+        if (localOre < 3500) continue
         clusters.push({
           x: col * TILE_SIZE + TILE_SIZE / 2,
           y: row * TILE_SIZE + TILE_SIZE / 2,
@@ -2181,7 +2488,7 @@ export class AI {
     return true
   }
 
-  private queueUnitIfPossible(defId: string, gameState: GameState): boolean {
+  private queueUnitIfPossible(defId: string, gameState: GameState, maxQueueDepth = 3): boolean {
     const def = UNIT_DEFS[defId]
     if (!def) return false
 
@@ -2189,7 +2496,7 @@ export class AI {
     if (!producer) return false
 
     // Keep queues short so the AI can react and mix units.
-    if (producer.productionQueue.length >= 3) return false
+    if (producer.productionQueue.length >= maxQueueDepth) return false
 
     if (this.economy.getCredits(this.playerId) < def.stats.cost) return false
 
@@ -2205,12 +2512,19 @@ export class AI {
     const unitDef = UNIT_DEFS[unitDefId]
     if (!unitDef) return null
 
+    if (unitDefId === 'kirov') {
+      const warFactories = this.em.getBuildingsForPlayer(this.playerId).filter(
+        b => b.def.id === 'war_factory' && (b.state === 'active' || b.state === 'low_power'),
+      )
+      return warFactories.find(b => b.productionQueue.length === 0) ?? warFactories[0] ?? null
+    }
+
     const producingBuildingIds: Record<string, string[]> = {
       infantry: ['barracks'],
       vehicle: ['war_factory'],
-      aircraft: [this.side === 'alliance' ? 'air_force_command' : 'war_factory'],
+      aircraft: ['air_force_command'],
       naval: ['naval_shipyard'],
-      harvester: ['ore_refinery', 'war_factory'],
+      harvester: ['ore_refinery'],
     }
 
     const buildingIds = producingBuildingIds[unitDef.category] ?? []
@@ -2218,7 +2532,7 @@ export class AI {
 
     for (const bId of buildingIds) {
       // Prefer buildings that aren't already producing (shorter queue)
-      const candidates = buildings.filter(b => b.def.id === bId && b.state === 'active')
+      const candidates = buildings.filter(b => b.def.id === bId && (b.state === 'active' || b.state === 'low_power'))
       const free = candidates.find(b => b.productionQueue.length === 0) ?? candidates[0]
       if (free) return free
     }
@@ -2319,13 +2633,19 @@ export class AI {
     return this.matchTimer >= threshold
   }
 
-  private shouldPrioritizeHarvesters(): boolean {
-    const refs = this.em.getBuildingsForPlayer(this.playerId).filter(
-      b => b.def.id === 'ore_refinery' && b.state === 'active',
-    ).length
+  private shouldPrioritizeHarvesters(
+    gameState: GameState,
+    hotspots = this.getResourceHotspots(gameState, 8),
+    refineries = this.em.getBuildingsForPlayer(this.playerId).filter(
+      b => b.def.id === 'ore_refinery' && b.state !== 'dying',
+    ),
+    remotePressure = this.getRemoteResourcePressure(hotspots, refineries),
+  ): boolean {
+    const refs = refineries.length
     const harvesters = this.countUnitsByCategory('harvester')
     if (refs <= 0) return false
-    const minDesired = refs * 2
+    const perRef = this.difficulty === 'hard' ? 4 : 3
+    const minDesired = refs * perRef + Math.min(3, remotePressure.uncoveredCount)
     return harvesters < minDesired
   }
 
@@ -2333,6 +2653,219 @@ export class AI {
     if (this.difficulty !== 'hard') return false
     if (this.incomePerMinute <= 0) return false
     return this.economy.getCredits(this.playerId) > 3000 && this.incomePerMinute >= this.spendingPerMinute
+  }
+
+  private shouldExpandForRemoteResources(
+    gameState: GameState,
+    hotspots = this.getResourceHotspots(gameState, 5),
+    refs = this.em.getBuildingsForPlayer(this.playerId).filter(
+      b => b.def.id === 'ore_refinery' && b.state !== 'dying',
+    ),
+    remotePressure = this.getRemoteResourcePressure(hotspots, refs),
+  ): boolean {
+    if (refs.length === 0) return false
+    return remotePressure.uncoveredCount >= RESOURCE_REMOTE_EXPANSION_COUNT_THRESHOLD
+      || remotePressure.uncoveredScore >= RESOURCE_REMOTE_EXPANSION_SCORE_THRESHOLD
+  }
+
+  private getRemoteResourcePressure(hotspots: ResourceHotspot[], refs: Building[]): { uncoveredCount: number; uncoveredScore: number } {
+    if (hotspots.length === 0 || refs.length === 0) return { uncoveredCount: 0, uncoveredScore: 0 }
+    const coverageRadius = ORE_NEAR_BASE_RADIUS_TILES * TILE_SIZE
+    let uncoveredCount = 0
+    let uncoveredScore = 0
+    for (const h of hotspots) {
+      const covered = refs.some(r => dist(r.x, r.y, h.x, h.y) <= coverageRadius)
+      if (covered) continue
+      uncoveredCount++
+      uncoveredScore += h.score
+    }
+    return { uncoveredCount, uncoveredScore }
+  }
+
+  private getCreditReserveTarget(): number {
+    const base = CREDIT_RESERVE_TARGET[this.difficulty]
+    const powerPadding = this.needsMorePower() ? 200 : 0
+    return base + powerPadding
+  }
+
+  private rebalanceHarvesterAssignments(gameState: GameState): void {
+    if (this.resourceRebalanceTimer < RESOURCE_REBALANCE_INTERVAL_MS) return
+    this.resourceRebalanceTimer = 0
+
+    const hotspots = this.getResourceHotspots(gameState, this.difficulty === 'hard' ? 10 : 7)
+    if (hotspots.length === 0) return
+    const harvesters = this.em.getUnitsForPlayer(this.playerId).filter(
+      u => u.def.category === 'harvester' && u.state !== 'dying',
+    )
+    if (harvesters.length === 0) return
+
+    for (const h of harvesters) {
+      const cooldownUntil = this.harvesterReassignUntilMs.get(h.id) ?? 0
+      if (this.matchTimer < cooldownUntil) continue
+      const best = this.pickBestResourceHotspotForHarvester(h, hotspots, harvesters)
+      if (!best) continue
+
+      const currentHarvestTarget =
+        h.currentOrder?.type === 'harvest' && h.currentOrder.target
+          ? h.currentOrder.target
+          : null
+      const noNearbyResources = !this.hasNearbyResources(gameState, h.x, h.y, RESOURCE_NEARBY_SCAN_RADIUS_TILES)
+      const currentTargetScore = currentHarvestTarget
+        ? this.getHotspotScoreNear(currentHarvestTarget.x, currentHarvestTarget.y, hotspots)
+        : 0
+      const bestSignificantlyBetter =
+        best.score > currentTargetScore * RESOURCE_RETASK_BETTER_RATIO + RESOURCE_RETASK_BETTER_FLAT
+      const alreadyGoodTarget = !!currentHarvestTarget &&
+        dist(currentHarvestTarget.x, currentHarvestTarget.y, best.x, best.y) <= RESOURCE_RETASK_DISTANCE_TILES * TILE_SIZE
+      const shouldRetask =
+        h.state === 'idle' ||
+        ((noNearbyResources || bestSignificantlyBetter) && !alreadyGoodTarget)
+      if (!shouldRetask) continue
+
+      h.giveOrder({ type: 'harvest', target: { x: best.x, y: best.y } })
+      this.harvesterReassignUntilMs.set(h.id, this.matchTimer + RESOURCE_REASSIGN_COOLDOWN_MS)
+    }
+  }
+
+  private pickBestResourceHotspotForHarvester(
+    harvester: Unit,
+    hotspots: ResourceHotspot[],
+    allHarvesters: Unit[],
+  ): ResourceHotspot | null {
+    let best: ResourceHotspot | null = null
+    let bestScore = -Infinity
+    for (const spot of hotspots) {
+      const d = dist(harvester.x, harvester.y, spot.x, spot.y)
+      const localHarvesters = allHarvesters.filter(
+        h => h.id !== harvester.id && h.state !== 'dying' && dist(h.x, h.y, spot.x, spot.y) <= RESOURCE_CLUSTER_RADIUS_TILES * TILE_SIZE * 1.8,
+      ).length
+      const travelPenalty = d / (TILE_SIZE * 3.5)
+      const saturationPenalty = localHarvesters * RESOURCE_HARVESTER_SATURATION_WEIGHT
+      const score = spot.score - travelPenalty - saturationPenalty
+      if (score > bestScore) {
+        bestScore = score
+        best = spot
+      }
+    }
+    return best
+  }
+
+  private getResourceHotspots(gameState: GameState, limit: number): ResourceHotspot[] {
+    if (this.matchTimer < this.resourceHotspotCacheUntilMs && this.resourceHotspotCache.length > 0) {
+      return this.resourceHotspotCache.slice(0, limit)
+    }
+
+    const map = gameState.map
+    const clusters: ResourceHotspot[] = []
+    const minTileValue = this.phase === 'late' ? 120 : 200
+    for (let row = 0; row < map.height; row++) {
+      for (let col = 0; col < map.width; col++) {
+        const tile = map.tiles[row]?.[col]
+        if (!tile || tile.oreAmount <= 0) continue
+        if (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS) continue
+
+        const valueWeight = tile.terrain === TerrainType.GEMS ? 2.2 : 1
+        const weightedValue = tile.oreAmount * valueWeight
+        if (weightedValue < minTileValue) continue
+
+        const x = col * TILE_SIZE + TILE_SIZE / 2
+        const y = row * TILE_SIZE + TILE_SIZE / 2
+        const existing = clusters.find(c => dist(c.x, c.y, x, y) <= RESOURCE_CLUSTER_RADIUS_TILES * TILE_SIZE)
+        if (existing) {
+          const total = existing.score + weightedValue
+          existing.x = (existing.x * existing.score + x * weightedValue) / total
+          existing.y = (existing.y * existing.score + y * weightedValue) / total
+          existing.score = total
+        } else {
+          clusters.push({ x, y, score: weightedValue })
+        }
+      }
+    }
+
+    clusters.sort((a, b) => b.score - a.score)
+    this.resourceHotspotCache = clusters.slice(0, RESOURCE_HOTSPOT_TRACK_LIMIT)
+    this.resourceHotspotCacheUntilMs = this.matchTimer + RESOURCE_HOTSPOT_CACHE_MS
+    return this.resourceHotspotCache.slice(0, limit)
+  }
+
+  private hasNearbyResources(gameState: GameState, x: number, y: number, radiusTiles: number): boolean {
+    const map = gameState.map
+    const col = Math.floor(x / TILE_SIZE)
+    const row = Math.floor(y / TILE_SIZE)
+    let weightedValue = 0
+    for (let dr = -radiusTiles; dr <= radiusTiles; dr++) {
+      for (let dc = -radiusTiles; dc <= radiusTiles; dc++) {
+        const tc = col + dc
+        const tr = row + dr
+        if (tc < 0 || tc >= map.width || tr < 0 || tr >= map.height) continue
+        const tile = map.tiles[tr]?.[tc]
+        if (!tile || tile.oreAmount <= 0) continue
+        if (tile.terrain !== TerrainType.ORE && tile.terrain !== TerrainType.GEMS) continue
+        weightedValue += tile.oreAmount * (tile.terrain === TerrainType.GEMS ? 2.2 : 1)
+        if (weightedValue >= RESOURCE_NEARBY_VALUE_THRESHOLD) return true
+      }
+    }
+    return false
+  }
+
+  private getHotspotScoreNear(x: number, y: number, hotspots: ResourceHotspot[]): number {
+    const match = hotspots
+      .filter(h => dist(h.x, h.y, x, y) <= RESOURCE_RETASK_DISTANCE_TILES * TILE_SIZE * 1.4)
+      .sort((a, b) => dist(a.x, a.y, x, y) - dist(b.x, b.y, x, y))[0]
+    return match?.score ?? 0
+  }
+
+  private issueHuntOrders(gameState: GameState): void {
+    if (this.huntTimer < HUNT_INTERVAL_MS[this.difficulty]) return
+    this.huntTimer = 0
+
+    const hunters = this.getCombatUnits()
+      .filter(u => u.state === 'idle' && !this.isUnitInRetreatingGroup(u.id))
+      .sort((a, b) => b.def.stats.speed - a.def.stats.speed)
+    if (hunters.length === 0) return
+
+    const waypoints = this.getHuntWaypoints(gameState)
+    if (waypoints.length === 0) return
+    const target = waypoints[this.huntSweepIndex % waypoints.length]
+    this.huntSweepIndex++
+
+    const squadSize = clamp(
+      this.difficulty === 'hard' ? 6 : this.difficulty === 'medium' ? 4 : 3,
+      2,
+      hunters.length,
+    )
+    const retaskCooldown = Math.floor(HUNT_INTERVAL_MS[this.difficulty] * 0.85)
+
+    for (const unit of hunters.slice(0, squadSize)) {
+      const cooldownUntil = this.huntRetaskUntilMs.get(unit.id) ?? 0
+      if (this.matchTimer < cooldownUntil) continue
+      const currentTarget = unit.currentOrder?.target
+      const alreadyHeadingThere = !!currentTarget &&
+        (unit.currentOrder?.type === 'move' || unit.currentOrder?.type === 'attackMove') &&
+        dist(currentTarget.x, currentTarget.y, target.x, target.y) <= 4 * TILE_SIZE
+      if (alreadyHeadingThere) continue
+      unit.giveOrder({ type: 'attackMove', target })
+      this.huntRetaskUntilMs.set(unit.id, this.matchTimer + retaskCooldown)
+    }
+  }
+
+  private getHuntWaypoints(gameState: GameState): Array<{ x: number; y: number }> {
+    const mapW = gameState.map.width * TILE_SIZE
+    const mapH = gameState.map.height * TILE_SIZE
+    const points: Array<{ x: number; y: number }> = [
+      { x: TILE_SIZE, y: TILE_SIZE },
+      { x: mapW - TILE_SIZE, y: TILE_SIZE },
+      { x: TILE_SIZE, y: mapH - TILE_SIZE },
+      { x: mapW - TILE_SIZE, y: mapH - TILE_SIZE },
+      { x: mapW * 0.5, y: mapH * 0.5 },
+      { x: mapW * 0.25, y: mapH * 0.25 },
+      { x: mapW * 0.75, y: mapH * 0.25 },
+      { x: mapW * 0.25, y: mapH * 0.75 },
+      { x: mapW * 0.75, y: mapH * 0.75 },
+    ]
+    const hotspots = this.getResourceHotspots(gameState, 4)
+    points.push(...hotspots.map(h => ({ x: h.x, y: h.y })))
+    return points
   }
 
   private isBaseOreRunningLow(): boolean {
@@ -2347,47 +2880,32 @@ export class AI {
   }
 
   private findExpansionOreTarget(gameState: GameState): { x: number; y: number } | null {
-    const anchors: Array<{ x: number; y: number }> = []
     const ownBuildings = this.em.getBuildingsForPlayer(this.playerId).filter(b => b.state !== 'dying')
     const cy = ownBuildings.find(b => b.def.id === 'construction_yard') ?? ownBuildings[0]
-    if (cy) anchors.push({ x: cy.x, y: cy.y })
+    if (!cy) return null
     const ownRefs = ownBuildings.filter(b => b.def.id === 'ore_refinery')
-    for (const ref of ownRefs) {
-      anchors.push({ x: ref.x, y: ref.y })
-    }
-
-    const mapW = gameState.map.width * TILE_SIZE
-    const mapH = gameState.map.height * TILE_SIZE
-    anchors.push(
-      { x: TILE_SIZE * 2, y: TILE_SIZE * 2 },
-      { x: mapW - TILE_SIZE * 2, y: TILE_SIZE * 2 },
-      { x: TILE_SIZE * 2, y: mapH - TILE_SIZE * 2 },
-      { x: mapW - TILE_SIZE * 2, y: mapH - TILE_SIZE * 2 },
-      { x: mapW * 0.5, y: mapH * 0.5 },
-    )
-
+    const hotspots = this.getResourceHotspots(gameState, 14)
     let best: { x: number; y: number; score: number } | null = null
-    const home = cy ? { x: cy.x, y: cy.y } : anchors[0]
+    const home = { x: cy.x, y: cy.y }
 
-    for (const anchor of anchors) {
-      const ore = this.findNearestOreFrom(anchor.x, anchor.y)
-      if (!ore) continue
-
-      const distFromHome = dist(home.x, home.y, ore.x, ore.y)
+    for (const spot of hotspots) {
+      const distFromHome = dist(home.x, home.y, spot.x, spot.y)
       if (distFromHome < EXPANSION_MIN_DISTANCE_TILES * TILE_SIZE) continue
 
       let nearExisting = false
       for (const ref of ownRefs) {
-        if (dist(ref.x, ref.y, ore.x, ore.y) < ORE_NEAR_BASE_RADIUS_TILES * TILE_SIZE) {
+        if (dist(ref.x, ref.y, spot.x, spot.y) < ORE_NEAR_BASE_RADIUS_TILES * TILE_SIZE) {
           nearExisting = true
           break
         }
       }
       if (nearExisting) continue
 
-      const score = distFromHome
+      let score = spot.score + distFromHome / (TILE_SIZE * 2)
+      score -= this.getDangerScore(spot.x, spot.y) * 900
+      if (this.isPointContested(spot.x, spot.y)) score -= 2500
       if (!best || score > best.score) {
-        best = { x: ore.x, y: ore.y, score }
+        best = { x: spot.x, y: spot.y, score }
       }
     }
 
