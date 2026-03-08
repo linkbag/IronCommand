@@ -303,18 +303,40 @@ export class EntityManager extends Phaser.Events.EventEmitter {
       .map(b => b.def.id)
   }
 
-  removeEntity(id: string): void {
+  removeEntity(
+    id: string,
+    options: { emitDestroyed?: boolean; destroyObject?: boolean } = {},
+  ): void {
+    const { emitDestroyed = true, destroyObject = false } = options
     const unit = this.units.get(id)
     if (unit) {
       this.units.delete(id)
-      this.emit('unit_destroyed', { entityId: id, playerId: unit.playerId })
+      if (destroyObject && unit.scene) unit.destroy()
+      if (emitDestroyed) this.emit('unit_destroyed', { entityId: id, playerId: unit.playerId })
       return
     }
     const building = this.buildings.get(id)
     if (building) {
+      const occupiedTiles = building.occupiedTiles.map(tile => ({ col: tile.col, row: tile.row }))
       this.buildings.delete(id)
-      this.emit('building_destroyed', { entityId: id, playerId: building.playerId })
+      if (destroyObject && building.scene) building.destroy()
+      if (emitDestroyed) {
+        this.emit('building_destroyed', {
+          entityId: id,
+          playerId: building.playerId,
+          defId: building.def.id,
+          occupiedTiles,
+        })
+      }
     }
+  }
+
+  /**
+   * Immediate removal without firing destroyed events.
+   * Used for state transforms (e.g. MCV <-> Construction Yard) rather than combat death.
+   */
+  despawnEntity(id: string): void {
+    this.removeEntity(id, { emitDestroyed: false, destroyObject: true })
   }
 
   // ── Main update ──────────────────────────────────────────────
