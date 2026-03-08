@@ -6,7 +6,16 @@
 
 import Phaser from 'phaser'
 import type { UnitDef, Order, TileCoord, Position } from '../types'
-import { TILE_SIZE, HARVESTER_CAPACITY, ORE_PER_LOAD, GEMS_PER_LOAD, ORE_HARVEST_RATE, REFINERY_PROCESS_RATE } from '../types'
+import {
+  TILE_SIZE,
+  HARVESTER_CAPACITY,
+  ORE_PER_LOAD,
+  GEMS_PER_LOAD,
+  ORE_HARVEST_RATE,
+  REFINERY_PROCESS_RATE,
+  ORE_TILE_MAX,
+  GEMS_TILE_MAX,
+} from '../types'
 import { cartToScreen } from '../engine/IsoUtils'
 
 export type UnitState = 'idle' | 'moving' | 'attacking' | 'harvesting' | 'dying'
@@ -83,6 +92,8 @@ export class Unit extends Phaser.GameObjects.Container {
   private unloadTimer: number
   private harvestCapacity: number
   private refineryId: string | null
+  private oreFieldLowLatch: boolean
+  private proactiveRemapCooldownMs: number
 
   // Visuals
   facing = 0 // 0: NE, 1: SE, 2: SW, 3: NW
@@ -138,6 +149,8 @@ export class Unit extends Phaser.GameObjects.Container {
     this.unloadTimer = 0
     this.harvestCapacity = HARVESTER_CAPACITY
     this.refineryId = null
+    this.oreFieldLowLatch = false
+    this.proactiveRemapCooldownMs = 0
 
     this.isSelected = false
 
@@ -351,6 +364,7 @@ export class Unit extends Phaser.GameObjects.Container {
 
     this.attackCooldown = Math.max(0, this.attackCooldown - delta / 1000)
     this.weaponFxTimer = Math.max(0, this.weaponFxTimer - delta)
+    this.proactiveRemapCooldownMs = Math.max(0, this.proactiveRemapCooldownMs - delta)
     if (this.weaponFxTimer <= 0 && this.muzzleFlash.visible) {
       this.muzzleFlash.setVisible(false)
     }
@@ -938,6 +952,11 @@ export class Unit extends Phaser.GameObjects.Container {
   private updateHarvest(delta: number): void {
     const HARVEST_TIME = 1000  // ms per load
     const DUMP_RANGE = TILE_SIZE * 3
+    const LOW_FIELD_THRESHOLD = 0.05
+    const RECOVER_FIELD_THRESHOLD = 0.12
+    const REMAP_COOLDOWN_MS = 10000
+    const MIN_REMAP_DISTANCE = TILE_SIZE * 4
+    const MIN_BETTER_FIELD_GAIN = 1.35
 
     // Priority: if we're near a refinery with cargo, process unloading at 1 load/sec.
     if (this.cargoLoads > 0 && this.refineryId) {
@@ -959,7 +978,7 @@ export class Unit extends Phaser.GameObjects.Container {
               this.cargoValue = 0
               this.unloadTimer = 0
               this.emit('find_ore_field', this.x, this.y, (target: Position | null) => {
-                if (target) this.startMoveTo(target)
+                if (target) this.retargetHarvest(target)
               })
             }
           }
@@ -993,6 +1012,32 @@ export class Unit extends Phaser.GameObjects.Container {
     // Check if adjacent to an ore tile
     this.emit('check_ore_at', this.x, this.y, (oreAmount: number, tilePos: Position, isGems?: boolean) => {
       if (oreAmount > 0 && this.cargoLoads < this.harvestCapacity) {
+        const oreMax = (isGems === true) ? GEMS_TILE_MAX : ORE_TILE_MAX
+        const currentRatio = oreMax > 0 ? oreAmount / oreMax : 0
+        if (currentRatio <= LOW_FIELD_THRESHOLD) {
+          this.oreFieldLowLatch = true
+        } else if (currentRatio >= RECOVER_FIELD_THRESHOLD) {
+          this.oreFieldLowLatch = false
+        }
+
+        if (this.oreFieldLowLatch && this.proactiveRemapCooldownMs <= 0) {
+          this.proactiveRemapCooldownMs = REMAP_COOLDOWN_MS
+          const currentValue = oreAmount * ((isGems === true) ? 2 : 1)
+          this.emit('find_ore_field', this.x, this.y, (candidateTarget: Position | null) => {
+            if (!candidateTarget || this.state === 'dying') return
+
+            const targetDistance = Phaser.Math.Distance.Between(tilePos.x, tilePos.y, candidateTarget.x, candidateTarget.y)
+            if (targetDistance < MIN_REMAP_DISTANCE) return
+
+            this.emit('check_ore_at', candidateTarget.x, candidateTarget.y, (candidateOre: number, candidatePos: Position, candidateIsGems?: boolean) => {
+              if (candidateOre <= 0) return
+              const candidateValue = candidateOre * ((candidateIsGems === true) ? 2 : 1)
+              if (candidateValue < currentValue * MIN_BETTER_FIELD_GAIN) return
+              this.retargetHarvest(candidatePos)
+            })
+          })
+        }
+
         this.harvestTimer += delta
         if (this.harvestTimer >= HARVEST_TIME) {
           this.harvestTimer = 0
@@ -1005,7 +1050,7 @@ export class Unit extends Phaser.GameObjects.Container {
         // No ore here — find next ore field
         this.emit('find_ore_field', this.x, this.y, (target: Position | null) => {
           if (target) {
-            this.startMoveTo(target)
+            this.retargetHarvest(target)
           } else {
             this.state = 'idle'
           }
@@ -1013,6 +1058,11 @@ export class Unit extends Phaser.GameObjects.Container {
       }
     })
 
+  }
+
+  private retargetHarvest(target: Position): void {
+    this.currentOrder = { type: 'harvest', target }
+    this.startMoveTo(target)
   }
 
   // ── Private: idle ────────────────────────────────────────────
