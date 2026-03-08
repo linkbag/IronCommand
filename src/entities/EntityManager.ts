@@ -9,7 +9,7 @@ import { Unit } from './Unit'
 import { Building } from './Building'
 import { UNIT_DEFS } from './UnitDefs'
 import { BUILDING_DEFS } from './BuildingDefs'
-import type { UnitDef, BuildingDef, Position, FactionId } from '../types'
+import type { UnitDef, BuildingDef, Position, FactionId, TileCoord } from '../types'
 import { TILE_SIZE } from '../types'
 import { FACTIONS } from '../data/factions'
 
@@ -174,6 +174,7 @@ export class EntityManager extends Phaser.Events.EventEmitter {
       isAlive: boolean; defId: string; hp: number; maxHp: number;
     }> = []
     for (const u of this.units.values()) {
+      if (u.isEmbarked()) continue
       result.push({
         id: u.id, playerId: u.playerId, type: 'unit',
         x: u.x, y: u.y, isAlive: u.state !== 'dying',
@@ -190,16 +191,18 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     return result
   }
 
-  getAllUnits(): Unit[] {
-    return Array.from(this.units.values())
+  getAllUnits(includeEmbarked = false): Unit[] {
+    return Array.from(this.units.values()).filter(u => includeEmbarked || !u.isEmbarked())
   }
 
   getAllBuildings(): Building[] {
     return Array.from(this.buildings.values())
   }
 
-  getUnitsForPlayer(playerId: number): Unit[] {
-    return Array.from(this.units.values()).filter(u => u.playerId === playerId)
+  getUnitsForPlayer(playerId: number, includeEmbarked = false): Unit[] {
+    return Array.from(this.units.values()).filter(
+      u => u.playerId === playerId && (includeEmbarked || !u.isEmbarked())
+    )
   }
 
   getBuildingsForPlayer(playerId: number): Building[] {
@@ -209,7 +212,7 @@ export class EntityManager extends Phaser.Events.EventEmitter {
   /** Returns all units within pixel radius of (x,y) */
   getUnitsInRange(x: number, y: number, radiusPixels: number): Unit[] {
     return Array.from(this.units.values()).filter(u =>
-      Phaser.Math.Distance.Between(x, y, u.x, u.y) <= radiusPixels
+      !u.isEmbarked() && Phaser.Math.Distance.Between(x, y, u.x, u.y) <= radiusPixels
     )
   }
 
@@ -303,9 +306,143 @@ export class EntityManager extends Phaser.Events.EventEmitter {
       .map(b => b.def.id)
   }
 
+  private loadUnitIntoTransport(passengerId: string, transportId: string): boolean {
+    const passenger = this.units.get(passengerId)
+    const transport = this.units.get(transportId)
+    if (!passenger || !transport) return false
+    if (passenger.id === transport.id) return false
+    if (passenger.playerId !== transport.playerId) return false
+    if (passenger.state === 'dying' || transport.state === 'dying') return false
+    if (passenger.isEmbarked()) return false
+    if (!transport.canTransportUnits()) return false
+    if (!transport.canCarryCategory(passenger.def.category)) return false
+    if (!transport.hasCargoSpace()) return false
+
+    const dist = Phaser.Math.Distance.Between(passenger.x, passenger.y, transport.x, transport.y)
+    if (dist > transport.getTransportLoadRangePixels()) return false
+    if (!transport.addTransportedUnit(passenger.id)) return false
+
+    passenger.setEmbarkedTransportId(transport.id)
+    passenger.setPosition(transport.x, transport.y)
+    this.emit('unit_loaded', {
+      transportId: transport.id,
+      passengerId: passenger.id,
+      playerId: transport.playerId,
+    })
+    return true
+  }
+
+  private unloadTransportAt(transportId: string, target: Position): number {
+    const transport = this.units.get(transportId)
+    if (!transport || !transport.canTransportUnits()) return 0
+    const cargoIds = transport.getTransportedUnitIds()
+    if (cargoIds.length === 0) return 0
+
+    const rts = this.scene as Phaser.Scene & {
+      worldToTile?: (x: number, y: number) => TileCoord
+      tileToWorld?: (col: number, row: number) => Position
+      isGroundTilePassable?: (col: number, row: number) => boolean
+    }
+    const targetTile = rts.worldToTile
+      ? rts.worldToTile(target.x, target.y)
+      : { col: Math.floor(target.x / TILE_SIZE), row: Math.floor(target.y / TILE_SIZE) }
+    const usedTiles = new Set<string>()
+    const maxRadius = Math.max(2, Math.round(transport.getTransportUnloadRadiusTiles()))
+    let unloaded = 0
+
+    for (const cargoId of cargoIds) {
+      const passenger = this.units.get(cargoId)
+      if (!passenger || passenger.state === 'dying') {
+        transport.removeTransportedUnit(cargoId)
+        continue
+      }
+
+      const dropTile = this.findNearestGroundDropTile(targetTile, usedTiles, maxRadius, passenger.id)
+      if (!dropTile) continue
+      const worldPos = rts.tileToWorld
+        ? rts.tileToWorld(dropTile.col, dropTile.row)
+        : {
+            x: dropTile.col * TILE_SIZE + TILE_SIZE / 2,
+            y: dropTile.row * TILE_SIZE + TILE_SIZE / 2,
+          }
+
+      if (!transport.removeTransportedUnit(cargoId)) continue
+      passenger.setEmbarkedTransportId(null)
+      passenger.setPosition(worldPos.x, worldPos.y)
+      usedTiles.add(`${dropTile.col},${dropTile.row}`)
+      unloaded++
+
+      // AI unloads should immediately continue toward target.
+      if (transport.playerId !== 0) {
+        passenger.giveOrder({ type: 'attackMove', target: { x: target.x, y: target.y } })
+      }
+
+      this.emit('unit_unloaded', {
+        transportId: transport.id,
+        passengerId: passenger.id,
+        playerId: transport.playerId,
+        x: worldPos.x,
+        y: worldPos.y,
+      })
+    }
+
+    return unloaded
+  }
+
+  private findNearestGroundDropTile(
+    origin: TileCoord,
+    used: Set<string>,
+    maxRadius: number,
+    passengerId?: string,
+  ): TileCoord | null {
+    if (this.isGroundDropTileOpen(origin.col, origin.row, used, passengerId)) return origin
+
+    for (let radius = 1; radius <= maxRadius; radius++) {
+      for (let dr = -radius; dr <= radius; dr++) {
+        for (let dc = -radius; dc <= radius; dc++) {
+          if (Math.abs(dc) !== radius && Math.abs(dr) !== radius) continue
+          const col = origin.col + dc
+          const row = origin.row + dr
+          if (this.isGroundDropTileOpen(col, row, used, passengerId)) {
+            return { col, row }
+          }
+        }
+      }
+    }
+    return null
+  }
+
+  private isGroundDropTileOpen(col: number, row: number, used: Set<string>, passengerId?: string): boolean {
+    const key = `${col},${row}`
+    if (used.has(key)) return false
+    const rts = this.scene as Phaser.Scene & {
+      isGroundTilePassable?: (c: number, r: number) => boolean
+    }
+    if (rts.isGroundTilePassable && !rts.isGroundTilePassable(col, row)) return false
+
+    for (const unit of this.units.values()) {
+      if (unit.id === passengerId || unit.isEmbarked() || unit.state === 'dying') continue
+      const tc = Math.floor(unit.x / TILE_SIZE)
+      const tr = Math.floor(unit.y / TILE_SIZE)
+      if (tc === col && tr === row) return false
+    }
+    return true
+  }
+
   removeEntity(id: string): void {
     const unit = this.units.get(id)
     if (unit) {
+      const hostId = unit.getEmbarkedTransportId()
+      if (hostId) {
+        this.units.get(hostId)?.removeTransportedUnit(unit.id)
+      }
+      const cargo = unit.clearTransportedUnits()
+      for (const cargoId of cargo) {
+        const passenger = this.units.get(cargoId)
+        if (!passenger) continue
+        passenger.setEmbarkedTransportId(null)
+        passenger.takeDamage(passenger.hp + 9999, unit.playerId)
+      }
       this.units.delete(id)
       this.emit('unit_destroyed', { entityId: id, playerId: unit.playerId })
       return
@@ -339,7 +476,7 @@ export class EntityManager extends Phaser.Events.EventEmitter {
 
   /** Push overlapping units apart so they don't stack on the same spot */
   private separateUnits(): void {
-    const units = Array.from(this.units.values()).filter(u => u.hp > 0 && u.state !== 'dying')
+    const units = Array.from(this.units.values()).filter(u => !u.isEmbarked() && u.hp > 0 && u.state !== 'dying')
     const MIN_DIST = 14 // minimum pixel distance between unit centers
     const PUSH_FORCE = 2 // pixels per separation tick
 
@@ -433,6 +570,27 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     // Target resolution by ID
     unit.on('resolve_target', (targetId: string, cb: (ref: Unit | Building | undefined) => void) => {
       cb(this.getEntity(targetId))
+    })
+
+    unit.on('request_transport_board', (passengerId: string, transportId: string, cb: (ok: boolean) => void) => {
+      cb(this.loadUnitIntoTransport(passengerId, transportId))
+    })
+
+    unit.on('request_transport_unload', (transportId: string, target: Position, cb: (count: number) => void) => {
+      cb(this.unloadTransportAt(transportId, target))
+    })
+
+    unit.on('embarked_unit_died', (passengerId: string, transportId: string) => {
+      this.units.get(transportId)?.removeTransportedUnit(passengerId)
+    })
+
+    unit.on('transport_destroyed', (_transportId: string, cargoIds: string[]) => {
+      for (const cargoId of cargoIds) {
+        const cargo = this.units.get(cargoId)
+        if (!cargo) continue
+        cargo.setEmbarkedTransportId(null)
+        cargo.takeDamage(cargo.hp + 9999, unit.playerId)
+      }
     })
 
     // Get entity position

@@ -133,6 +133,14 @@ export interface UnitDef {
   attack: AttackStats | null  // null = non-combat (e.g. harvester)
   factionExclusive: FactionId | null  // null = available to all of that side
   spriteKey: string
+  transport?: TransportProfile
+}
+
+export interface TransportProfile {
+  capacity: number
+  allowedCategories: UnitCategory[]
+  loadRangeTiles?: number
+  unloadRadiusTiles?: number
 }
 
 export interface BuildingDef {
@@ -186,7 +194,18 @@ export interface GameState {
 
 // ── Orders & Commands ─────────────────────────────────────────
 
-export type OrderType = 'move' | 'attack' | 'attackMove' | 'guard' | 'patrol' | 'harvest' | 'build' | 'repair' | 'stop'
+export type OrderType =
+  | 'move'
+  | 'attack'
+  | 'attackMove'
+  | 'guard'
+  | 'patrol'
+  | 'harvest'
+  | 'build'
+  | 'repair'
+  | 'stop'
+  | 'load'
+  | 'unload'
 
 export interface Order {
   type: OrderType

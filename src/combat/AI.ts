@@ -138,6 +138,7 @@ const DANGER_ZONE_TTL_MS = 120000
 const DANGER_ZONE_DECAY_PER_TICK = 0.93
 const FOCUS_FIRE_INTERVAL_MS = 900
 const MAP_CONTROL_INTERVAL_MS = 15000
+const TRANSPORT_HOOK_INTERVAL_MS = 4000
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -193,6 +194,7 @@ export class AI {
   private waveInitialCounts: Map<number, number>
   private focusFireTimer: number
   private mapControlTimer: number
+  private transportHookTimer: number
   private knownDangerZones: DangerZone[]
   private lastKnownUnitPositions: Map<string, { x: number; y: number }>
   private enemyKillPressure: Map<string, number>
@@ -260,6 +262,7 @@ export class AI {
     this.waveInitialCounts = new Map()
     this.focusFireTimer = 0
     this.mapControlTimer = 0
+    this.transportHookTimer = 0
     this.knownDangerZones = []
     this.lastKnownUnitPositions = new Map()
     this.enemyKillPressure = new Map()
@@ -299,6 +302,7 @@ export class AI {
     this.harassTimer += delta
     this.focusFireTimer += delta
     this.mapControlTimer += delta
+    this.transportHookTimer += delta
     this.matchTimer += delta
     this.updateEconomyTelemetry(delta)
 
@@ -336,6 +340,7 @@ export class AI {
     this.buildDefenses()
     this.buildArmy(gameState)
     this.considerHarassment(gameState)
+    this.handleTransportHooks(gameState)
     this.considerAttacking(gameState)
     this.contestMapControl(gameState)
     this.rebuildDestroyedBuildings(gameState)
@@ -989,11 +994,17 @@ export class AI {
         if (this.canProduceUnit('destroyer')) pool.push('destroyer')
         if (this.canProduceUnit('aegis_cruiser')) pool.push('aegis_cruiser')
       }
+      if (this.canProduceUnit('amphibious_transport') && this.getCombatInfantryCount() >= 6) {
+        pool.push('amphibious_transport')
+      }
     }
 
     if (this.hasActiveBuilding('air_force_command')) {
       if (this.canProduceUnit('rocketeer')) pool.push('rocketeer')
       if (this.canProduceUnit('black_eagle')) pool.push('black_eagle')
+      if (this.canProduceUnit('nighthawk') && this.getCombatInfantryCount() >= 5) {
+        pool.push('nighthawk')
+      }
     }
 
     return pool
@@ -1087,6 +1098,54 @@ export class AI {
     }
 
     return null
+  }
+
+  private handleTransportHooks(gameState: GameState): void {
+    if (this.transportHookTimer < TRANSPORT_HOOK_INTERVAL_MS) return
+    this.transportHookTimer = 0
+
+    const transports = this.em.getUnitsForPlayer(this.playerId).filter(
+      u => u.state !== 'dying' && !u.isEmbarked() && u.canTransportUnits(),
+    )
+    if (transports.length === 0) return
+
+    const passengers = this.em.getUnitsForPlayer(this.playerId).filter(
+      u =>
+        u.state !== 'dying' &&
+        !u.isEmbarked() &&
+        u.def.attack !== null &&
+        u.def.category === 'infantry',
+    )
+    const assignedPassengers = new Set<string>()
+    const fallbackTarget = this.findAttackTarget(gameState) ?? this.findHarassTarget(gameState) ?? this.getFallbackPosition()
+
+    for (const transport of transports) {
+      if (transport.getTransportCargoCount() <= 0) {
+        const nearby = passengers
+          .filter(p => !assignedPassengers.has(p.id))
+          .filter(p => transport.canCarryCategory(p.def.category))
+          .map(p => ({ unit: p, d: dist(p.x, p.y, transport.x, transport.y) }))
+          .filter(entry => entry.d <= 12 * TILE_SIZE)
+          .sort((a, b) => a.d - b.d)
+
+        if (nearby.length === 0) continue
+        const toLoad = Math.min(transport.getTransportCapacity(), nearby.length)
+        for (let i = 0; i < toLoad; i++) {
+          const passenger = nearby[i].unit
+          passenger.giveOrder({ type: 'load', targetEntityId: transport.id })
+          assignedPassengers.add(passenger.id)
+        }
+        continue
+      }
+
+      if (transport.state !== 'idle' || !fallbackTarget) continue
+      const dropTarget = this.clampToMap({
+        x: fallbackTarget.x + randomInt(-2, 2) * TILE_SIZE,
+        y: fallbackTarget.y + randomInt(-2, 2) * TILE_SIZE,
+      })
+      transport.giveOrder({ type: 'move', target: dropTarget })
+      transport.giveOrder({ type: 'unload', target: dropTarget }, true)
+    }
   }
 
   // ── Attack logic ─────────────────────────────────────────────

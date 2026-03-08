@@ -2167,7 +2167,15 @@ export class HUDScene extends Phaser.Scene {
     }
 
     type E = { id: string; defId: string; hp: number; maxHp: number; type?: string; playerId?: number }
-    const em    = this.registry.get('entityMgr') as { getEntity(id: string): E | undefined } | undefined
+    type UnitView = {
+      canTransportUnits?: () => boolean
+      getTransportCargoCount?: () => number
+      getTransportCapacity?: () => number
+    }
+    const em = this.registry.get('entityMgr') as {
+      getEntity(id: string): E | undefined
+      getUnit?: (id: string) => UnitView | undefined
+    } | undefined
     const first = em?.getEntity(ids[0])
     if (!first) return
 
@@ -2194,6 +2202,16 @@ export class HUDScene extends Phaser.Scene {
       infoText += `\n${isPrimary ? '★ PRIMARY' : 'Click to set primary'}`
       infoText += '\nRight-click to set rally point'
       if (speedBonus > 1) infoText += ` | +${Math.round((speedBonus - 1) * 100)}% speed`
+    }
+
+    if (ids.length === 1) {
+      const unit = em?.getUnit?.(first.id)
+      if (unit?.canTransportUnits?.()) {
+        const cargo = unit.getTransportCargoCount?.() ?? 0
+        const cap = unit.getTransportCapacity?.() ?? 0
+        infoText += `\nCargo: ${cargo}/${cap}`
+        infoText += '\nRMB transport to load | U + click unload'
+      }
     }
 
     this.selectedInfoTxt.setText(infoText)
