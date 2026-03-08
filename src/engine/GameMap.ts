@@ -35,7 +35,7 @@ const FOG_ALPHA: Record<FogState, number> = {
 
 const ORE_MAX_AMOUNT = ORE_TILE_MAX
 const ORE_SPREAD_INTERVAL_MS = 30000
-const ORE_GROWTH_INTERVAL_MS = 6000  // regenerate every 6s (50 units/tick = ~500/min)
+const ORE_GROWTH_INTERVAL_MS = 6000  // regenerate every 6s (10 ore/min from baseline growth)
 
 function scaleColor(color: number, factor: number): number {
   const r = Math.max(0, Math.min(255, Math.round(((color >> 16) & 0xff) * factor)))
