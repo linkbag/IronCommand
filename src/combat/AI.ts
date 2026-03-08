@@ -149,6 +149,7 @@ const DANGER_ZONE_TTL_MS = 120000
 const DANGER_ZONE_DECAY_PER_TICK = 0.93
 const FOCUS_FIRE_INTERVAL_MS = 900
 const MAP_CONTROL_INTERVAL_MS = 15000
+const TRANSPORT_HOOK_INTERVAL_MS = 4000
 const SCOUT_REVISIT_MS = 90000
 const OPPORTUNISTIC_FORCE_RATIO = 1.28
 const OPPORTUNISTIC_MIN_ARMY: Record<AIDifficulty, number> = {
@@ -244,6 +245,7 @@ export class AI {
   private antiAirEmergencyUntilMs: number
   private lastEmergencySellMs: number
   private scoutVisitMs: Map<string, number>
+  private transportHookTimer: number
 
   private static readonly SW_COOLDOWNS: Record<string, number> = {
     nuclear_silo: 300000,
@@ -320,6 +322,7 @@ export class AI {
     this.antiAirEmergencyUntilMs = 0
     this.lastEmergencySellMs = -EMERGENCY_SELL_COOLDOWN_MS
     this.scoutVisitMs = new Map()
+    this.transportHookTimer = 0
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -340,6 +343,7 @@ export class AI {
     this.focusFireTimer += delta
     this.mapControlTimer += delta
     this.matchTimer += delta
+    this.transportHookTimer += delta
     this.updateEconomyTelemetry(delta)
 
     this.updatePendingWave(delta)
@@ -437,6 +441,7 @@ export class AI {
           break
         case 'destroy_enemies':
           runOnce('considerHarassment', () => this.considerHarassment(gameState))
+          runOnce('handleTransportHooks', () => this.handleTransportHooks(gameState))
           runOnce('considerAttacking', () => this.considerAttacking(gameState))
           break
         case 'scout_enemy_forces':
@@ -1255,11 +1260,19 @@ export class AI {
         if (this.canProduceUnit('destroyer')) pool.push('destroyer')
         if (this.canProduceUnit('aegis_cruiser')) pool.push('aegis_cruiser')
       }
+      // Transport production: build amphibious transports when we have infantry to load
+      if (this.canProduceUnit('amphibious_transport') && this.getCombatInfantryCount() >= 6) {
+        pool.push('amphibious_transport')
+      }
     }
 
     if (this.hasActiveBuilding('air_force_command')) {
       if (this.canProduceUnit('rocketeer')) pool.push('rocketeer')
       if (this.canProduceUnit('black_eagle')) pool.push('black_eagle')
+      // Nighthawk transport for airlifts when enough infantry
+      if (this.canProduceUnit('nighthawk') && this.getCombatInfantryCount() >= 5) {
+        pool.push('nighthawk')
+      }
     }
 
     return pool
@@ -1379,6 +1392,57 @@ export class AI {
     }
 
     return null
+  }
+
+  // ── Transport coordination ────────────────────────────────────
+
+  private handleTransportHooks(gameState: GameState): void {
+    if (this.transportHookTimer < TRANSPORT_HOOK_INTERVAL_MS) return
+    this.transportHookTimer = 0
+
+    const transports = this.em.getUnitsForPlayer(this.playerId).filter(
+      u => u.state !== 'dying' && !u.isEmbarked() && u.canTransportUnits(),
+    )
+    if (transports.length === 0) return
+
+    const passengers = this.em.getUnitsForPlayer(this.playerId).filter(
+      u =>
+        u.state !== 'dying' &&
+        !u.isEmbarked() &&
+        u.def.attack !== null &&
+        u.def.category === 'infantry',
+    )
+    const assignedPassengers = new Set<string>()
+    const fallbackTarget = this.findAttackTarget(gameState) ?? this.findHarassTarget(gameState) ?? this.getFallbackPosition()
+
+    for (const transport of transports) {
+      if (transport.getTransportedUnitIds().length <= 0) {
+        const nearby = passengers
+          .filter(p => !assignedPassengers.has(p.id))
+          .filter(p => transport.canCarryCategory(p.def.category))
+          .map(p => ({ unit: p, d: dist(p.x, p.y, transport.x, transport.y) }))
+          .filter(entry => entry.d <= 12 * TILE_SIZE)
+          .sort((a, b) => a.d - b.d)
+
+        if (nearby.length === 0) continue
+        const cap = transport.def.transport?.capacity ?? 0
+        const toLoad = Math.min(cap, nearby.length)
+        for (let i = 0; i < toLoad; i++) {
+          const passenger = nearby[i].unit
+          passenger.giveOrder({ type: 'load', targetEntityId: transport.id })
+          assignedPassengers.add(passenger.id)
+        }
+        continue
+      }
+
+      if (transport.state !== 'idle' || !fallbackTarget) continue
+      const dropTarget = this.clampToMap({
+        x: fallbackTarget.x + randomInt(-2, 2) * TILE_SIZE,
+        y: fallbackTarget.y + randomInt(-2, 2) * TILE_SIZE,
+      })
+      transport.giveOrder({ type: 'move', target: dropTarget })
+      transport.giveOrder({ type: 'unload', target: dropTarget }, true)
+    }
   }
 
   // ── Attack logic ─────────────────────────────────────────────
@@ -3025,6 +3089,11 @@ export class AI {
         this.superweaponTimers.delete(swId)
         this.superweaponReady.delete(swId)
       }
+    }
+
+    // RA2 parity: superweapon countdown is paused while in low power.
+    if (this.economy.isPowerLow(this.playerId)) {
+      return
     }
 
     // Tick down timers

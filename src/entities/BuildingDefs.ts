@@ -857,9 +857,31 @@ export const BUILDING_DEFS: Record<string, BuildingDef> = {
     },
     attack: null,
   },
+
+  neutral_bridge: {
+    id: 'neutral_bridge',
+    name: 'Bridge',
+    category: 'tech',
+    side: null,
+    factionExclusive: null,
+    spriteKey: 'bld_neutral_bridge',
+    footprint: { w: 1, h: 1 },
+    providespower: 0,
+    produces: [],
+    stats: {
+      maxHp: 700,
+      armor: 0.25,
+      speed: 0,
+      sightRange: 1,
+      cost: 0,
+      buildTime: 0,
+      prerequisites: [],
+    },
+    attack: null,
+  },
 }
 
-const NEUTRAL_IDS = ['oil_derrick', 'tech_center', 'neutral_hospital', 'neutral_repair_depot']
+const NEUTRAL_IDS = ['oil_derrick', 'tech_center', 'neutral_hospital', 'neutral_repair_depot', 'neutral_bridge']
 const BUILDABLE_BUILDING_IDS = Object.keys(BUILDING_DEFS).filter(id =>
   !['construction_yard', ...NEUTRAL_IDS].includes(id)
 )
@@ -892,11 +914,11 @@ export const TECH_TREE_ORDER = [
   'sentry_gun', 'tesla_coil', 'flak_cannon', 'psychic_sensor',
   'nuclear_silo', 'iron_curtain',
   // Neutral (not buildable by players)
-  'oil_derrick', 'tech_center', 'neutral_hospital', 'neutral_repair_depot',
+  'oil_derrick', 'tech_center', 'neutral_hospital', 'neutral_repair_depot', 'neutral_bridge',
 ]
 
-/** IDs of neutral capturable buildings */
-export const NEUTRAL_BUILDING_IDS = ['oil_derrick', 'tech_center', 'neutral_hospital', 'neutral_repair_depot']
+/** IDs of neutral map structures (capturable unless special-cased in gameplay logic) */
+export const NEUTRAL_BUILDING_IDS = ['oil_derrick', 'tech_center', 'neutral_hospital', 'neutral_repair_depot', 'neutral_bridge']
 const NEUTRAL_BUILDING_ID_SET = new Set(NEUTRAL_BUILDING_IDS)
 
 /** Superweapon building IDs (max 1 each) */

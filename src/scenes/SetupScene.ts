@@ -4,7 +4,7 @@
 // ============================================================
 
 import Phaser from 'phaser'
-import type { FactionId } from '../types'
+import type { FactionId, StartDistanceMode } from '../types'
 import { TILE_SIZE } from '../types'
 import { FACTIONS, FACTION_IDS } from '../data/factions'
 import { MAX_AI_PLAYERS, getPlayerSlotColor, playerColorToCss } from '../data/playerSlots'
@@ -46,6 +46,11 @@ const DIFFICULTIES: Array<{ label: string; value: SkirmishConfig['aiDifficulty']
 
 const CREDIT_OPTIONS = [5000, 10000, 20000]
 
+const START_DISTANCE_OPTIONS: Array<{ label: string; value: StartDistanceMode }> = [
+  { label: 'CLOSE', value: 'close_battle' },
+  { label: 'FAR',   value: 'long_range' },
+]
+
 export class SetupScene extends Phaser.Scene {
   private config: SkirmishConfig = createDefaultSkirmishConfig()
 
@@ -57,6 +62,7 @@ export class SetupScene extends Phaser.Scene {
 
   private mapSizeBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private mapVisibilityBtns: Map<MapVisibility, Phaser.GameObjects.Graphics> = new Map()
+  private startDistanceBtns: Map<StartDistanceMode, Phaser.GameObjects.Graphics> = new Map()
   private templateBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private diffBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private creditBtns: Map<number, Phaser.GameObjects.Graphics> = new Map()
@@ -386,6 +392,21 @@ export class SetupScene extends Phaser.Scene {
       this.config.mapVisibility,
       (v) => { this.config.mapVisibility = v as MapVisibility },
       this.mapVisibilityBtns as unknown as Map<string | number | boolean, Phaser.GameObjects.Graphics>,
+    )
+
+    cy += 16
+
+    // Start Distance Mode
+    cy = this.createRadioGroup(
+      settingsX, cy, settingsW,
+      'START DISTANCE',
+      START_DISTANCE_OPTIONS.map(m => ({ label: m.label, value: m.value })),
+      this.config.startDistanceMode ?? 'long_range',
+      (v) => {
+        this.config.startDistanceMode = v as StartDistanceMode
+        this.regeneratePreview()
+      },
+      this.startDistanceBtns as unknown as Map<string | number | boolean, Phaser.GameObjects.Graphics>,
     )
 
     cy += 16

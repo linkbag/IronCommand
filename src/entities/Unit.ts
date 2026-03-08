@@ -25,6 +25,14 @@ const ATTACK_MOVE_SCAN_MS = 110
 const ORE_LOW_RATIO_THRESHOLD = 0.05
 const ORE_RETARGET_COOLDOWN_MS = 2500
 
+// ── Aircraft rearm profiles (RA2 parity) ──────────────────────
+const AIRCRAFT_REARM_PROFILE: Record<string, { ammo: number; rearmMs: number }> = {
+  harrier: { ammo: 1, rearmMs: 5500 },
+  black_eagle: { ammo: 2, rearmMs: 6500 },
+}
+const AIRFIELD_DOCK_RANGE = TILE_SIZE * 2
+const AIRFIELD_RETURN_RETRY_MS = 1200
+
 // Minimal scene interface — Agent 1 will provide the concrete implementation
 export interface IRTSScene extends Phaser.Scene {
   findPath?: (from: TileCoord, to: TileCoord, playerId?: number, unitId?: string) => TileCoord[]
@@ -92,6 +100,19 @@ export class Unit extends Phaser.GameObjects.Container {
   private refineryId: string | null
   private oreRetargetCooldownMs = 0
 
+  // Aircraft rearm state (RA2 parity)
+  private aircraftAmmo: number | null = null
+  private aircraftMaxAmmo = 0
+  private aircraftRearmTimerMs = 0
+  private aircraftReturningToAirfield = false
+  private aircraftRearming = false
+  private aircraftAirfieldId: string | null = null
+  private aircraftReturnRetryMs = 0
+
+  // Transport (embarked passenger) state
+  private embarkedTransportId: string | null = null
+  private transportedUnitIds: string[] = []
+
   // Visuals
   facing = 0 // 0: NE, 1: SE, 2: SW, 3: NW
   private visualRoot: Phaser.GameObjects.Container
@@ -148,6 +169,13 @@ export class Unit extends Phaser.GameObjects.Container {
     this.refineryId = null
 
     this.isSelected = false
+
+    // Initialize aircraft rearm state if applicable
+    const aircraftRearm = AIRCRAFT_REARM_PROFILE[this.def.id]
+    if (aircraftRearm && this.def.category === 'aircraft' && this.def.attack) {
+      this.aircraftAmmo = aircraftRearm.ammo
+      this.aircraftMaxAmmo = aircraftRearm.ammo
+    }
 
     // ── Build visuals ───────────────────────────────────────────
     this.visualRoot = scene.add.container(0, 0)
@@ -358,6 +386,153 @@ export class Unit extends Phaser.GameObjects.Container {
     return this.state !== 'dying' && this.hp > 0
   }
 
+  // ── Transport (boarding) API ──────────────────────────────────
+
+  isEmbarked(): boolean { return this.embarkedTransportId !== null }
+  setEmbarkedTransportId(id: string | null): void { this.embarkedTransportId = id }
+  canTransportUnits(): boolean { return !!this.def.transport }
+  canCarryCategory(cat: string): boolean {
+    return (this.def.transport?.allowedCategories ?? []).includes(cat as import('../types').UnitCategory)
+  }
+  hasCargoSpace(): boolean {
+    return this.transportedUnitIds.length < (this.def.transport?.capacity ?? 0)
+  }
+  getTransportedUnitIds(): string[] { return [...this.transportedUnitIds] }
+  addTransportedUnit(id: string): boolean {
+    if (!this.hasCargoSpace()) return false
+    if (this.transportedUnitIds.includes(id)) return false
+    this.transportedUnitIds.push(id)
+    return true
+  }
+  removeTransportedUnit(id: string): boolean {
+    const idx = this.transportedUnitIds.indexOf(id)
+    if (idx < 0) return false
+    this.transportedUnitIds.splice(idx, 1)
+    return true
+  }
+  getTransportLoadRangePixels(): number {
+    return (this.def.transport?.loadRangeTiles ?? 2) * TILE_SIZE
+  }
+  getTransportUnloadRadiusTiles(): number {
+    return this.def.transport?.unloadRadiusTiles ?? 2
+  }
+
+  // ── Aircraft rearm API (RA2 parity) ───────────────────────────
+
+  private hasFiniteAircraftAmmo(): boolean {
+    return this.aircraftAmmo !== null
+  }
+
+  private canUsePrimaryWeapon(): boolean {
+    if (!this.def.attack) return false
+    if (!this.hasFiniteAircraftAmmo()) return true
+    return !this.aircraftRearming
+      && !this.aircraftReturningToAirfield
+      && (this.aircraftAmmo ?? 0) > 0
+  }
+
+  private beginReturnToAirfield(): void {
+    if (!this.hasFiniteAircraftAmmo()) return
+    if (this.aircraftRearming || this.aircraftReturnRetryMs > 0) return
+
+    this.emit('find_airfield', this.playerId, (airfield: IEntityRef | null) => {
+      if (!airfield) {
+        this.aircraftReturningToAirfield = false
+        this.aircraftAirfieldId = null
+        this.aircraftReturnRetryMs = AIRFIELD_RETURN_RETRY_MS
+        this.target = null
+        this.currentOrder = null
+        this.path = []
+        this.state = 'idle'
+        return
+      }
+
+      this.aircraftAirfieldId = airfield.id
+      this.aircraftReturningToAirfield = true
+      this.target = null
+      this.orders = []
+
+      const dist = Phaser.Math.Distance.Between(this.x, this.y, airfield.x, airfield.y)
+      if (dist <= AIRFIELD_DOCK_RANGE) {
+        this.startAircraftRearm()
+        return
+      }
+
+      const target = { x: airfield.x, y: airfield.y }
+      this.currentOrder = { type: 'move', target }
+      this.startMoveTo(target)
+    })
+  }
+
+  private startAircraftRearm(): void {
+    if (!this.hasFiniteAircraftAmmo()) return
+    const profile = AIRCRAFT_REARM_PROFILE[this.def.id]
+    if (!profile) return
+
+    this.aircraftRearming = true
+    this.aircraftReturningToAirfield = false
+    this.aircraftRearmTimerMs = profile.rearmMs
+    this.attackCooldown = 0
+    this.target = null
+    this.orders = []
+    this.currentOrder = null
+    this.path = []
+    this.state = 'idle'
+  }
+
+  private onAircraftWeaponFired(): void {
+    if (!this.hasFiniteAircraftAmmo()) return
+    this.aircraftAmmo = Math.max(0, (this.aircraftAmmo ?? 0) - 1)
+    if ((this.aircraftAmmo ?? 0) <= 0) {
+      this.beginReturnToAirfield()
+    }
+  }
+
+  private updateAircraftRearmState(delta: number): void {
+    if (!this.hasFiniteAircraftAmmo()) return
+
+    this.aircraftReturnRetryMs = Math.max(0, this.aircraftReturnRetryMs - delta)
+
+    if (this.aircraftRearming) {
+      this.aircraftRearmTimerMs = Math.max(0, this.aircraftRearmTimerMs - delta)
+      if (this.aircraftRearmTimerMs <= 0) {
+        this.aircraftAmmo = this.aircraftMaxAmmo
+        this.aircraftRearming = false
+        this.aircraftReturningToAirfield = false
+        this.aircraftAirfieldId = null
+        this.state = 'idle'
+      }
+      return
+    }
+
+    if ((this.aircraftAmmo ?? 0) > 0) return
+
+    if (!this.aircraftAirfieldId) {
+      if (this.aircraftReturnRetryMs <= 0) this.beginReturnToAirfield()
+      return
+    }
+
+    this.emit('get_entity_pos', this.aircraftAirfieldId, (pos: Position | null) => {
+      if (!pos) {
+        this.aircraftReturningToAirfield = false
+        this.aircraftAirfieldId = null
+        this.aircraftReturnRetryMs = AIRFIELD_RETURN_RETRY_MS
+        this.currentOrder = null
+        this.path = []
+        this.state = 'idle'
+        return
+      }
+
+      const dist = Phaser.Math.Distance.Between(this.x, this.y, pos.x, pos.y)
+      if (dist <= AIRFIELD_DOCK_RANGE) {
+        this.startAircraftRearm()
+      } else if (!this.aircraftReturningToAirfield) {
+        this.aircraftReturningToAirfield = true
+        this.startMoveTo(pos)
+      }
+    })
+  }
+
   // ── Main update loop ─────────────────────────────────────────
 
   update(delta: number): void {
@@ -370,6 +545,9 @@ export class Unit extends Phaser.GameObjects.Container {
     if (this.weaponFxTimer <= 0 && this.muzzleFlash.visible) {
       this.muzzleFlash.setVisible(false)
     }
+
+    // Aircraft rearm state machine (RA2 parity)
+    this.updateAircraftRearmState(delta)
 
     // Iron Curtain invulnerability timer
     if (this.invulnerable && this.invulnerableTimer > 0) {
@@ -532,6 +710,36 @@ export class Unit extends Phaser.GameObjects.Container {
         this.path = []
         this.target = null
         this.guardPosition = null
+        break
+
+      case 'load':
+        // Move toward the transport entity if needed; EntityManager handles actual boarding
+        this.state = 'idle'
+        this.path = []
+        this.target = null
+        if (order.targetEntityId) {
+          this.emit('resolve_target', order.targetEntityId, (ref: IEntityRef) => {
+            if (ref && Phaser.Math.Distance.Between(this.x, this.y, ref.x, ref.y) > TILE_SIZE * 2) {
+              this.startMoveTo({ x: ref.x, y: ref.y })
+            } else {
+              this.emit('request_load_unit', this.id, order.targetEntityId)
+            }
+          })
+        }
+        break
+
+      case 'unload':
+        if (!this.canTransportUnits()) {
+          this.state = 'idle'
+          this.processNextOrder()
+          return
+        }
+        if (order.target) {
+          this.startMoveTo(order.target)
+        } else {
+          this.emit('request_transport_unload', this.id, { x: this.x, y: this.y })
+          this.processNextOrder()
+        }
         break
 
       default:
@@ -729,6 +937,7 @@ export class Unit extends Phaser.GameObjects.Container {
     this.playWeaponEffect(target.x, target.y)
     this.updateTurretFacingFromVector(target.x - this.x, target.y - this.y)
     this.attackCooldown = 1 / (this.getEffectiveFireRate() * this.getVeterancyFireRateMultiplier())
+    this.onAircraftWeaponFired()
   }
 
   /** Fire at nearby enemies while moving — doesn't stop movement */
@@ -780,6 +989,16 @@ export class Unit extends Phaser.GameObjects.Container {
       } else {
         this.processNextOrder()
       }
+    } else if (this.currentOrder?.type === 'load') {
+      // Arrived near transport — request boarding
+      if (this.currentOrder.targetEntityId) {
+        this.emit('request_load_unit', this.id, this.currentOrder.targetEntityId)
+      }
+      this.processNextOrder()
+    } else if (this.currentOrder?.type === 'unload') {
+      // Arrived at unload point — ask EntityManager to deploy cargo
+      this.emit('request_transport_unload', this.id, { x: this.x, y: this.y })
+      this.processNextOrder()
     } else if (this.currentOrder?.type === 'attackMove' && this.def.attack) {
       if (!this.updateAttackMove()) {
         this.processNextOrder()

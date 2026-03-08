@@ -20,7 +20,7 @@ import { cartToScreen, screenToCart, getIsoWorldBounds } from '../engine/IsoUtil
 import { FACTIONS } from '../data/factions'
 import { MAX_AI_PLAYERS, getPlayerSlotColor } from '../data/playerSlots'
 import type { SkirmishConfig } from './skirmishConfig'
-import { createDefaultSkirmishConfig, isMapRevealEnabled } from './skirmishConfig'
+import { createDefaultSkirmishConfig, isMapRevealEnabled, deriveAlliancesFromTeams } from './skirmishConfig'
 
 // Unit acknowledgment lines
 const ACK_LINES: Record<string, string[]> = {
@@ -228,7 +228,7 @@ export class GameScene extends Phaser.Scene {
     const mapDims: Record<string, number> = { small: 64, medium: 128, large: 256 }
     const mapSize = mapDims[cfg.mapSize] ?? 64
     const seed = cfg.mapSeed ?? Math.floor(Math.random() * 99999) + 1
-    this.gameMap = new GameMap(this, mapSize, mapSize, seed, cfg.mapTemplate)
+    this.gameMap = new GameMap(this, mapSize, mapSize, seed, cfg.mapTemplate, cfg.startDistanceMode)
     this.gameMap.renderTerrain()
     // NOTE: Don't pre-render fog as full black here. All tiles start HIDDEN.
     // updateFogOfWar() at the end of create() will reveal + render fog properly.
@@ -300,17 +300,25 @@ export class GameScene extends Phaser.Scene {
     allPlayers = [humanPlayer, ...aiPlayers]
 
     // ── 5b. Explicit alliances ────────────────────────────────
-    const validAiIds = new Set(aiPlayers.map(p => p.id))
-    const maxAllies = Math.max(0, aiPlayers.length - 1)
-    const allyAiIds = [...new Set(cfg.allyPlayerIds ?? [])]
-      .filter(id => validAiIds.has(id))
-      .sort((a, b) => a - b)
-      .slice(0, maxAllies)
-    const alliedPairs: Array<[number, number]> = []
-    for (const allyId of allyAiIds) alliedPairs.push([0, allyId])
-    for (let i = 0; i < allyAiIds.length; i++) {
-      for (let j = i + 1; j < allyAiIds.length; j++) {
-        alliedPairs.push([allyAiIds[i], allyAiIds[j]])
+    let alliedPairs: Array<[number, number]>
+    if (cfg.playerTeams && cfg.playerTeams.length > 0) {
+      // Team-based alliance: players sharing the same TeamId are allies
+      const playerIds = allPlayers.map(p => p.id)
+      alliedPairs = deriveAlliancesFromTeams(cfg.playerTeams, playerIds)
+    } else {
+      // Legacy: allyPlayerIds specifies which AI slots are allied with player 0
+      const validAiIds = new Set(aiPlayers.map(p => p.id))
+      const maxAllies = Math.max(0, aiPlayers.length - 1)
+      const allyAiIds = [...new Set(cfg.allyPlayerIds ?? [])]
+        .filter(id => validAiIds.has(id))
+        .sort((a, b) => a - b)
+        .slice(0, maxAllies)
+      alliedPairs = []
+      for (const allyId of allyAiIds) alliedPairs.push([0, allyId])
+      for (let i = 0; i < allyAiIds.length; i++) {
+        for (let j = i + 1; j < allyAiIds.length; j++) {
+          alliedPairs.push([allyAiIds[i], allyAiIds[j]])
+        }
       }
     }
     this.entityMgr.setAllianceMode(alliedPairs)

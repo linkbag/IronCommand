@@ -9,7 +9,7 @@ import {
   GEMS_TILE_MAX,
   ORE_REGEN_RATE,
 } from '../types'
-import type { TileData, GameMap as GameMapData, Position, TileCoord } from '../types'
+import type { TileData, GameMap as GameMapData, Position, TileCoord, StartDistanceMode } from '../types'
 import type { MapTemplate } from '../types'
 import { tileToScreen, screenToTile, getIsoWorldBounds, setMapOffset, ISO_TILE_W, ISO_TILE_H, drawIsoDiamond } from './IsoUtils'
 
@@ -117,8 +117,9 @@ export function generatePreviewData(
   height: number,
   seed: number,
   template: MapTemplate = 'continental',
+  startDistanceMode: StartDistanceMode = 'long_range',
 ): { tiles: TileData[][]; startPositions: Position[] } {
-  const data = generateMapData(width, height, seed, template)
+  const data = generateMapData(width, height, seed, template, startDistanceMode)
   return { tiles: data.tiles, startPositions: data.startPositions }
 }
 
@@ -147,6 +148,7 @@ function generateMapData(
   height = MAP_DEFAULT_HEIGHT,
   seed = 12345,
   template: MapTemplate = 'continental',
+  startDistanceMode: StartDistanceMode = 'long_range',
 ): GameMapData {
   const rng = makePRNG(seed)
   const resolved = resolveTemplate(template, rng)
@@ -648,7 +650,7 @@ function generateMapData(
   }
 
   // Compute deterministic template-aware start positions.
-  const startPositions: Position[] = computeStartPositions(tiles, width, height, seed, resolved)
+  const startPositions: Position[] = computeStartPositions(tiles, width, height, seed, resolved, startDistanceMode)
 
   // Clear terrain around start positions (make them buildable grass)
   for (const sp of startPositions) {
@@ -716,6 +718,10 @@ function spawnTemplateOffset(template: ResolvedMapTemplate): number {
     case 'arctic': return 0x44f00d4
     case 'urban': return 0x55f00d5
   }
+}
+
+function spawnDistanceOffset(mode: StartDistanceMode): number {
+  return mode === 'close_battle' ? 0x66a12f3 : 0x9bb31d7
 }
 
 function isSpawnableTile(tile: TileData): boolean {
@@ -1000,10 +1006,15 @@ function computeStartPositions(
   h: number,
   seed: number,
   template: ResolvedMapTemplate,
+  startDistanceMode: StartDistanceMode = 'long_range',
 ): Position[] {
   const count = computeSpawnCountForSize(w, h)
-  const rng = makePRNG((seed ^ spawnTemplateOffset(template) ^ (w << 16) ^ h) >>> 0)
-  const minDistance = Math.hypot(w, h) * SPAWN_MIN_DISTANCE_RATIO
+  const rng = makePRNG((seed ^ spawnTemplateOffset(template) ^ spawnDistanceOffset(startDistanceMode) ^ (w << 16) ^ h) >>> 0)
+  // close_battle: spawns can be ~40% closer; long_range: standard 25% map-diagonal minimum
+  const minDistRatio = startDistanceMode === 'close_battle'
+    ? SPAWN_MIN_DISTANCE_RATIO * 0.6
+    : SPAWN_MIN_DISTANCE_RATIO
+  const minDistance = Math.hypot(w, h) * minDistRatio
   const candidates = collectSpawnCandidates(tiles, w, h, template)
 
   const selectedTiles: TileCoord[] = []
@@ -1162,9 +1173,9 @@ export class GameMap {
   private damagedBridgeTiles: Set<number> = new Set()
   private debugGridEnabled = false
 
-  constructor(scene: Phaser.Scene, width?: number, height?: number, seed?: number, template?: MapTemplate) {
+  constructor(scene: Phaser.Scene, width?: number, height?: number, seed?: number, template?: MapTemplate, startDistanceMode?: StartDistanceMode) {
     this.scene = scene
-    this.data = generateMapData(width, height, seed, template)
+    this.data = generateMapData(width, height, seed, template, startDistanceMode)
     this.terrainGraphics = scene.add.graphics()
     this.animLayer = scene.add.graphics()
     this.fogLayer = scene.add.graphics()

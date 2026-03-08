@@ -249,6 +249,21 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     return !this.isAlly(playerA, playerB)
   }
 
+  /** Find the nearest air force command building for a player (RA2 parity: aircraft RTB here to rearm) */
+  getNearestAirfield(x: number, y: number, playerId: number): Building | null {
+    let nearest: Building | null = null
+    let nearestDist = Infinity
+    for (const b of this.buildings.values()) {
+      if (b.playerId !== playerId || b.def.id !== 'air_force_command' || b.state === 'dying') continue
+      const d = Phaser.Math.Distance.Between(x, y, b.x, b.y)
+      if (d < nearestDist) {
+        nearestDist = d
+        nearest = b
+      }
+    }
+    return nearest
+  }
+
   /** Returns closest enemy unit from (x,y) within range, as seen by playerId */
   getEnemyUnitsInRange(
     x: number,
@@ -299,6 +314,100 @@ export class EntityManager extends Phaser.Events.EventEmitter {
     return Array.from(this.buildings.values())
       .filter(b => b.playerId === playerId && (b.state === 'active' || b.state === 'low_power'))
       .map(b => b.def.id)
+  }
+
+  // ── Transport operations ──────────────────────────────────────
+
+  /** Load a passenger unit into a transport, if close enough and capacity allows. Returns true on success. */
+  loadUnitIntoTransport(passengerId: string, transportId: string): boolean {
+    const passenger = this.units.get(passengerId)
+    const transport = this.units.get(transportId)
+    if (!passenger || !transport) return false
+    if (passenger.id === transport.id) return false
+    if (passenger.playerId !== transport.playerId) return false
+    if (passenger.state === 'dying' || transport.state === 'dying') return false
+    if (passenger.isEmbarked()) return false
+    if (!transport.canTransportUnits()) return false
+    if (!transport.canCarryCategory(passenger.def.category)) return false
+    if (!transport.hasCargoSpace()) return false
+
+    const dist = Phaser.Math.Distance.Between(passenger.x, passenger.y, transport.x, transport.y)
+    if (dist > transport.getTransportLoadRangePixels()) return false
+    if (!transport.addTransportedUnit(passenger.id)) return false
+
+    passenger.setEmbarkedTransportId(transport.id)
+    passenger.setPosition(transport.x, transport.y)
+    this.emit('unit_loaded', {
+      transportId: transport.id,
+      passengerId: passenger.id,
+      playerId: transport.playerId,
+    })
+    return true
+  }
+
+  /** Unload all passengers from a transport near the given target position. Returns count unloaded. */
+  unloadTransportAt(transportId: string, target: import('../types').Position): number {
+    const transport = this.units.get(transportId)
+    if (!transport || !transport.canTransportUnits()) return 0
+    const cargoIds = transport.getTransportedUnitIds()
+    if (cargoIds.length === 0) return 0
+
+    const maxRadius = Math.max(2, Math.round(transport.getTransportUnloadRadiusTiles()))
+    const targetTile = {
+      col: Math.floor(target.x / TILE_SIZE),
+      row: Math.floor(target.y / TILE_SIZE),
+    }
+    const usedTiles = new Set<string>()
+    let unloaded = 0
+
+    for (const cargoId of cargoIds) {
+      const passenger = this.units.get(cargoId)
+      if (!passenger || passenger.state === 'dying') {
+        transport.removeTransportedUnit(cargoId)
+        continue
+      }
+
+      const dropTile = this.findNearestOpenDropTile(targetTile, usedTiles, maxRadius)
+      if (!dropTile) continue
+
+      if (!transport.removeTransportedUnit(cargoId)) continue
+      passenger.setEmbarkedTransportId(null)
+      passenger.setPosition(
+        dropTile.col * TILE_SIZE + TILE_SIZE / 2,
+        dropTile.row * TILE_SIZE + TILE_SIZE / 2,
+      )
+      usedTiles.add(`${dropTile.col},${dropTile.row}`)
+      unloaded++
+    }
+    return unloaded
+  }
+
+  private findNearestOpenDropTile(
+    origin: import('../types').TileCoord,
+    usedTiles: Set<string>,
+    maxRadius: number,
+  ): import('../types').TileCoord | null {
+    for (let r = 0; r <= maxRadius; r++) {
+      for (let dr = -r; dr <= r; dr++) {
+        for (let dc = -r; dc <= r; dc++) {
+          if (Math.abs(dr) !== r && Math.abs(dc) !== r) continue
+          const col = origin.col + dc
+          const row = origin.row + dr
+          const key = `${col},${row}`
+          if (usedTiles.has(key)) continue
+          // Check if anyone occupies that tile already
+          let occupied = false
+          for (const u of this.units.values()) {
+            if (u.isEmbarked() || u.state === 'dying') continue
+            const uCol = Math.floor(u.x / TILE_SIZE)
+            const uRow = Math.floor(u.y / TILE_SIZE)
+            if (uCol === col && uRow === row) { occupied = true; break }
+          }
+          if (!occupied) return { col, row }
+        }
+      }
+    }
+    return null
   }
 
   removeEntity(id: string): void {
@@ -472,6 +581,11 @@ export class EntityManager extends Phaser.Events.EventEmitter {
       this.emit('check_ore_at', x, y, cb)
     })
 
+    // Aircraft RTB: find nearest airfield for rearming (RA2 parity)
+    unit.on('find_airfield', (playerId: number, cb: (airfield: Building | null) => void) => {
+      cb(this.getNearestAirfield(unit.x, unit.y, playerId))
+    })
+
     // Spy infiltration
     unit.on('spy_infiltrate', (spy: Unit, target: Unit | Building) => {
       this.emit('spy_infiltrate', spy, target)
@@ -491,6 +605,16 @@ export class EntityManager extends Phaser.Events.EventEmitter {
       cb: (done: boolean) => void,
     ) => {
       this.emit('engineer_repair_bridge', engineer, targetPos, cb)
+    })
+
+    // Transport boarding: passenger requests to board a specific transport
+    unit.on('request_load_unit', (passengerId: string, transportId: string) => {
+      this.loadUnitIntoTransport(passengerId, transportId)
+    })
+
+    // Transport unloading: transport deploys its cargo at a target position
+    unit.on('request_transport_unload', (transportId: string, target: Position) => {
+      this.unloadTransportAt(transportId, target)
     })
   }
 

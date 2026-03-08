@@ -8,7 +8,7 @@ import { Unit } from '../entities/Unit'
 import { Building } from '../entities/Building'
 import type { EntityManager } from '../entities/EntityManager'
 import type { AttackStats } from '../types'
-import { DamageType, ArmorType } from '../types'
+import { DamageType, ArmorType, NEUTRAL_PLAYER_ID } from '../types'
 import { TILE_SIZE } from '../types'
 import { cartToScreen } from '../engine/IsoUtils'
 
@@ -210,8 +210,23 @@ export class Combat extends Phaser.Events.EventEmitter {
         return // dogs can't damage vehicles/buildings
       }
 
-      // Engineers: capture enemy buildings instead of damaging
+      // Engineers: repair damaged neutral structures, otherwise capture hostile structures.
       if (attacker.def.id === 'engineer' && target instanceof Building && target.playerId !== attacker.playerId) {
+        const isNeutralTarget = target.playerId === NEUTRAL_PLAYER_ID
+        const isBridgeStructure = target.def.id === 'neutral_bridge'
+        if (isNeutralTarget && target.hp < target.def.stats.maxHp) {
+          // Repair damaged neutral structure (e.g. collapsed bridge)
+          const repaired = target.repair(1_000_000_000)
+          if (repaired > 0) {
+            this.createRepairFlash(target.x, target.y)
+          }
+          console.log('[Engineer] Neutral repair', { engineerId: attacker.id, buildingId: target.id })
+          return
+        }
+        if (isNeutralTarget && isBridgeStructure) {
+          console.log('[Engineer] Bridge is intact; no capture', { engineerId: attacker.id, buildingId: target.id })
+          return
+        }
         // Capture: switch building ownership and sacrifice engineer
         this.em.emit('engineer_capture', {
           engineerId: attacker.id,
@@ -1052,6 +1067,24 @@ export class Combat extends Phaser.Events.EventEmitter {
       scaleY: 1.7,
       duration: 140,
       ease: 'Quad.easeOut',
+      onComplete: () => flash.destroy(),
+    })
+  }
+
+  private createRepairFlash(x: number, y: number): void {
+    const iso = cartToScreen(x, y)
+    const flash = this.scene.add.graphics()
+    flash.fillStyle(0x66ffbb, 0.85)
+    flash.fillCircle(iso.x, iso.y, 6)
+    flash.lineStyle(2, 0xcaffee, 0.95)
+    flash.strokeCircle(iso.x, iso.y, 10)
+    flash.setDepth(36)
+    this.scene.tweens.add({
+      targets: flash,
+      alpha: 0,
+      scaleX: 1.5,
+      scaleY: 1.5,
+      duration: 180,
       onComplete: () => flash.destroy(),
     })
   }

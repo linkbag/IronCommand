@@ -23,6 +23,8 @@ export type FactionId =
   | 'iraq' | 'south_africa' | 'spain' | 'italy' | 'korea'
 
 export type FactionSide = 'alliance' | 'collective'
+export type TeamId = 'A' | 'B' | 'C' | 'D'
+export type StartDistanceMode = 'close_battle' | 'long_range'
 
 export interface FactionDef {
   id: FactionId
@@ -133,6 +135,14 @@ export interface UnitDef {
   attack: AttackStats | null  // null = non-combat (e.g. harvester)
   factionExclusive: FactionId | null  // null = available to all of that side
   spriteKey: string
+  transport?: TransportProfile
+}
+
+export interface TransportProfile {
+  capacity: number
+  allowedCategories: UnitCategory[]
+  loadRangeTiles?: number
+  unloadRadiusTiles?: number
 }
 
 export interface BuildingDef {
@@ -156,6 +166,7 @@ export interface Player {
   id: number
   name: string
   faction: FactionId
+  teamId?: TeamId            // optional: team assignment for team vs team games
   color: number
   credits: number
   power: number           // current power balance
@@ -186,7 +197,18 @@ export interface GameState {
 
 // ── Orders & Commands ─────────────────────────────────────────
 
-export type OrderType = 'move' | 'attack' | 'attackMove' | 'guard' | 'patrol' | 'harvest' | 'build' | 'repair' | 'stop'
+export type OrderType =
+  | 'move'
+  | 'attack'
+  | 'attackMove'
+  | 'guard'
+  | 'patrol'
+  | 'harvest'
+  | 'build'
+  | 'repair'
+  | 'stop'
+  | 'load'    // board a transport
+  | 'unload'  // disembark from transport at target position
 
 export interface Order {
   type: OrderType
@@ -220,6 +242,7 @@ export const GEMS_PER_LOAD = 50
 export const HARVESTER_CAPACITY = 20
 export const REFINERY_PROCESS_RATE = 1 // loads/sec
 export const POWER_LOW_THRESHOLD = 0.5  // build/production slows below this
+export const LOW_POWER_PRODUCTION_MULT = 0.5  // production speed multiplier when power is low (RA2 parity)
 
 // ── Ore system constants ─────────────────────────────────────
 export const ORE_TILE_MAX = 2000        // max ore amount per tile
@@ -227,7 +250,8 @@ export const GEMS_TILE_MAX = 3000       // max gems amount per tile
 export const ORE_HARVEST_VALUE = ORE_PER_LOAD
 export const GEMS_HARVEST_VALUE = GEMS_PER_LOAD
 export const ORE_HARVEST_RATE = 100     // ore units extracted per load
-export const ORE_REGEN_RATE = 1         // ore units regenerated per tick (1% of mining speed)
+export const ORE_RECOVERY_RATIO = 0.01  // hard-lock ore recovery to 1% of mining speed
+export const ORE_REGEN_RATE = ORE_HARVEST_RATE * ORE_RECOVERY_RATIO  // = 1 ore unit per tick
 export const NEUTRAL_PLAYER_ID = -1     // neutral/capturable buildings
 
 export type MapTemplate = 'continental' | 'islands' | 'desert' | 'arctic' | 'urban' | 'random'

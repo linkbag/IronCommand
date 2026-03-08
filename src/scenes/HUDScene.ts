@@ -2170,15 +2170,19 @@ export class HUDScene extends Phaser.Scene {
       }
     }
 
-    // Tick down active timers
-    for (const [defId, remaining] of this.superweaponTimers) {
-      const newRemaining = remaining - delta
-      if (newRemaining <= 0) {
-        this.superweaponTimers.delete(defId)
-        this.superweaponReady.add(defId)
-        this.showAlert(`${defId.replace(/_/g, ' ').toUpperCase()} READY!`, 'success')
-      } else {
-        this.superweaponTimers.set(defId, newRemaining)
+    // RA2 parity: superweapon countdown pauses while player is in low power.
+    const lowPower = this.isLowPowerState()
+    if (!lowPower) {
+      // Tick down active timers
+      for (const [defId, remaining] of this.superweaponTimers) {
+        const newRemaining = remaining - delta
+        if (newRemaining <= 0) {
+          this.superweaponTimers.delete(defId)
+          this.superweaponReady.add(defId)
+          this.showAlert(`${defId.replace(/_/g, ' ').toUpperCase()} READY!`, 'success')
+        } else {
+          this.superweaponTimers.set(defId, newRemaining)
+        }
       }
     }
 
@@ -2295,6 +2299,24 @@ export class HUDScene extends Phaser.Scene {
       infoText += `\n${isPrimary ? '★ PRIMARY' : 'Click to set primary'}`
       infoText += '\nRight-click to set rally point'
       if (speedBonus > 1) infoText += ` | +${Math.round((speedBonus - 1) * 100)}% speed`
+    }
+
+    // Transport cargo info (from transport branch)
+    if (ids.length === 1) {
+      const em = this.registry.get('entityMgr') as {
+        getUnit?: (id: string) => {
+          canTransportUnits?: () => boolean
+          getTransportedUnitIds?: () => string[]
+          def?: { transport?: { capacity: number } }
+        } | undefined
+      } | undefined
+      const unitView = em?.getUnit?.(first.id)
+      if (unitView?.canTransportUnits?.()) {
+        const cargo = (unitView.getTransportedUnitIds?.() ?? []).length
+        const cap = unitView.def?.transport?.capacity ?? 0
+        infoText += `\nCargo: ${cargo}/${cap}`
+        infoText += '\nRMB transport to load | U+click unload'
+      }
     }
 
     this.selectedInfoTxt.setText(infoText)
@@ -2565,12 +2587,16 @@ export class HUDScene extends Phaser.Scene {
     if (gs) gs.events.emit('cursorModeChanged', { mode })
   }
 
+  /** RA2 parity: returns true when player has insufficient power */
+  private isLowPowerState(): boolean {
+    if (!this.humanPlayer) return false
+    const { powerGenerated, powerConsumed } = this.humanPlayer
+    return powerGenerated <= 0 || powerConsumed > powerGenerated
+  }
+
   /** RA2: Production slows to 50% when power is low */
   private getPowerSpeedMultiplier(): number {
-    if (!this.humanPlayer) return 1
-    const { powerGenerated, powerConsumed } = this.humanPlayer
-    if (powerGenerated <= 0) return 0.5
-    return powerConsumed > powerGenerated ? 0.5 : 1.0
+    return this.isLowPowerState() ? 0.5 : 1.0
   }
 
   private pointerScreenToCart(screenX: number, screenY: number): { x: number; y: number } {
