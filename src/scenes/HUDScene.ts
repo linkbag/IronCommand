@@ -64,7 +64,6 @@ type CursorMode = 'normal' | 'sell' | 'repair' | 'attackMove' | 'placement'
 interface BuildableItem {
   id: string
   label: string
-  abbrev: string
   cost: number
   tab: BuildTab
   buildTime: number
@@ -102,7 +101,6 @@ function getBuildItems(factionId: string): BuildableItem[] {
     items.push({
       id: def.id,
       label: def.name,
-      abbrev: def.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
       cost: def.stats.cost,
       tab,
       buildTime: def.stats.buildTime,
@@ -121,7 +119,6 @@ function getBuildItems(factionId: string): BuildableItem[] {
     items.push({
       id: def.id,
       label: def.name,
-      abbrev: def.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
       cost: def.stats.cost,
       tab,
       buildTime: def.stats.buildTime,
@@ -2109,7 +2106,7 @@ export class HUDScene extends Phaser.Scene {
         btn.setAlpha(pulse)
       }
 
-      btn._costTxt?.setVisible(!btn._readyTxt.text)
+      btn._costTxt?.setVisible(!btn._readyTxt?.text)
     }
 
     // ── Superweapon countdown overlay (top-left of screen) ──
