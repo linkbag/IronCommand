@@ -410,6 +410,7 @@ export class Building extends Phaser.GameObjects.Container {
       case 'tech_center':
       case 'barracks':
       case 'tesla_reactor':
+      case 'nuclear_reactor':
         wallH += 3
         break
       case 'pillbox':
