@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 04:08*
+*Last updated: 2026-03-08 04:09*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -142,3 +142,7 @@ All changes are clean. Removed redundant barracks equality check and stray blank
 ### Update: 2026-03-08 04:08
 ### codex-ic-ui-enemy-cursor-minimap — 2026-03-08 04:08
 Implementation is clean and correct. Coordinate system in isHoveringEnemyEntity matches existing getOwnUnitAt/getOwnBuildingAt patterns. Cursor state guard prevents redundant DOM writes. SHUTDOWN handler and create() reset cursor properly. Minimap ally/enemy colors correct. TypeScript passes. Build passes. Minor: HUD_SIDEBAR_W in GameScene duplicates SIDEBAR_W in HUDScene but is harmless.
+
+### Update: 2026-03-08 04:09
+### codex-ic-move-feedback-v2 — 2026-03-08 04:09
+feat/ic-move-feedback-v2 adds move trajectory lines and order marker overlays. Code is clean: proper Graphics lifecycle (optional type, destroy+undefined in init, guard in draw method), correct dedupe guard, cap at 64 lines with per-frame pruning, valid Phaser.Math.Easing.Cubic.Out usage, gameMap.worldWidth clamping is safe (listener registered after systems init). TypeScript: zero errors. No fixes required.
