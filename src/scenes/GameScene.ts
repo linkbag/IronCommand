@@ -15,7 +15,7 @@ import { AI } from '../combat/AI'
 import { BUILDING_DEFS, getPowerBuildingDefId, SUPERWEAPON_BUILDING_IDS } from '../entities/BuildingDefs'
 import { UNIT_DEFS, getHarvesterDefId, getBasicInfantryDefId } from '../entities/UnitDefs'
 import type { Position, TileCoord, GameState, Player, GamePhase, FactionId, FactionSide } from '../types'
-import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL_PLAYER_ID } from '../types'
+import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL_PLAYER_ID, ORE_TILE_MAX, GEMS_TILE_MAX } from '../types'
 import { cartToScreen, screenToCart, getIsoWorldBounds } from '../engine/IsoUtils'
 import { FACTIONS } from '../data/factions'
 import type { SkirmishConfig } from './SetupScene'
@@ -30,6 +30,9 @@ const ACK_LINES: Record<string, string[]> = {
 const PLAYER_TINT = 0x4488ff
 const AI_TINTS = [0xff4444, 0xff8800, 0xaa44ff, 0x44cc44, 0xffdd00, 0x44dddd, 0xff66aa] // red, orange, purple, green, yellow, cyan, pink
 const PRODUCER_BUILDING_IDS = ['barracks', 'war_factory', 'air_force_command', 'naval_shipyard', 'ore_refinery'] as const
+const ORE_FIELD_SCORE_RADIUS = 2
+const ORE_FIELD_DISTANCE_WEIGHT = 22
+const ORE_FIELD_GEMS_BONUS = 1200
 
 export class GameScene extends Phaser.Scene {
   // ── IRTSScene interface (Unit.ts calls these via scene cast) ──
@@ -976,28 +979,120 @@ export class GameScene extends Phaser.Scene {
 
     // Harvester asks: "where is the nearest ore field?"
     this.entityMgr.on('find_ore_field', (x: number, y: number, cb: (pos: Position | null) => void) => {
-      const origin = this.gameMap.worldToTile(x, y)
-      let foundPos: Position | null = null
-      const maxRadius = Math.min(width, height) / 2
+      cb(this.findBestOreFieldTarget(x, y))
+    })
+  }
 
-      for (let radius = 1; radius <= maxRadius && foundPos === null; radius++) {
-        for (let dr = -radius; dr <= radius; dr++) {
-          for (let dc = -radius; dc <= radius; dc++) {
-            if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
-            const tc = origin.col + dc
-            const tr = origin.row + dr
+  private findBestOreFieldTarget(originWorldX: number, originWorldY: number): Position | null {
+    const { tiles, width, height } = this.gameMap.data
+    const origin = this.gameMap.worldToTile(originWorldX, originWorldY)
+    const reachableMask = this.computeReachableGroundMask(origin)
+
+    let bestReachable: { col: number; row: number; score: number } | null = null
+    let bestFallback: { col: number; row: number; score: number } | null = null
+
+    for (let row = 0; row < height; row++) {
+      for (let col = 0; col < width; col++) {
+        const tile = tiles[row]?.[col]
+        if (!tile || tile.oreAmount <= 0) continue
+
+        let localOre = 0
+        for (let dr = -ORE_FIELD_SCORE_RADIUS; dr <= ORE_FIELD_SCORE_RADIUS; dr++) {
+          for (let dc = -ORE_FIELD_SCORE_RADIUS; dc <= ORE_FIELD_SCORE_RADIUS; dc++) {
+            const tc = col + dc
+            const tr = row + dr
             if (tc < 0 || tc >= width || tr < 0 || tr >= height) continue
-            const t = tiles[tr]?.[tc]
-            if (t && t.oreAmount > 0) {
-              foundPos = this.gameMap.tileToWorld(tc, tr)
-            }
+            const neighbor = tiles[tr]?.[tc]
+            if (neighbor && neighbor.oreAmount > 0) localOre += neighbor.oreAmount
           }
-          if (foundPos !== null) break
+        }
+
+        const maxAmount = tile.terrain === TerrainType.GEMS ? GEMS_TILE_MAX : ORE_TILE_MAX
+        const richnessRatio = maxAmount > 0 ? Phaser.Math.Clamp(tile.oreAmount / maxAmount, 0, 1) : 0
+        const distance = Math.abs(col - origin.col) + Math.abs(row - origin.row)
+        const gemsBonus = tile.terrain === TerrainType.GEMS ? ORE_FIELD_GEMS_BONUS : 0
+        const score = localOre
+          + tile.oreAmount * (tile.terrain === TerrainType.GEMS ? 1.55 : 1.25)
+          + richnessRatio * 900
+          + gemsBonus
+          - distance * ORE_FIELD_DISTANCE_WEIGHT
+
+        if (!bestFallback || score > bestFallback.score) {
+          bestFallback = { col, row, score }
+        }
+
+        const key = row * width + col
+        if (reachableMask[key] !== 1) continue
+        if (!bestReachable || score > bestReachable.score) {
+          bestReachable = { col, row, score }
         }
       }
+    }
 
-      cb(foundPos)
-    })
+    const chosen = bestReachable ?? bestFallback
+    if (!chosen) return null
+    return this.gameMap.tileToWorld(chosen.col, chosen.row)
+  }
+
+  private computeReachableGroundMask(origin: TileCoord): Uint8Array {
+    const { tiles, width, height } = this.gameMap.data
+    const visited = new Uint8Array(width * height)
+    const start = this.findNearestPassableGroundTile(origin, 8)
+    if (!start) return visited
+
+    const queue: number[] = []
+    const startKey = start.row * width + start.col
+    visited[startKey] = 1
+    queue.push(startKey)
+
+    let head = 0
+    while (head < queue.length) {
+      const key = queue[head++]
+      const col = key % width
+      const row = (key - col) / width
+
+      const neighbors: TileCoord[] = [
+        { col, row: row - 1 },
+        { col, row: row + 1 },
+        { col: col - 1, row },
+        { col: col + 1, row },
+      ]
+
+      for (const n of neighbors) {
+        if (n.col < 0 || n.col >= width || n.row < 0 || n.row >= height) continue
+        const nKey = n.row * width + n.col
+        if (visited[nKey] === 1) continue
+        const nTile = tiles[n.row]?.[n.col]
+        if (!nTile || !nTile.passable) continue
+        visited[nKey] = 1
+        queue.push(nKey)
+      }
+    }
+
+    return visited
+  }
+
+  private findNearestPassableGroundTile(origin: TileCoord, maxRadius = 8): TileCoord | null {
+    const { tiles, width, height } = this.gameMap.data
+    const startCol = Phaser.Math.Clamp(origin.col, 0, Math.max(0, width - 1))
+    const startRow = Phaser.Math.Clamp(origin.row, 0, Math.max(0, height - 1))
+    if (tiles[startRow]?.[startCol]?.passable) {
+      return { col: startCol, row: startRow }
+    }
+
+    for (let radius = 1; radius <= maxRadius; radius++) {
+      for (let dr = -radius; dr <= radius; dr++) {
+        for (let dc = -radius; dc <= radius; dc++) {
+          if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
+          const col = startCol + dc
+          const row = startRow + dr
+          if (col < 0 || col >= width || row < 0 || row >= height) continue
+          if (tiles[row]?.[col]?.passable) return { col, row }
+        }
+      }
+    }
+
+    return null
   }
 
   // ── Building placement radius check ─────────────────────────────
