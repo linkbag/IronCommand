@@ -8,22 +8,12 @@ import type { FactionId } from '../types'
 import { TILE_SIZE } from '../types'
 import { FACTIONS, FACTION_IDS } from '../data/factions'
 import { generatePreviewData, PREVIEW_COLORS } from '../engine/GameMap'
+import { MAP_VISIBILITY_OPTIONS, createDefaultSkirmishConfig } from './skirmishConfig'
+import type { SkirmishConfig, MapVisibility } from './skirmishConfig'
 
 import type { MapTemplate } from '../types'
 export type { MapTemplate }
-
-export interface SkirmishConfig {
-  playerFaction: FactionId
-  mapSize: 'small' | 'medium' | 'large'
-  revealMap: boolean
-  mapTemplate: MapTemplate
-  mapSeed: number
-  playerSpawn: number           // -1 = random, 0-7 = specific spawn index
-  aiCount: number
-  aiDifficulty: 'easy' | 'medium' | 'hard'
-  startingCredits: number
-  allyPlayerIds: number[] // AI player IDs allied with human player (player 0)
-}
+export type { SkirmishConfig } from './skirmishConfig'
 
 const STYLE = {
   bg: 0x08080f,
@@ -54,24 +44,9 @@ const DIFFICULTIES: Array<{ label: string; value: SkirmishConfig['aiDifficulty']
 ]
 
 const CREDIT_OPTIONS = [5000, 10000, 20000]
-const MAP_VISIBILITY_OPTIONS: Array<{ label: string; value: boolean }> = [
-  { label: 'FOG OF WAR', value: false },
-  { label: 'REVEALED', value: true },
-]
 
 export class SetupScene extends Phaser.Scene {
-  private config: SkirmishConfig = {
-    playerFaction: 'usa',
-    mapSize: 'medium',
-    revealMap: false,
-    mapTemplate: 'continental',
-    mapSeed: Math.floor(Math.random() * 99999) + 1,
-    playerSpawn: -1,
-    aiCount: 1,
-    aiDifficulty: 'medium',
-    startingCredits: 10000,
-    allyPlayerIds: [],
-  }
+  private config: SkirmishConfig = createDefaultSkirmishConfig()
 
   // Graphic refs for redraws
   private factionButtons: Map<FactionId, { bg: Phaser.GameObjects.Graphics; border: Phaser.GameObjects.Graphics }> = new Map()
@@ -80,7 +55,7 @@ export class SetupScene extends Phaser.Scene {
   private factionSWText!: Phaser.GameObjects.Text
 
   private mapSizeBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
-  private mapVisibilityBtns: Map<boolean, Phaser.GameObjects.Graphics> = new Map()
+  private mapVisibilityBtns: Map<MapVisibility, Phaser.GameObjects.Graphics> = new Map()
   private templateBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private diffBtns: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private creditBtns: Map<number, Phaser.GameObjects.Graphics> = new Map()
@@ -405,9 +380,9 @@ export class SetupScene extends Phaser.Scene {
       settingsX, cy, settingsW,
       'MAP VISIBILITY',
       MAP_VISIBILITY_OPTIONS.map(m => ({ label: m.label, value: m.value })),
-      this.config.revealMap,
-      (v) => { this.config.revealMap = Boolean(v) },
-      this.mapVisibilityBtns,
+      this.config.mapVisibility,
+      (v) => { this.config.mapVisibility = v as MapVisibility },
+      this.mapVisibilityBtns as unknown as Map<string | number | boolean, Phaser.GameObjects.Graphics>,
     )
 
     cy += 16
@@ -886,7 +861,11 @@ export class SetupScene extends Phaser.Scene {
 
   private launchMission() {
     this.sanitizeAllyPlayerIds()
-    const config: SkirmishConfig = { ...this.config, allyPlayerIds: [...this.config.allyPlayerIds] }
+    const config: SkirmishConfig = {
+      ...this.config,
+      revealMap: this.config.mapVisibility === 'allVisible',
+      allyPlayerIds: [...this.config.allyPlayerIds],
+    }
     this.cameras.main.fadeOut(400, 0, 0, 0)
     this.cameras.main.once('camerafadeoutcomplete', () => {
       this.scene.start('GameScene', { config })

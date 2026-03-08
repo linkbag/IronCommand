@@ -35,7 +35,7 @@ const FOG_ALPHA: Record<FogState, number> = {
 
 const ORE_MAX_AMOUNT = ORE_TILE_MAX
 const ORE_SPREAD_INTERVAL_MS = 30000
-const ORE_GROWTH_INTERVAL_MS = 6000  // regenerate every 6s (50 units/tick = ~500/min)
+const ORE_GROWTH_INTERVAL_MS = 6000  // regenerate every 6s (2 units/tick = 20/min)
 
 function scaleColor(color: number, factor: number): number {
   const r = Math.max(0, Math.min(255, Math.round(((color >> 16) & 0xff) * factor)))
@@ -167,8 +167,9 @@ function generateMapData(
 
   switch (resolved) {
     case 'continental':
+      cfg.waterThreshold = 0.73
       cfg.mountainSpine = true
-      cfg.tinyWaterSize = 10
+      cfg.tinyWaterSize = 20
       break
     case 'islands':
       cfg.waterThreshold = 0.60
@@ -238,7 +239,16 @@ function generateMapData(
       const edgeRatio = Phaser.Math.Clamp(edgeDist / Math.max(1, Math.min(width, height) * 0.46), 0, 1)
 
       let waterScore = w
-      if (resolved === 'continental') waterScore += (1 - edgeRatio) * 0.34
+      if (resolved === 'continental') {
+        const nx = (col / Math.max(1, width - 1)) * 2 - 1
+        const ny = (row / Math.max(1, height - 1)) * 2 - 1
+        const radial = Phaser.Math.Clamp(Math.hypot(nx, ny) / 1.4142, 0, 1)
+        const coastBand = Phaser.Math.Clamp((radial - 0.58) / 0.42, 0, 1)
+        const coastNoise = noise.fractal(col * cfg.scale * 0.42 + 700, row * cfg.scale * 0.42 + 700, 3)
+        waterScore += coastBand * 0.48 + (1 - edgeRatio) * 0.12
+        waterScore += coastNoise * 0.12
+        waterScore -= (1 - coastBand) * 0.22
+      }
       if (resolved === 'desert') waterScore += 0.15
       if (resolved === 'urban') waterScore += 0.09
       if (resolved === 'islands') {
@@ -412,13 +422,9 @@ function generateMapData(
   }
 
   if (resolved === 'continental') {
-    carveMeanderingRiver(rng() > 0.35, 1)
-    for (let i = 0; i < 2 + Math.floor(rng() * 2); i++) {
-      carveLake(
-        8 + Math.floor(rng() * (width - 16)),
-        8 + Math.floor(rng() * (height - 16)),
-        3 + Math.floor(rng() * 5),
-      )
+    // Keep continent maps mostly connected: avoid guaranteed rivers/lakes that fragment land.
+    if (rng() > 0.9) {
+      carveMeanderingRiver(rng() > 0.5, 1)
     }
   } else if (resolved === 'islands') {
     connectIslandStraits(4 + Math.floor(rng() * 3))
@@ -458,7 +464,11 @@ function generateMapData(
       for (let col = 1; col < width - 1; col++) {
         const tile = tiles[row][col]
         const waterNeighbors = countNeighbors(col, row, t => t.terrain === TerrainType.WATER)
-        if (tile.terrain !== TerrainType.WATER && waterNeighbors >= 6) edits.push({ col, row, terrain: TerrainType.WATER })
+        if (tile.terrain !== TerrainType.WATER && waterNeighbors >= 6) {
+          if (resolved !== 'continental' || countNeighbors(col, row, t => t.terrain === TerrainType.WATER, false) >= 3) {
+            edits.push({ col, row, terrain: TerrainType.WATER })
+          }
+        }
         if (tile.terrain === TerrainType.WATER && waterNeighbors <= 1) edits.push({ col, row, terrain: TerrainType.SAND })
       }
     }
@@ -491,6 +501,66 @@ function generateMapData(
       if (comp.length < cfg.tinyWaterSize && !touchesEdge) {
         for (const p of comp) setTerrain(tiles[p.row][p.col], TerrainType.SAND)
       }
+    }
+  }
+
+  if (resolved === 'continental') {
+    // Keep one edge-connected ocean component and fill disconnected/inland water to preserve land continuity.
+    const visited = new Uint8Array(width * height)
+    const components: Array<{ cells: TileCoord[]; touchesEdge: boolean }> = []
+    for (let row = 0; row < height; row++) {
+      for (let col = 0; col < width; col++) {
+        if (tiles[row][col].terrain !== TerrainType.WATER) continue
+        const idx = row * width + col
+        if (visited[idx]) continue
+        const queue: TileCoord[] = [{ col, row }]
+        const cells: TileCoord[] = []
+        let touchesEdge = false
+        visited[idx] = 1
+        while (queue.length > 0) {
+          const cur = queue.pop()!
+          cells.push(cur)
+          if (cur.col === 0 || cur.row === 0 || cur.col === width - 1 || cur.row === height - 1) touchesEdge = true
+          for (const [dc, dr] of n4) {
+            const nc = cur.col + dc
+            const nr = cur.row + dr
+            if (!inBounds(nc, nr) || tiles[nr][nc].terrain !== TerrainType.WATER) continue
+            const nIdx = nr * width + nc
+            if (visited[nIdx]) continue
+            visited[nIdx] = 1
+            queue.push({ col: nc, row: nr })
+          }
+        }
+        components.push({ cells, touchesEdge })
+      }
+    }
+
+    let primaryOcean: TileCoord[] = []
+    for (const comp of components) {
+      if (!comp.touchesEdge) continue
+      if (comp.cells.length > primaryOcean.length) primaryOcean = comp.cells
+    }
+
+    const keepWater = new Uint8Array(width * height)
+    for (const p of primaryOcean) keepWater[p.row * width + p.col] = 1
+    for (const comp of components) {
+      for (const p of comp.cells) {
+        if (keepWater[p.row * width + p.col]) continue
+        setTerrain(tiles[p.row][p.col], TerrainType.SAND)
+      }
+    }
+
+    // Trim narrow inland channels/fjords so land stays predominantly continuous.
+    for (let pass = 0; pass < 2; pass++) {
+      const fillCuts: TileCoord[] = []
+      for (let row = 1; row < height - 1; row++) {
+        for (let col = 1; col < width - 1; col++) {
+          if (tiles[row][col].terrain !== TerrainType.WATER) continue
+          const landSides = countNeighbors(col, row, t => t.terrain !== TerrainType.WATER, false)
+          if (landSides >= 3) fillCuts.push({ col, row })
+        }
+      }
+      for (const p of fillCuts) setTerrain(tiles[p.row][p.col], TerrainType.SAND)
     }
   }
 
@@ -1692,11 +1762,8 @@ export class GameMap {
         continue
       }
 
-      // Adjacent ore speeds up regen slightly
-      const adjacentBonus = this.hasAdjacentOre(col, row) ? 1.3 : 1.0
       const maxAmt = ORE_TILE_MAX
-      const regenAmount = Math.floor(ORE_REGEN_RATE * adjacentBonus)
-      tile.oreAmount = Math.min(maxAmt, tile.oreAmount + regenAmount)
+      tile.oreAmount = Math.min(maxAmt, tile.oreAmount + ORE_REGEN_RATE)
 
       if (tile.oreAmount >= maxAmt) {
         this.depletedOreTiles.delete(key)
@@ -1727,19 +1794,6 @@ export class GameMap {
       for (const c of changed) this.redrawTile(c.col, c.row)
       this.renderAnimatedTiles()
     }
-  }
-
-  private hasAdjacentOre(col: number, row: number): boolean {
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dc = -1; dc <= 1; dc++) {
-        if (dr === 0 && dc === 0) continue
-        const tile = this.getTile(col + dc, row + dr)
-        if (tile && (tile.terrain === TerrainType.ORE || tile.terrain === TerrainType.GEMS) && tile.oreAmount > 0) {
-          return true
-        }
-      }
-    }
-    return false
   }
 
   private key(col: number, row: number): number {
