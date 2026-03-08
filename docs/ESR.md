@@ -154,3 +154,7 @@ One regression fixed: attack-move units were blocked from fire-while-moving beca
 ### Update: 2026-03-08 05:07
 ### codex-ic-ai-grand-strategy-goals — 2026-03-08 05:07
 One bug fixed: buildExtraPower() was called on any mild credit overflow (not just when power was needed), causing the AI to spam power plants as its primary spend sink. Reverted condition to needsMorePower() only. All other changes (reserve-based spending, remote hotspot pressure, rebalancing, expansion scoring) are logically sound. tsc --noEmit passes.
+
+### Update: 2026-03-08 05:07
+### codex-ic-hud-font-readability — 2026-03-08 05:07
+Two issues found and fixed: (1) dead abbrev field in BuildableItem removed — it was computed but never read after getShortName was replaced by formatBuildLabel; (2) non-optional _readyTxt.text access in tickSuperweapons changed to _readyTxt?.text for consistency and safety. TypeScript passes cleanly. Layout, logic, and performance are sound.
