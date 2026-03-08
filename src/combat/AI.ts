@@ -375,6 +375,10 @@ export class AI {
     const goalPlan = this.planUltimateGoals(gameState)
     this.executeUltimateGoalPlan(goalPlan, gameState)
 
+    if (this.phase === 'mid' || this.phase === 'late') {
+      this.considerScouting(gameState)
+    }
+
     // Superweapon management (medium/hard only)
     if (this.difficulty !== 'easy') {
       this.tickSuperweapons(gameState)
