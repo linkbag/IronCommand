@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 14:10*
+*Last updated: 2026-03-08 14:41*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -197,3 +197,8 @@ Pause menu and quit-flow implementation is correct. Full pause UI (pause panel, 
 ### Update: 2026-03-08 14:10
 ### codex-ic-ore-regen-hardlock-1pct — 2026-03-08 14:10
 Clean implementation. Single regen path enforced, fully depleted tiles become grass (no regen), partially depleted tiles recover at exactly 1 ore/tick (1% of harvest rate). TypeScript clean, both invariant tests pass. No dangling references to removed code.
+
+### Update: 2026-03-08 14:41
+### Integration Review — 2026-03-08 14:41
+**Subteams:** codex-ic-teams-max4-for-8p codex-ic-ore-regen-hardlock-1pct codex-ic-ra2-mechanics-audit-parity-v2 codex-ic-transport-units-amphib-airlift codex-ic-start-distance-modes-and-neutral-destruction-repair
+**Result:** All 5 subteam branches integrated. Key conflicts resolved: ORE_REGEN_RATE kept at 1 (spec); adjacentBonus not applied (ore-regen invariant test); SkirmishConfig kept in skirmishConfig.ts module with playerTeams/startDistanceMode additions; allyPlayerIds preserved for backward compat; Economy.ts production mult changed from 0.35 to 0.5 per RA2 spec; aircraft RTB/rearm, transport unit boarding, neutral bridge repair, superweapon low-power pause, team alliances, start-distance spawn modes all integrated. Build passes.

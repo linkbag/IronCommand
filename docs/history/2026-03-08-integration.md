@@ -988,3 +988,241 @@
 - **Remaining concerns:**
   - MINIMAP_ALLY_COLOR, MINIMAP_ENEMY_COLOR, MINIMAP_ALLY_OUTLINE, MINIMAP_ENEMY_OUTLINE constants in HUDScene.ts are now unused (minimap switched to per-player slot colors). These are dead code but cause no errors. Can be cleaned up in a follow-up.
   - `considerScouting` was added to AI.ts tick() by the review-fix commit (eaf59ea) in addition to the indentation fix. The scouting method itself was added by 38becbf, so this is correct behavior.
+
+---
+
+# Integration Log: IronCommand next wave: medium->hard remap + Smart Hard Rhizome AI
+**Project:** IronCommand
+**Subteams:** codex-ic-difficulty-medium-to-hard-remap codex-ic-smart-hard-rhizome-protocol
+**Started:** 2026-03-08 14:35:17
+
+## Subteam Summaries
+
+
+========================================
+## Subteam: codex-ic-difficulty-medium-to-hard-remap
+========================================
+# Work Log: codex-ic-difficulty-medium-to-hard-remap
+## Task: ic-difficulty-medium-to-hard-remap (IronCommand)
+## Branch: feat/ic-difficulty-medium-to-hard-remap
+---
+
+### [Step 1] Repo scan and difficulty/persistence surface mapping
+- **Files changed:** none
+- **What:** Inspected `src/scenes/SetupScene.ts`, `src/scenes/GameScene.ts`, `src/combat/AI.ts`, and `src/economy/Economy.ts` to identify all AI difficulty behavior hooks and config flow.
+- **Why:** Needed to implement Medium→Hard behavior remap consistently and identify where config migration safeguards belong.
+- **Decisions:** Chose to implement a centralized config migration/normalization helper plus behavior remap helper rather than ad-hoc conditionals.
+- **Issues found:** No setup/localStorage persistence currently in this branch; migration safety must be implemented proactively at config boundaries.
+
+### [Step 2] Added centralized skirmish config migration/remap helper
+- **Files changed:** `src/config/skirmishConfig.ts`
+- **What:** Created `SkirmishConfig` module with:
+  - `createDefaultSkirmishConfig()` for safe default construction
+  - `migrateSkirmishConfig(raw)` for normalization/migration of incoming setup/save payloads
+  - `normalizeAIDifficulty()` including legacy key/value support (`difficulty`, `normal`, `expert`)
+  - `getBehaviorAIDifficulty()` remap (`medium` -> `hard`) for runtime AI behavior
+- **Why:** Needed one authoritative place for both Medium→Hard behavior remap and safe forward migration of setup configs.
+- **Decisions:** Kept user-facing enum values (`easy|medium|hard`) stable; only runtime behavior mapping changes.
+- **Issues found:** None.
+
+### [Step 3] Wired setup/game scenes to migration helpers and behavior remap
+- **Files changed:** `src/scenes/SetupScene.ts`, `src/scenes/GameScene.ts`
+- **What:**
+  - `SetupScene` now initializes via `createDefaultSkirmishConfig()` and accepts optional incoming config through `init()` using `migrateSkirmishConfig()`.
+  - `launchMission()` now normalizes config before starting `GameScene`.
+  - `GameScene.init()` now migrates/sanitizes incoming config instead of using an inline literal fallback.
+  - AI/economy/production difficulty application now uses `getBehaviorAIDifficulty(cfg.aiDifficulty)`, so selected `medium` runs with previous `hard` behavior.
+- **Why:** Ensures Medium difficulty behavior remap is applied at all gameplay-impacting hooks while making setup/save payload handling robust.
+- **Decisions:** Preserved UI labels/options (`EASY`, `MEDIUM`, `HARD`) to maintain user-facing clarity.
+- **Issues found:** None.
+
+### [Step 4] Verification build
+- **Files changed:** none
+- **What:** Ran `npm run build` (`tsc --noEmit && vite build`).
+- **Why:** Validate compile/runtime bundling after difficulty remap and config migration edits.
+- **Decisions:** Accepted existing Vite chunk-size warning as pre-existing/non-blocking.
+- **Issues found:** Non-blocking bundle size warning (`>500 kB`) persists.
+
+### [Step 5] Commit changes
+- **Files changed:** `src/config/skirmishConfig.ts`, `src/scenes/SetupScene.ts`, `src/scenes/GameScene.ts`
+- **What:** Committed Medium→Hard behavior remap and config migration scaffolding as:
+  - `a250062 feat: remap medium AI behavior to hard with config migration`
+- **Why:** Capture atomic, reviewable change set for integration.
+- **Decisions:** Kept commit scoped to gameplay behavior mapping + config safety only.
+- **Issues found:** None.
+
+## Summary
+- **Total files changed:** 3
+- **Key changes:**
+  - Added `src/config/skirmishConfig.ts` with centralized setup config defaults, migration/normalization, and behavior remap helper.
+  - Updated `SetupScene` to initialize and launch via migrated config payloads while preserving `EASY/MEDIUM/HARD` labels.
+  - Updated `GameScene` to apply behavior remap (`medium` uses `hard` tuning) consistently across AI commander difficulty, AI economy multiplier, and AI production speed.
+- **Build status:** pass (`npm run build`)
+- **Known issues:** existing non-blocking Vite chunk-size warning (>500 kB) remains.
+- **Integration notes:**
+  - Runtime behavior mapping is implemented via `getBehaviorAIDifficulty()` in `src/config/skirmishConfig.ts`.
+  - Config migration supports legacy difficulty key/value forms (`difficulty`, `normal`, `expert`) and sanitizes ally IDs/count bounds.
+  - PR: https://github.com/linkbag/IronCommand/pull/49
+
+### [Step 6] Publish changes for review
+- **Files changed:** none
+- **What:** Pushed branch `feat/ic-difficulty-medium-to-hard-remap` to origin and opened PR via `gh pr create --fill`.
+- **Why:** Complete delivery workflow for reviewer/integrator handoff.
+- **Decisions:** No screenshot attached (no intentional UI visual change).
+- **Issues found:** None.
+
+## Summary
+- **Total files changed:** 3
+- **Key changes:**
+  - Added `src/config/skirmishConfig.ts` with centralized setup config defaults, migration/normalization, and behavior remap helper.
+  - Updated `SetupScene` to initialize and launch via migrated config payloads while preserving `EASY/MEDIUM/HARD` labels.
+  - Updated `GameScene` to apply behavior remap (`medium` uses `hard` tuning) consistently across AI commander difficulty, AI economy multiplier, and AI production speed.
+- **Build status:** pass (`npm run build`)
+- **Known issues:** existing non-blocking Vite chunk-size warning (>500 kB) remains.
+- **Integration notes:**
+  - Runtime behavior mapping is implemented via `getBehaviorAIDifficulty()` in `src/config/skirmishConfig.ts`.
+  - Config migration supports legacy difficulty key/value forms (`difficulty`, `normal`, `expert`) and sanitizes ally IDs/count bounds.
+  - Commit: `a250062`
+  - PR: https://github.com/linkbag/IronCommand/pull/49
+
+========================================
+## Subteam: codex-ic-smart-hard-rhizome-protocol
+========================================
+# Work Log: codex-ic-smart-hard-rhizome-protocol
+## Task: ic-smart-hard-rhizome-protocol (IronCommand)
+## Branch: feat/ic-smart-hard-rhizome-protocol
+---
+
+### [Step 1] Audited AI/difficulty integration points and project test tooling
+- **Files changed:** none
+- **What:** Mapped all difficulty touchpoints across `src/combat/AI.ts`, `src/scenes/SetupScene.ts`, `src/scenes/GameScene.ts`, and `src/economy/Economy.ts`; confirmed no existing automated tests are present.
+- **Why:** Needed exact insertion points for a first-class `smart_hard` tier and to ensure economy/build-speed multipliers also support it.
+- **Decisions:** Implement Smart Hard as an explicit difficulty enum value (not a hidden hard-mode switch) so UI/config/tests/docs can reference it deterministically.
+- **Issues found:** Test harness was missing; deterministic tests require adding a runner/tooling.
+
+### [Step 2] Defined implementation plan for Smart Hard scope
+- **Files changed:** none
+- **What:** Planned code changes spanning type wiring, AI behavior modules, deterministic tests, and docs/history report.
+- **Why:** Scope includes both gameplay behavior and maintainability/testability requirements; sequencing avoids risky AI regressions.
+- **Decisions:** Extract deterministic logic to a pure helper module so tests can validate NC state, overdrive triggers, and potential-field scoring without Phaser scene dependencies.
+- **Issues found:** None.
+
+### [Step 3] Wired `smart_hard` difficulty and implemented Smart Hard AI systems
+- **Files changed:** `src/scenes/SetupScene.ts`, `src/scenes/GameScene.ts`, `src/economy/Economy.ts`, `src/combat/smartHard.ts`, `src/combat/AI.ts`
+- **What:**
+  - Added `smart_hard` to skirmish config + setup UI options.
+  - Added Smart Hard economy/build-speed multipliers.
+  - Added pure Smart Hard module with tunables + deterministic logic helpers (cellular state evaluation, overdrive trigger check, potential-field scoring, rule-of-3 spacing checks).
+  - Extended AI difficulty model and constants for Smart Hard.
+  - Implemented Smart Hard systems in AI:
+    - Metabolic loop with strict organ-priority build ordering (power → refinery → production → expansion).
+    - Rule-of-3 spacing enforcement for organ placements with tracked fallback when map constraints force relaxation.
+    - Cellular unit logic (~2s cadence) with NC-driven states: `isolated_retreat`, `stable_standard`, `pressure_overspill`.
+    - Potential-field rerouting with weighted miner/power/repair attraction and turret/tesla/fog repulsion.
+    - Overdrive mode triggered by enemy SW ETA or base damage window; overdrive suppresses retreat/repulsion and issues periodic flood pushes.
+  - Added telemetry counters/logging for Smart Hard decision pressure and reroutes.
+- **Why:** Implement the requested blended rule-based + emergent Smart Hard behavior while preserving existing hard-mode baseline logic and compatibility.
+- **Decisions:** Preserved hard behavior as `hard+` baseline where appropriate (`hard` and `smart_hard`), then layered Smart Hard-only systems via explicit gates.
+- **Issues found:** Rule-of-3 strictness can fail in tight base layouts; implemented explicit fallback with telemetry count instead of deadlocking builds.
+
+### [Step 4] Added deterministic Smart Hard tests and test tooling
+- **Files changed:** `package.json`, `package-lock.json`, `tests/smartHard.test.ts`
+- **What:**
+  - Added `vitest` and `npm test` script.
+  - Added deterministic tests covering: NC coefficient/state transitions, overdrive trigger thresholds, potential-field score behavior (including repulsion suppression), and Rule-of-3 spacing checks.
+  - Installed dependencies and executed tests successfully.
+- **Why:** Requirement explicitly requested deterministic tests where possible; pure helper module is fully testable independent of Phaser runtime.
+- **Decisions:** Used a focused single test file for Smart Hard pure logic instead of broad integration tests to keep signal high and runtime low.
+- **Issues found:** None.
+
+### [Step 5] Wrote Smart Hard history/tradeoff report
+- **Files changed:** `docs/history/2026-03-08-codex-ic-smart-hard-rhizome-protocol.md`
+- **What:** Added concise documentation describing the new Smart Hard systems, tunables/instrumentation, deterministic tests, and explicit tradeoffs against raw RA2 AI behavior.
+- **Why:** Requirement requested concise docs/history report with design tradeoffs and intent preservation notes.
+- **Decisions:** Focused report on behavior-level deltas and practical consequences rather than implementation internals.
+- **Issues found:** None.
+
+### [Step 6] Verification
+- **Files changed:** none
+- **What:** Executed `npm test` (Vitest) and `npm run build` (tsc + Vite) after Smart Hard implementation.
+- **Why:** Confirm deterministic helper tests pass and gameplay code compiles/builds without type/runtime bundling regressions.
+- **Decisions:** Retained existing production build command; added focused unit tests only for deterministic logic layer.
+- **Issues found:** None. Both commands passed.
+
+## Summary
+- **Total files changed:** 9
+- **Key changes:**
+  - Added new AI tier `smart_hard` across setup config/UI, game wiring, and economy/build-speed multipliers.
+  - Added `src/combat/smartHard.ts` with tunables + deterministic helpers for NC state logic, overdrive trigger checks, potential-field scoring, and rule-of-3 spacing.
+  - Extended `src/combat/AI.ts` with Smart Hard systems: metabolic organ loop, rule-of-3 placement enforcement, 2s cellular state updates, potential-field rerouting, overdrive flood behavior, and telemetry instrumentation.
+  - Added deterministic Vitest coverage in `tests/smartHard.test.ts` and test script/tooling updates in `package.json`/`package-lock.json`.
+  - Added history/tradeoff report in `docs/history/2026-03-08-codex-ic-smart-hard-rhizome-protocol.md`.
+- **Build status:** pass (`npm test`, `npm run build`)
+- **Known issues:** Rule-of-3 spacing can be impossible in cramped late-game bases; AI falls back to non-rule placement and logs this via telemetry (`ruleOfThreeFallbacks`).
+- **Integration notes:** Smart Hard behavior is fully gated behind `aiDifficulty === 'smart_hard'`; existing `easy`/`medium`/`hard` flows remain operational, with hard+ sharing for some baseline tactics.
+
+### [Step 7] Captured UI screenshot for PR
+- **Files changed:** `docs/history/assets/smart-hard-setup.png`
+- **What:** Captured a setup-screen screenshot (shows skirmish setup UI with the new `SMART HARD` difficulty option) using headless browser automation.
+- **Why:** User requirement: include screenshot in PR description for UI changes.
+- **Decisions:** Stored screenshot under `docs/history/assets/` so PR markdown can reference a versioned path.
+- **Issues found:** DOM text selectors were not available for Phaser canvas text; switched to coordinate-based click automation.
+
+## Summary (Final)
+- **Total files changed:** 10
+- **Key changes:**
+  - Added `smart_hard` difficulty plumbing in setup/game/economy systems.
+  - Implemented Smart Hard AI behavior stack in `AI.ts` + deterministic helper module `smartHard.ts`.
+  - Added deterministic tests (`tests/smartHard.test.ts`) and Vitest tooling.
+  - Added design/tradeoff report and UI screenshot artifact.
+- **Build status:** pass (`npm test`, `npm run build`)
+- **Known issues:** Rule-of-3 spacing may fall back in cramped bases; fallback is tracked by telemetry.
+- **Integration notes:** PR includes screenshot asset at `docs/history/assets/smart-hard-setup.png`; behavior gate is strictly `aiDifficulty === 'smart_hard'`.
+
+### [Step 8] Delivery actions completed (commit/push/PR)
+- **Files changed:** none
+- **What:**
+  - Committed implementation + screenshot in two commits:
+    - `93b3da4` feature implementation/tests/docs
+    - `8a1e477` screenshot asset
+  - Pushed branch `feat/ic-smart-hard-rhizome-protocol` to origin.
+  - Opened PR: `https://github.com/linkbag/IronCommand/pull/50`.
+  - Updated PR body with validation commands and embedded UI screenshot.
+- **Why:** Required pipeline completion steps from user instructions.
+- **Decisions:** Used a repo-hosted screenshot URL in PR body to keep review artifacts durable.
+- **Issues found:** `gh pr edit` failed in this environment due deprecated project-card GraphQL field lookup; resolved by using `gh api` PATCH directly.
+
+---
+## Integration Review
+
+### Integration Round 1 — New Subteam Branches (5 branches)
+- **Timestamp:** 2026-03-08 (session 2)
+- **Branches integrated:** feat/ic-teams-max4-for-8p, feat/ic-ore-regen-hardlock-1pct, feat/ic-ra2-mechanics-audit-parity-v2, feat/ic-transport-units-amphib-airlift, feat/ic-start-distance-modes-and-neutral-destruction-repair
+- **Cross-team conflicts found:**
+  1. ORE_REGEN_RATE conflict: all 4 non-ore-regen branches had stale value of 10; integration branch already had 1 (correct per spec). Kept integration value. Added ORE_RECOVERY_RATIO = 0.01 constant as spec demands.
+  2. ORE adjacentBonus conflict: start-distance branch added adjacentBonus to ore regen in GameMap; ore-regen branch's invariant test explicitly forbids this. adjacentBonus NOT applied. ore-regen spec wins.
+  3. SkirmishConfig contract: teams branch moved SkirmishConfig to SetupScene.ts and removed skirmishConfig.ts module; transport/start-distance branches had their own inline definitions. Integration branch kept skirmishConfig.ts and extended it with playerTeams and startDistanceMode fields, plus deriveAlliancesFromTeams() helper. GameScene updated to use team-based alliances when playerTeams provided.
+  4. GameScene large divergence: all subteam branches had significantly less functionality than the integration branch (missing pause panel, move trajectories, enemy hover cursor, etc.). Integration branch's advanced state preserved throughout; only unique new features cherry-picked per branch.
+  5. ra2-parity Unit.ts removes some features integration already has (ore-retarget, auto-acquire scan budget). Kept integration's superior implementation; only aircraft RTB/rearm added as a new system.
+- **Duplicated code merged:**
+  - Economy.ts: LOW_POWER_PRODUCTION_MULT now from types constant (was hardcoded 0.35 in integration, 0.5 per ra2-parity spec)
+  - HUDScene.ts: isLowPowerState() extracted from getPowerSpeedMultiplier; shared by superweapon pause + production slow
+- **Build verified:** PASS (tsc --noEmit clean)
+- **Fixes applied:**
+  1. All 5 types additions integrated into src/types/index.ts
+  2. skirmishConfig.ts extended with playerTeams, startDistanceMode, deriveAlliancesFromTeams
+  3. GameMap.ts: StartDistanceMode parameter threading through all constructor/generate paths
+  4. Economy.ts: LOW_POWER_PRODUCTION_MULT replaces hardcoded 0.35
+  5. AI.ts: superweapon countdown pauses on isPowerLow(); handleTransportHooks() added; transport unit production in army pool
+  6. Combat.ts: engineer neutral structure repair (not capture); createRepairFlash() added
+  7. Unit.ts: aircraft RTB/rearm state machine; transport boarding API (isEmbarked, addTransportedUnit, etc.); load/unload order handling
+  8. EntityManager.ts: getNearestAirfield(); transport load/unload operations; event handlers for find_airfield, request_load_unit, request_transport_unload
+  9. BuildingDefs.ts: neutral_bridge building added with NEUTRAL_BUILDING_IDS updated
+  10. UnitDefs.ts: nighthawk gets transport profile; amphibious_transport new naval unit
+  11. HUDScene.ts: superweapon timer pauses on low power; transport cargo display in selection panel
+  12. SetupScene.ts: START_DISTANCE_OPTIONS radio group added
+  13. oreRecoveryInvariant.test.ts: vitest invariant tests for 1% ore recovery hard-lock
+- **Remaining concerns:**
+  - Teams branch UI for per-slot team assignment in SetupScene not integrated — too invasive given integration branch's more advanced UI. The playerTeams config field is supported but the UI just defaults to 'long_range' distance. Full team cycling UI can be added in a future integration round.
+  - 4 MINIMAP_ALLY/ENEMY color constants in HUDScene.ts remain as dead code (pre-existing, no TS errors).
+  - transport branch's getTransportCargoCount()/getTransportCapacity() methods referenced in HUDScene but implemented differently (via getTransportedUnitIds().length and def.transport.capacity direct access). No TS errors.
