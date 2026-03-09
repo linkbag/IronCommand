@@ -131,9 +131,9 @@ const TECH_CREDIT_THRESHOLD: Record<AIDifficulty, number> = {
 
 const MAX_ARMY: Record<AIDifficulty, number> = {
   easy: 18,
-  medium: 100,
-  hard: 200,
-  smart_hard: 500,                       // Rhizome density logic keeps large groups coherent
+  medium: Infinity,
+  hard: Infinity,
+  smart_hard: Infinity,                  // no cap — AI always maximizes production
 }
 
 const BASE_DEFENSE_RADIUS: Record<AIDifficulty, number> = {
@@ -930,10 +930,10 @@ export class AI {
       return
     }
 
-    // 9. Opportunistic second production lines when economy is strong
+    // 9. Maximize production lines — more factories = more units
     if (this.shouldAddProductionStructures()) {
-      const barracksTarget = this.difficulty !== 'easy' ? 2 : 1
-      const warFactoryTarget = this.difficulty !== 'easy' ? 2 : 1
+      const barracksTarget = this.difficulty === 'easy' ? 1 : this.difficulty === 'medium' ? 3 : 4
+      const warFactoryTarget = this.difficulty === 'easy' ? 1 : this.difficulty === 'medium' ? 3 : 4
       if (this.countBuildings('barracks') < barracksTarget) {
         this.tryBuildBuilding('barracks', true)
         return
@@ -1177,8 +1177,8 @@ export class AI {
     // AI should continuously build and spend credits — queue multiple units per tick
     // Queue units from all available production buildings simultaneously
     const maxQueuePerTick = emergencySpend
-      ? (this.difficulty !== 'easy' ? 8 : 6)
-      : this.difficulty !== 'easy' ? 5 : 2
+      ? (this.difficulty !== 'easy' ? 12 : 6)
+      : this.difficulty !== 'easy' ? 10 : 2  // always maximize production throughput
     let queued = 0
 
     for (let i = 0; i < maxQueuePerTick; i++) {

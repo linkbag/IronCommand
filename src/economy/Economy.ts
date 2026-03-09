@@ -96,11 +96,26 @@ export class Economy extends Phaser.Events.EventEmitter {
   private static readonly OIL_DERRICK_INTERVAL = 10000  // 10 seconds
   private static readonly OIL_DERRICK_INCOME = 100      // credits per tick
 
+  // AI passive income: $100/second constant drip for all AI players
+  private aiPassiveIncomeTimer = 0
+  private static readonly AI_PASSIVE_INCOME_INTERVAL = 1000  // every 1 second
+  private static readonly AI_PASSIVE_INCOME_AMOUNT = 100     // $100 per second
+
   // ── Main update ──────────────────────────────────────────────
 
   update(delta: number, gameState: GameState): void {
     for (const player of gameState.players) {
       this.updatePower(player.id)
+    }
+
+    // AI passive income: constant $100/s for all non-human players
+    this.aiPassiveIncomeTimer += delta
+    if (this.aiPassiveIncomeTimer >= Economy.AI_PASSIVE_INCOME_INTERVAL) {
+      this.aiPassiveIncomeTimer = 0
+      for (const player of gameState.players) {
+        if (player.isDefeated || player.id === gameState.localPlayerId) continue
+        this.addCredits(player.id, Economy.AI_PASSIVE_INCOME_AMOUNT)
+      }
     }
 
     // Oil derrick passive income
