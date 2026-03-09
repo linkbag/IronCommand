@@ -150,8 +150,8 @@ export function enforceEnemySpawnSeparation(
         if (dist >= minSeparation) continue
 
         // Violation: try swapping j's spawn with a farther unused one.
-        // Never touch i===0 (human player's preferred spawn).
-        const targetIdx = i === 0 ? j : j // prefer moving the later player
+        // j is always > i >= 0 so it is never index 0 (human player's preferred spawn).
+        const targetIdx = j
         const used = new Set(result)
         for (let k = 0; k < spawnPositions.length; k++) {
           if (used.has(k) && k !== result[targetIdx]) continue
