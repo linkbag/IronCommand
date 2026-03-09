@@ -264,6 +264,9 @@ export class AI {
 
   // ── Rhizome substrate (smart_hard only) ───────────────────────
   private rhizome: Rhizome | null
+  /** Cached game state from the most recent update() call, used by
+   *  potential-field helpers that don't receive gameState directly. */
+  private cachedState: GameState | null
 
   private static readonly SW_COOLDOWNS: Record<string, number> = {
     nuclear_silo: 300000,
@@ -346,6 +349,7 @@ export class AI {
     this.rhizome = difficulty === 'smart_hard'
       ? new Rhizome(playerId, entityManager, economy)
       : null
+    this.cachedState = null
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -355,6 +359,9 @@ export class AI {
       console.log(`[AI] update() active for player ${this.playerId} (${this.difficulty})`)
       this.updateLogged = true
     }
+
+    // Cache for use by helpers that don't receive gameState (e.g. issueFormationApproach)
+    this.cachedState = gameState
 
     this.mapWidthTiles = gameState.map.width
     this.mapHeightTiles = gameState.map.height
@@ -2015,11 +2022,17 @@ export class AI {
       if (u.state === 'dying') continue
       if (this.isUnitInRetreatingGroup(u.id)) continue
 
-      // Rhizome: isolated units retreat regardless of HP (cellular logic)
+      // Rhizome: density-state cellular logic
       if (this.rhizome) {
         const densityState = this.rhizome.getDensityState(u.id)
         if (densityState === 'isolated') {
+          // Isolated units retreat regardless of HP — they lack support
           u.giveOrder({ type: 'move', target: fallback })
+          continue
+        }
+        if (densityState === 'pressure') {
+          // Pressured units overspill — enemy ratio is high but so are allies;
+          // skip the HP-based retreat check and let them flood forward.
           continue
         }
       }
@@ -2297,6 +2310,14 @@ export class AI {
       const approach = {
         x: target.x - nx * roleDepth * TILE_SIZE + px * lateral,
         y: target.y - ny * roleDepth * TILE_SIZE + py * lateral,
+      }
+      // Rhizome potential-field bias: blend field gradient into approach
+      // waypoint so smart_hard units arc around turrets and escort harvesters.
+      if (this.rhizome && this.cachedState) {
+        const bias = this.rhizome.getPotentialFieldBias(u.x, u.y, this.cachedState)
+        const biasStrength = 2 * TILE_SIZE
+        approach.x += bias.dx * biasStrength
+        approach.y += bias.dy * biasStrength
       }
       u.giveOrder({ type: 'attackMove', target: this.clampToMap(approach) })
     }
@@ -2680,6 +2701,13 @@ export class AI {
           if (this.mapHeightTiles > 0 && row + def.footprint.h > this.mapHeightTiles) continue
 
           if (this.isTileFree(col, row, def.footprint.w, def.footprint.h)) {
+            // Rhizome Rule-of-3: smart_hard enforces minimum spacing between
+            // buildings of the same type to resist AoE bombardment.
+            if (this.rhizome) {
+              const worldX = (col + def.footprint.w / 2) * TILE_SIZE
+              const worldY = (row + def.footprint.h / 2) * TILE_SIZE
+              if (!this.rhizome.meetsSpacingRule(defId, worldX, worldY)) continue
+            }
             return { col, row }
           }
         }
@@ -2761,6 +2789,13 @@ export class AI {
       const row = Math.floor(wy / TILE_SIZE - def.footprint.h / 2)
       if (!this.isPlacementWithinMap(col, row, def.footprint.w, def.footprint.h)) continue
       if (this.isTileFree(col, row, def.footprint.w, def.footprint.h)) {
+        // Rhizome Rule-of-3: spread defenses so a single bombardment can't
+        // hit multiple turrets of the same type.
+        if (this.rhizome) {
+          const worldX = (col + def.footprint.w / 2) * TILE_SIZE
+          const worldY = (row + def.footprint.h / 2) * TILE_SIZE
+          if (!this.rhizome.meetsSpacingRule(def.id, worldX, worldY)) continue
+        }
         return { col, row }
       }
     }
