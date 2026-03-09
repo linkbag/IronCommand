@@ -135,8 +135,8 @@ describe('pre-game map visibility config', () => {
 })
 
 describe('ore recovery tuning', () => {
-  it('sets ore recovery to 1% of ore miner extraction per tick (hardlocked per spec)', () => {
-    expect(ORE_REGEN_RATE).toBe(1)
-    expect(ORE_REGEN_RATE).toBe(ORE_HARVEST_RATE * 0.01)
+  it('sets ore recovery to 0.5% of ore miner extraction per tick (hardlocked per spec)', () => {
+    expect(ORE_REGEN_RATE).toBe(0.5)
+    expect(ORE_REGEN_RATE).toBe(ORE_HARVEST_RATE * 0.005)
   })
 })
