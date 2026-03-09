@@ -64,6 +64,7 @@ type MoveOrderMarker = {
 type PauseExitTarget = 'MenuScene' | 'SetupScene'
 const HUD_BRIDGE_EVENT_NAMES = [
   'clearSelection',
+  'selectUnitTypeMapWide',
   'placeBuilding',
   'sellBuilding',
   'unitProduced',
@@ -1861,7 +1862,7 @@ export class GameScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu()
 
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
-      if (this.paused) return
+      if (this.paused || this.gameOver) return
       const mouseEvent = ptr.event as MouseEvent | undefined
       const button = ptr.button ?? mouseEvent?.button ?? -1
 
@@ -1892,13 +1893,13 @@ export class GameScene extends Phaser.Scene {
     })
 
     this.input.on('pointermove', (ptr: Phaser.Input.Pointer) => {
-      if (this.paused) return
+      if (this.paused || this.gameOver) return
       if (!this.isLeftPointerActive || !ptr.leftButtonDown()) return
       this.updateDragSelect(ptr)
     })
 
     this.input.on('pointerup', (ptr: Phaser.Input.Pointer) => {
-      if (this.paused) return
+      if (this.paused || this.gameOver) return
       if (!this.isLeftPointerActive) return
 
       if (this.isDragging) {
@@ -2248,6 +2249,18 @@ export class GameScene extends Phaser.Scene {
     this.gameState.phase = 'menu'
     this.registry.set('selectedIds', [])
 
+    // Stop all selection pulse tweens so they don't fire callbacks after exit.
+    this.selectionPulseTweens.forEach(tw => tw.stop())
+    this.selectionPulseTweens.clear()
+
+    // Cancel all pending time events (delayed callbacks) and kill active tweens so
+    // no stale callbacks fire during the scene transition window.
+    this.time.removeAllEvents()
+    this.tweens.killAll()
+
+    // Reset canvas cursor so it doesn't stay as a game cursor on the next screen.
+    this.game.canvas.style.cursor = ''
+
     // Registry values are global across scenes; clear match-scoped references before leaving.
     this.registry.remove('gameState')
     this.registry.remove('economy')
@@ -2275,6 +2288,8 @@ export class GameScene extends Phaser.Scene {
     this.pauseOverlay?.setVisible(false)
     this.pausePanel?.setVisible(false)
     this.pauseConfirmPanel?.setVisible(false)
+    // Ensure the canvas cursor is reset in case cleanupMatchRuntimeState wasn't called.
+    this.game.canvas.style.cursor = ''
   }
 
   // ── Isometric input helper ───────────────────────────────────────
