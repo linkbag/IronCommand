@@ -93,6 +93,23 @@ export class SetupScene extends Phaser.Scene {
     super({ key: 'SetupScene' })
   }
 
+  // Called by Phaser before create() on every start/restart.  Clearing Maps here
+  // prevents stale destroyed-object references from lingering if create() is ever
+  // reached with an unexpected execution order.
+  init() {
+    this.factionButtons.clear()
+    this.mapSizeBtns.clear()
+    this.mapVisibilityBtns.clear()
+    this.startDistanceBtns.clear()
+    this.templateBtns.clear()
+    this.diffBtns.clear()
+    this.creditBtns.clear()
+    this.allianceRows.clear()
+    this.spawnMarkers = []
+    this.spawnZones = []
+    this.spawnLegend = undefined
+  }
+
   create() {
     this.config.aiCount = Phaser.Math.Clamp(Math.floor(this.config.aiCount || 1), 1, MAX_AI_PLAYERS)
     this.sanitizeAllyPlayerIds()

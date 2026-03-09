@@ -28,6 +28,8 @@ export class MenuScene extends Phaser.Scene {
   create() {
     const { width, height } = this.scale
 
+    this.flagItems = []
+
     this.createBackground(width, height)
     this.createTitle(width, height)
     this.createButtons(width, height)
