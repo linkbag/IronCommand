@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-09 00:15*
+*Last updated: 2026-03-09 00:26*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -210,3 +210,7 @@ All difficulty medium-to-hard remap changes are correct. 11 constant tables, 25+
 ### Update: 2026-03-09 00:15
 ### claude-ic-no-enemy-in-homebase-r3 — 2026-03-09 00:15
 All 21 tests pass, tsc clean. One dead ternary fixed in enforceEnemySpawnSeparation (targetIdx always j — both branches were identical). Core logic is sound: Chebyshev home-base zones, Euclidean spawn separation, multi-pass swap, safeTile relocation, paratrooper fallback all correct.
+
+### Update: 2026-03-09 00:26
+### claude-ic-smart-hard-rhizome-protocol-r3 — 2026-03-09 00:26
+Rhizome module clean: types pass, 29/29 tests pass, build passes. Fixed 14 AI.ts branches where smart_hard fell through to easy/medium fallback paths (harvester targets, refinery limits, army thresholds, queue sizes, harassment, scouting, target scoring, rebuild, economy expansion, wave cadence, SW build trigger). Known architectural concern (potential fields computed but not driving pathfinding) is not a bug.
