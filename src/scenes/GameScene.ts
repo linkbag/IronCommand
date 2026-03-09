@@ -848,6 +848,21 @@ export class GameScene extends Phaser.Scene {
         const hud = this.scene.get('HUDScene')
         if (hud) hud.events.emit('buildingLost', { defId: entityId })
       }
+
+      // Elimination: if this player now has zero buildings, instantly kill all
+      // their remaining units and mark them defeated.
+      const aliveBuildings = this.entityMgr.getBuildingsForPlayer(playerId)
+        .filter(b => b.state !== 'dying')
+      if (aliveBuildings.length === 0) {
+        const aliveUnits = this.entityMgr.getUnitsForPlayer(playerId)
+          .filter(u => u.state !== 'dying')
+        for (const u of aliveUnits) {
+          u.takeDamage(u.hp + 100, playerId)
+        }
+        const elim = this.gameState.players.find(pl => pl.id === playerId)
+        if (elim) elim.isDefeated = true
+        this.checkWinCondition()
+      }
     })
 
     this.entityMgr.on('unit_damaged', (payload: { unit: { playerId: number; x: number; y: number }; sourcePlayerId: number; amount: number }) => {
