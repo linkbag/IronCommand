@@ -646,13 +646,16 @@ export class SetupScene extends Phaser.Scene {
     const btnW = Math.max(28, Math.floor((w - btnGap * (options.length - 1)) / options.length))
     const btnH = 36
 
+    // Mutable selected value so hover/out handlers always reflect the live selection
+    let selected = current
+
     options.forEach((opt, i) => {
       const bx = x + i * (btnW + btnGap)
       const bg = this.add.graphics()
 
-      const drawState = (selected: boolean, hovered = false) => {
+      const drawState = (isSelected: boolean, hovered = false) => {
         bg.clear()
-        if (selected) {
+        if (isSelected) {
           bg.fillStyle(STYLE.accentDim, 1)
           bg.fillRect(bx, y, btnW, btnH)
           bg.lineStyle(2, STYLE.accent, 1)
@@ -670,7 +673,7 @@ export class SetupScene extends Phaser.Scene {
         }
       }
 
-      drawState(opt.value === current)
+      drawState(opt.value === selected)
       store.set(opt.value, bg)
 
       const lines = opt.label.split('\n')
@@ -697,17 +700,18 @@ export class SetupScene extends Phaser.Scene {
         .setInteractive({ cursor: 'pointer' })
 
       zone.on('pointerover', () => {
-        if (opt.value !== current) drawState(false, true)
+        if (opt.value !== selected) drawState(false, true)
       })
       zone.on('pointerout', () => {
-        drawState(opt.value === current)
+        drawState(opt.value === selected)
       })
       zone.on('pointerdown', () => {
+        selected = opt.value
         store.forEach((g, key) => {
           const idx2 = options.findIndex(o => o.value === key)
           const bx2 = x + idx2 * (btnW + btnGap)
           g.clear()
-          if (key === opt.value) {
+          if (key === selected) {
             g.fillStyle(STYLE.accentDim, 1)
             g.fillRect(bx2, y, btnW, btnH)
             g.lineStyle(2, STYLE.accent, 1)
