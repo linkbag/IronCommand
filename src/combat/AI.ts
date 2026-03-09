@@ -107,10 +107,26 @@ const HARASS_INTERVAL_MS: Record<AIDifficulty, number> = {
 }
 
 const DEFENSE_TARGET: Record<AIDifficulty, number> = {
-  easy: 1,
-  medium: 3,
+  easy: 2,
+  medium: 5,
+  hard: 6,
+  smart_hard: 8,   // heavier base defenses but spread (Rule-of-3 enforced by Rhizome)
+}
+
+// AA turret target count per difficulty (patriot_missile / flak_cannon)
+const AA_DEFENSE_TARGET: Record<AIDifficulty, number> = {
+  easy: 0,
+  medium: 2,
   hard: 3,
-  smart_hard: 4,   // heavier base defenses but spread (Rule-of-3 enforced by Rhizome)
+  smart_hard: 4,
+}
+
+// Credit threshold above which AI will accelerate tech building construction
+const TECH_CREDIT_THRESHOLD: Record<AIDifficulty, number> = {
+  easy: 3000,
+  medium: 2000,
+  hard: 1500,
+  smart_hard: 1200,
 }
 
 const MAX_ARMY: Record<AIDifficulty, number> = {
@@ -837,6 +853,13 @@ export class AI {
           if (!this.hasBuildingPlacedOrConstructing('barracks') && this.tryBuildBuilding('barracks')) return
           if (!this.hasBuildingPlacedOrConstructing('war_factory') && this.tryBuildBuilding('war_factory')) return
           break
+        case 'tech': {
+          // Tech advancement: push toward mid-tech or battle_lab
+          const midTechId = this.side === 'alliance' ? 'air_force_command' : 'radar_tower'
+          if (!this.hasBuildingPlacedOrConstructing(midTechId) && this.tryBuildBuilding(midTechId)) return
+          if (!this.hasBuildingPlacedOrConstructing('battle_lab') && this.tryBuildBuilding('battle_lab')) return
+          break
+        }
         case 'expansion':
           // Fall through to normal tech tree for expansion decisions
           break
@@ -927,11 +950,14 @@ export class AI {
       return
     }
 
-    // 11. Mid-game tech building
+    // 11. Mid-game tech building — push aggressively; hard/smart_hard build as soon as war_factory is up
     const midTechId = this.side === 'alliance' ? 'air_force_command' : 'radar_tower'
     if (!this.hasBuildingPlacedOrConstructing(midTechId)) {
-      const tanksNeeded = this.difficulty === 'easy' ? 3 : 1
-      if (this.countUnitsByCategory('vehicle') >= tanksNeeded) {
+      // easy: wait for 3 vehicles; medium: 1 vehicle; hard/smart_hard: no vehicle gate (credit-driven)
+      const tanksNeeded = this.difficulty === 'easy' ? 3 : this.difficulty === 'medium' ? 1 : 0
+      const credits = this.economy.getCredits(this.playerId)
+      const canTechRush = this.difficulty !== 'easy' && credits >= TECH_CREDIT_THRESHOLD[this.difficulty]
+      if (canTechRush || this.countUnitsByCategory('vehicle') >= tanksNeeded) {
         this.tryBuildBuilding(midTechId)
       }
       return
@@ -943,9 +969,12 @@ export class AI {
       return
     }
 
-    // 13. Battle Lab
+    // 13. Battle Lab — all difficulties push toward it; easy waits for smaller army
     if (!this.hasBuildingPlacedOrConstructing('battle_lab')) {
-      if (this.difficulty !== 'easy' || this.getCombatUnits().length >= 12) {
+      const armyGate = this.difficulty === 'easy' ? 6 : 0  // easy needs small army first; others build immediately
+      const credits = this.economy.getCredits(this.playerId)
+      const creditGate = this.difficulty === 'easy' ? 0 : TECH_CREDIT_THRESHOLD[this.difficulty]
+      if (this.getCombatUnits().length >= armyGate || credits >= creditGate) {
         this.tryBuildBuilding('battle_lab')
       }
       return
@@ -957,8 +986,8 @@ export class AI {
       this.tryBuildBuilding(this.side === 'alliance' ? 'air_force_command' : 'radar_tower', true)
     }
 
-    // 10. Medium/Hard: build superweapons aggressively once battle lab is up
-    if (this.difficulty !== 'easy' && this.hasActiveBuilding('battle_lab')) {
+    // 14b. All difficulties: build superweapons once battle lab is up
+    if (this.hasActiveBuilding('battle_lab')) {
       for (const swId of AI.SW_IDS) {
         const swDef = BUILDING_DEFS[swId]
         if (!swDef) continue
@@ -998,24 +1027,47 @@ export class AI {
   private buildDefenses(): void {
     if (!this.hasActiveBuilding('war_factory')) return
 
-    const target = DEFENSE_TARGET[this.difficulty] + (this.enemyIsRushing ? 1 : 0)
+    // Scale total defense target with game phase: base + 1 for mid, +2 for late
+    const phaseBonus = this.phase === 'late' ? 2 : this.phase === 'mid' ? 1 : 0
+    const rushBonus = this.enemyIsRushing ? 1 : 0
+    const target = DEFENSE_TARGET[this.difficulty] + phaseBonus + rushBonus
 
-    // Early defenses (cheap, available after barracks)
+    // Tier 1: cheap early defenses (available after barracks)
     const earlyDefId = this.side === 'alliance' ? 'pillbox' : 'sentry_gun'
     const earlyCount = this.countBuildings(earlyDefId)
+    // Build up to min(2, target) early defenses first as quick perimeter
     if (earlyCount < Math.min(2, target)) {
       this.tryBuildBuilding(earlyDefId, true)
       return
     }
 
-    // Late defenses (require mid-tech building)
+    // Mid-tech required for advanced defenses
     const midTechId = this.side === 'alliance' ? 'air_force_command' : 'radar_tower'
     if (!this.hasActiveBuilding(midTechId)) return
 
+    // Tier 2: powerful late defenses (prism_tower / tesla_coil)
     const lateDefId = this.side === 'alliance' ? 'prism_tower' : 'tesla_coil'
     const lateCount = this.countBuildings(lateDefId)
     if (lateCount + earlyCount < target) {
       this.tryBuildBuilding(lateDefId, true)
+      return
+    }
+
+    // Tier 3: AA defenses — protect base from air threats
+    const aaTarget = AA_DEFENSE_TARGET[this.difficulty]
+    if (aaTarget > 0) {
+      const aaDefId = this.side === 'alliance' ? 'patriot_missile' : 'flak_cannon'
+      const aaCount = this.countBuildings(aaDefId)
+      if (aaCount < aaTarget) {
+        this.tryBuildBuilding(aaDefId, true)
+        return
+      }
+    }
+
+    // Tier 4: extra early-tier coverage once all advanced defenses are placed
+    // Pad with more pillboxes/sentry guns for outer perimeter in mid/late game
+    if (this.phase !== 'early' && earlyCount < target) {
+      this.tryBuildBuilding(earlyDefId, true)
     }
   }
 
@@ -1199,11 +1251,32 @@ export class AI {
       if (this.canProduceUnit('v3_launcher')) pool.push('v3_launcher')
     }
 
-    // ── Late-tier heavy units ──
+    // ── Mid-tier boost: once mid-tech is up, shift weight toward advanced units ──
+    const hasMidTech = this.side === 'alliance'
+      ? this.hasActiveBuilding('air_force_command')
+      : this.hasActiveBuilding('radar_tower')
+    if (hasMidTech && this.phase !== 'early') {
+      // Reduce basic infantry weight (only 1 slot instead of 2) — tanks and specials preferred
+      if (pool.length >= 2 && pool[0] === basicInf && pool[1] === basicInf) {
+        pool.splice(1, 1) // remove one basic infantry slot
+      }
+      // Extra tank weight in mid-phase
+      if (this.canProduceUnit(mainTank)) pool.push(mainTank)
+    }
+
+    // ── Late-tier heavy units — strongly prefer apex predators when battle_lab is up ──
     if (this.phase === 'late') {
       if (this.side === 'collective') {
-        if (this.canProduceUnit('apocalypse_tank')) pool.push('apocalypse_tank', 'apocalypse_tank')
-        if (this.canProduceUnit('kirov')) pool.push('kirov')
+        if (this.canProduceUnit('apocalypse_tank')) pool.push('apocalypse_tank', 'apocalypse_tank', 'apocalypse_tank')
+        if (this.canProduceUnit('kirov')) pool.push('kirov', 'kirov')
+      } else {
+        // Alliance: boost black_eagle and prism_tank in late phase
+        if (this.canProduceUnit('black_eagle')) pool.push('black_eagle', 'black_eagle')
+        if (this.canProduceUnit('prism_tank')) pool.push('prism_tank', 'prism_tank')
+      }
+      // In late phase, further reduce basic infantry — invest in apex units
+      if (pool.length >= 2 && pool[0] === basicInf && pool[1] === basicInf) {
+        pool.splice(0, 2) // remove both basic infantry slots; late game = high-tier army
       }
     }
 
