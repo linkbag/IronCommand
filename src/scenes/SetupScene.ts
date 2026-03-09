@@ -4,12 +4,12 @@
 // ============================================================
 
 import Phaser from 'phaser'
-import type { FactionId, StartDistanceMode } from '../types'
+import type { FactionId, StartDistanceMode, TeamId } from '../types'
 import { TILE_SIZE } from '../types'
 import { FACTIONS, FACTION_IDS } from '../data/factions'
 import { MAX_AI_PLAYERS, getPlayerSlotColor, playerColorToCss } from '../data/playerSlots'
 import { generatePreviewData, PREVIEW_COLORS } from '../engine/GameMap'
-import { MAP_VISIBILITY_OPTIONS, createDefaultSkirmishConfig } from './skirmishConfig'
+import { MAP_VISIBILITY_OPTIONS, createDefaultSkirmishConfig, DEFAULT_SLOT_TEAMS } from './skirmishConfig'
 import type { SkirmishConfig, MapVisibility } from './skirmishConfig'
 
 import type { MapTemplate } from '../types'
@@ -30,6 +30,14 @@ const STYLE = {
   btnHover: 0x1e2a4a,
   launch: 0xaa2200,
   launchHover: 0xee4400,
+}
+
+const TEAM_IDS: TeamId[] = ['A', 'B', 'C', 'D']
+const TEAM_COLORS: Record<TeamId, number> = {
+  A: 0x4466ee,
+  B: 0xe94560,
+  C: 0x44cc44,
+  D: 0xddbb00,
 }
 
 const MAP_SIZES: Array<{ label: string; value: SkirmishConfig['mapSize']; tiles: string }> = [
@@ -89,6 +97,16 @@ export class SetupScene extends Phaser.Scene {
     toggleW: number
   }> = new Map()
 
+  private teamSelectorRows: Map<number, {
+    rowBg: Phaser.GameObjects.Graphics
+    label: Phaser.GameObjects.Text
+    teamBtns: Map<TeamId, { bg: Phaser.GameObjects.Graphics; text: Phaser.GameObjects.Text; zone: Phaser.GameObjects.Zone }>
+    rowX: number
+    rowY: number
+    rowW: number
+    rowH: number
+  }> = new Map()
+
   constructor() {
     super({ key: 'SetupScene' })
   }
@@ -105,6 +123,7 @@ export class SetupScene extends Phaser.Scene {
     this.diffBtns.clear()
     this.creditBtns.clear()
     this.allianceRows.clear()
+    this.teamSelectorRows.clear()
     this.spawnMarkers = []
     this.spawnZones = []
     this.spawnLegend = undefined
@@ -113,6 +132,9 @@ export class SetupScene extends Phaser.Scene {
   create() {
     this.config.aiCount = Phaser.Math.Clamp(Math.floor(this.config.aiCount || 1), 1, MAX_AI_PLAYERS)
     this.sanitizeAllyPlayerIds()
+    if (!this.config.playerTeams || this.config.playerTeams.length === 0) {
+      this.config.playerTeams = [...DEFAULT_SLOT_TEAMS]
+    }
     const { width, height } = this.scale
 
     this.createBackground(width, height)
@@ -496,6 +518,7 @@ export class SetupScene extends Phaser.Scene {
       this.aiCountText.setText(`${this.config.aiCount}`)
       this.sanitizeAllyPlayerIds()
       this.refreshAllianceRows()
+      this.refreshTeamRows()
       this.regeneratePreview()
     })
     plusZone.on('pointerdown', () => {
@@ -503,6 +526,7 @@ export class SetupScene extends Phaser.Scene {
       this.aiCountText.setText(`${this.config.aiCount}`)
       this.sanitizeAllyPlayerIds()
       this.refreshAllianceRows()
+      this.refreshTeamRows()
       this.regeneratePreview()
     })
     minusZone.on('pointerover', () => minusText.setColor('#ffffff'))
@@ -512,71 +536,69 @@ export class SetupScene extends Phaser.Scene {
 
     cy += 44
 
-    // ── Alliance Picker ───────────────────────────────────────
-    this.add.text(settingsX, cy, 'ALLIANCE PICKER', {
+    // ── Team Assignment ───────────────────────────────────────
+    this.add.text(settingsX, cy, 'TEAM ASSIGNMENT', {
       fontFamily: 'monospace',
       fontSize: '11px',
       color: '#aaaaaa',
     })
     cy += 20
 
-    const rowH = 24
-    const rowGap = 4
-    const colGap = 8
-    const cols = 2
-    const colW = Math.floor((stepperW - colGap) / cols)
-    const toggleW = 74
-    for (let aiId = 1; aiId <= MAX_AI_PLAYERS; aiId++) {
-      const idx = aiId - 1
-      const col = idx % cols
-      const row = Math.floor(idx / cols)
-      const rowX = panelX + 10 + col * (colW + colGap)
-      const rowY = cy + row * (rowH + rowGap)
+    const taRowH = 24
+    const taRowGap = 3
+    const taCols = 2
+    const taColGap = 8
+    const taColW = Math.floor((settingsW - taColGap) / taCols)
+    const taBtnW = 15
+    const taBtnH = 18
+    const taBtnGap = 2
+    const taLabelW = 38
+
+    for (let slot = 0; slot <= MAX_AI_PLAYERS; slot++) {
+      const col = slot % taCols
+      const row = Math.floor(slot / taCols)
+      const rowX = settingsX + col * (taColW + taColGap)
+      const rowY = cy + row * (taRowH + taRowGap)
+
       const rowBg = this.add.graphics()
-      const label = this.add.text(rowX + 8, rowY + rowH / 2, `AI ${aiId}`, {
+      const slotColor = getPlayerSlotColor(slot)
+      const slotLabel = slot === 0 ? 'YOU' : `AI ${slot}`
+      const label = this.add.text(rowX + 4, rowY + taRowH / 2, slotLabel, {
         fontFamily: 'monospace',
         fontSize: '10px',
-        color: playerColorToCss(getPlayerSlotColor(aiId)),
+        color: playerColorToCss(slotColor),
       }).setOrigin(0, 0.5)
 
-      const toggleX = rowX + colW - toggleW - 4
-      const toggleBg = this.add.graphics()
-      const toggleText = this.add.text(toggleX + toggleW / 2, rowY + rowH / 2, '', {
-        fontFamily: 'monospace',
-        fontSize: '10px',
-        color: '#ffffff',
-      }).setOrigin(0.5)
+      const teamBtns: Map<TeamId, { bg: Phaser.GameObjects.Graphics; text: Phaser.GameObjects.Text; zone: Phaser.GameObjects.Zone }> = new Map()
+      const btnsStartX = rowX + 4 + taLabelW + 4
 
-      const zone = this.add.zone(toggleX + toggleW / 2, rowY + rowH / 2, toggleW, rowH)
-        .setInteractive({ cursor: 'pointer' })
+      TEAM_IDS.forEach((tid, tidx) => {
+        const bx = btnsStartX + tidx * (taBtnW + taBtnGap)
+        const by = rowY + (taRowH - taBtnH) / 2
 
-      zone.on('pointerdown', () => {
-        if (aiId > this.config.aiCount) return
-        const idx = this.config.allyPlayerIds.indexOf(aiId)
-        if (idx >= 0) this.config.allyPlayerIds.splice(idx, 1)
-        else {
-          const maxAllies = Math.max(0, this.config.aiCount - 1)
-          if (this.config.allyPlayerIds.length >= maxAllies) return
-          this.config.allyPlayerIds.push(aiId)
-        }
-        this.refreshAllianceRows()
+        const bg = this.add.graphics()
+        const text = this.add.text(bx + taBtnW / 2, by + taBtnH / 2, tid, {
+          fontFamily: 'monospace',
+          fontSize: '9px',
+          color: '#ffffff',
+        }).setOrigin(0.5)
+
+        const zone = this.add.zone(bx + taBtnW / 2, by + taBtnH / 2, taBtnW, taBtnH)
+          .setInteractive({ cursor: 'pointer' })
+
+        zone.on('pointerdown', () => {
+          if (slot > 0 && slot > this.config.aiCount) return
+          if (!this.config.playerTeams) this.config.playerTeams = [...DEFAULT_SLOT_TEAMS]
+          this.config.playerTeams[slot] = tid
+          this.refreshTeamRows()
+        })
+
+        teamBtns.set(tid, { bg, text, zone })
       })
 
-      this.allianceRows.set(aiId, {
-        rowBg,
-        label,
-        toggleBg,
-        toggleText,
-        zone,
-        rowX,
-        rowY,
-        rowW: colW,
-        rowH,
-        toggleX,
-        toggleW,
-      })
+      this.teamSelectorRows.set(slot, { rowBg, label, teamBtns, rowX, rowY, rowW: taColW, rowH: taRowH })
     }
-    this.refreshAllianceRows()
+    this.refreshTeamRows()
   }
 
   private sanitizeAllyPlayerIds() {
@@ -624,6 +646,71 @@ export class SetupScene extends Phaser.Scene {
       row.zone.setPosition(row.toggleX + row.toggleW / 2, row.rowY + row.rowH / 2)
       row.toggleText.setPosition(row.toggleX + row.toggleW / 2, row.rowY + row.rowH / 2)
       row.zone.input!.enabled = visible
+    }
+  }
+
+  private refreshTeamRows() {
+    if (!this.config.playerTeams) {
+      this.config.playerTeams = [...DEFAULT_SLOT_TEAMS]
+    }
+    const taBtnW = 15
+    const taBtnH = 18
+    const taBtnGap = 2
+    const taLabelW = 38
+
+    for (let slot = 0; slot <= MAX_AI_PLAYERS; slot++) {
+      const row = this.teamSelectorRows.get(slot)
+      if (!row) continue
+
+      const visible = slot === 0 || slot <= this.config.aiCount
+      const currentTeam = (this.config.playerTeams[slot] ?? DEFAULT_SLOT_TEAMS[slot]) as TeamId
+      const slotColor = getPlayerSlotColor(slot)
+
+      row.rowBg.clear()
+      if (visible) {
+        row.rowBg.fillStyle(STYLE.btnNormal, 1)
+        row.rowBg.fillRect(row.rowX, row.rowY, row.rowW, row.rowH)
+        row.rowBg.lineStyle(1, slotColor, 0.4)
+        row.rowBg.strokeRect(row.rowX, row.rowY, row.rowW, row.rowH)
+      }
+
+      const btnsStartX = row.rowX + 4 + taLabelW + 4
+
+      TEAM_IDS.forEach((tid, tidx) => {
+        const btnEntry = row.teamBtns.get(tid)
+        if (!btnEntry) return
+
+        const bx = btnsStartX + tidx * (taBtnW + taBtnGap)
+        const by = row.rowY + (row.rowH - taBtnH) / 2
+        const isSelected = currentTeam === tid
+        const teamColor = TEAM_COLORS[tid]
+
+        btnEntry.bg.clear()
+        if (visible) {
+          if (isSelected) {
+            btnEntry.bg.fillStyle(teamColor, 0.9)
+            btnEntry.bg.fillRect(bx, by, taBtnW, taBtnH)
+            btnEntry.bg.lineStyle(1, teamColor, 1)
+            btnEntry.bg.strokeRect(bx, by, taBtnW, taBtnH)
+            btnEntry.text.setColor('#ffffff')
+          } else {
+            btnEntry.bg.fillStyle(STYLE.btnNormal, 1)
+            btnEntry.bg.fillRect(bx, by, taBtnW, taBtnH)
+            btnEntry.bg.lineStyle(1, teamColor, 0.35)
+            btnEntry.bg.strokeRect(bx, by, taBtnW, taBtnH)
+            btnEntry.text.setColor('#555566')
+          }
+        }
+
+        btnEntry.bg.setVisible(visible)
+        btnEntry.text.setVisible(visible)
+        btnEntry.zone.setVisible(visible)
+        if (btnEntry.zone.input) btnEntry.zone.input.enabled = visible
+      })
+
+      row.rowBg.setVisible(visible)
+      row.label.setVisible(visible)
+      row.label.setColor(playerColorToCss(slotColor))
     }
   }
 
