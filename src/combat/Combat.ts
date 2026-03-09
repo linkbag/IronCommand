@@ -214,17 +214,17 @@ export class Combat extends Phaser.Events.EventEmitter {
       if (attacker.def.id === 'engineer' && target instanceof Building && target.playerId !== attacker.playerId) {
         const isNeutralTarget = target.playerId === NEUTRAL_PLAYER_ID
         const isBridgeStructure = target.def.id === 'neutral_bridge'
-        if (isNeutralTarget && target.hp < target.def.stats.maxHp) {
-          // Repair damaged neutral structure (e.g. collapsed bridge)
-          const repaired = target.repair(1_000_000_000)
-          if (repaired > 0) {
-            this.createRepairFlash(target.x, target.y)
-          }
-          console.log('[Engineer] Neutral repair', { engineerId: attacker.id, buildingId: target.id })
-          return
-        }
+        // Bridges are always repaired (never captured); other neutral buildings are captured.
         if (isNeutralTarget && isBridgeStructure) {
-          console.log('[Engineer] Bridge is intact; no capture', { engineerId: attacker.id, buildingId: target.id })
+          if (target.hp < target.def.stats.maxHp) {
+            const repaired = target.repair(1_000_000_000)
+            if (repaired > 0) {
+              this.createRepairFlash(target.x, target.y)
+            }
+            console.log('[Engineer] Bridge repaired', { engineerId: attacker.id, buildingId: target.id })
+          } else {
+            console.log('[Engineer] Bridge is intact; no action', { engineerId: attacker.id, buildingId: target.id })
+          }
           return
         }
         // Capture: switch building ownership and sacrifice engineer
