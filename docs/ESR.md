@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-08 14:41*
+*Last updated: 2026-03-09 00:11*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -202,3 +202,7 @@ Clean implementation. Single regen path enforced, fully depleted tiles become gr
 ### Integration Review — 2026-03-08 14:41
 **Subteams:** codex-ic-teams-max4-for-8p codex-ic-ore-regen-hardlock-1pct codex-ic-ra2-mechanics-audit-parity-v2 codex-ic-transport-units-amphib-airlift codex-ic-start-distance-modes-and-neutral-destruction-repair
 **Result:** All 5 subteam branches integrated. Key conflicts resolved: ORE_REGEN_RATE kept at 1 (spec); adjacentBonus not applied (ore-regen invariant test); SkirmishConfig kept in skirmishConfig.ts module with playerTeams/startDistanceMode additions; allyPlayerIds preserved for backward compat; Economy.ts production mult changed from 0.35 to 0.5 per RA2 spec; aircraft RTB/rearm, transport unit boarding, neutral bridge repair, superweapon low-power pause, team alliances, start-distance spawn modes all integrated. Build passes.
+
+### Update: 2026-03-09 00:11
+### claude-ic-difficulty-medium-to-hard-remap-r3 — 2026-03-09 00:11
+All difficulty medium-to-hard remap changes are correct. 11 constant tables, 25+ behavioral branches, and 4 three-way ternaries all properly updated. rebuildDestroyedBuildings refactor is safe (easy early-return guard at line 2232). TypeScript clean.
