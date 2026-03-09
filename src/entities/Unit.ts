@@ -713,18 +713,23 @@ export class Unit extends Phaser.GameObjects.Container {
         break
 
       case 'load':
-        // Move toward the transport entity if needed; EntityManager handles actual boarding
+        // Move toward the transport entity; EntityManager handles actual boarding via request_load_unit.
+        // Use 1.5-tile threshold so it stays within the transport's loadRangeTiles (1.85 tiles default).
         this.state = 'idle'
         this.path = []
         this.target = null
         if (order.targetEntityId) {
           this.emit('resolve_target', order.targetEntityId, (ref: IEntityRef) => {
-            if (ref && Phaser.Math.Distance.Between(this.x, this.y, ref.x, ref.y) > TILE_SIZE * 2) {
+            if (ref && Phaser.Math.Distance.Between(this.x, this.y, ref.x, ref.y) > TILE_SIZE * 1.5) {
               this.startMoveTo({ x: ref.x, y: ref.y })
             } else {
               this.emit('request_load_unit', this.id, order.targetEntityId)
+              // Always advance the order queue — whether load succeeds or not, this order is done.
+              this.processNextOrder()
             }
           })
+        } else {
+          this.processNextOrder()
         }
         break
 
