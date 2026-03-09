@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-09 00:11*
+*Last updated: 2026-03-09 00:15*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -206,3 +206,7 @@ Clean implementation. Single regen path enforced, fully depleted tiles become gr
 ### Update: 2026-03-09 00:11
 ### claude-ic-difficulty-medium-to-hard-remap-r3 — 2026-03-09 00:11
 All difficulty medium-to-hard remap changes are correct. 11 constant tables, 25+ behavioral branches, and 4 three-way ternaries all properly updated. rebuildDestroyedBuildings refactor is safe (easy early-return guard at line 2232). TypeScript clean.
+
+### Update: 2026-03-09 00:15
+### claude-ic-no-enemy-in-homebase-r3 — 2026-03-09 00:15
+All 21 tests pass, tsc clean. One dead ternary fixed in enforceEnemySpawnSeparation (targetIdx always j — both branches were identical). Core logic is sound: Chebyshev home-base zones, Euclidean spawn separation, multi-pass swap, safeTile relocation, paratrooper fallback all correct.
