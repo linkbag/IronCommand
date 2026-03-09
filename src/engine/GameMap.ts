@@ -690,7 +690,7 @@ function generateMapData(
 }
 
 const SPAWN_EDGE_MARGIN = 6
-const SPAWN_MIN_DISTANCE_RATIO = 0.25
+const SPAWN_MIN_DISTANCE_RATIO = 0.20
 const SPAWN_ORE_RADIUS_TILES = 15
 const SPAWN_ORE_CLUSTER_RADIUS = 3
 
@@ -705,8 +705,7 @@ interface SpawnCandidate {
 
 function computeSpawnCountForSize(w: number, h: number): number {
   const maxDim = Math.max(w, h)
-  if (maxDim <= 64) return 4
-  if (maxDim <= 128) return 6
+  if (maxDim <= 64) return 6
   return 8
 }
 
