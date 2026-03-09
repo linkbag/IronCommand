@@ -1009,7 +1009,7 @@ function computeStartPositions(
 ): Position[] {
   const count = computeSpawnCountForSize(w, h)
   const rng = makePRNG((seed ^ spawnTemplateOffset(template) ^ spawnDistanceOffset(startDistanceMode) ^ (w << 16) ^ h) >>> 0)
-  // close_battle: spawns can be ~40% closer; long_range: standard 25% map-diagonal minimum
+  // close_battle: spawns can be ~40% closer; long_range: standard 20% map-diagonal minimum
   const minDistRatio = startDistanceMode === 'close_battle'
     ? SPAWN_MIN_DISTANCE_RATIO * 0.6
     : SPAWN_MIN_DISTANCE_RATIO
