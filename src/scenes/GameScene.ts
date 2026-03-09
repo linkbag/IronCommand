@@ -659,15 +659,23 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.fadeIn(500)
   }
 
+  private consecutiveErrors = 0
   update(_time: number, delta: number) {
     if (this.paused) return
-    try { this._updateInternal(delta) } catch (e) {
-      console.error('[IC] update() error:', e)
-      this.gameOver = true  // Stop further updates
-      this.add.text(100, 150, `UPDATE CRASH: ${e}`, {
-        fontFamily: 'monospace', fontSize: '14px', color: '#ff4444',
-        wordWrap: { width: this.scale.width - 200 }
-      }).setScrollFactor(0).setDepth(9999)
+    try {
+      this._updateInternal(delta)
+      this.consecutiveErrors = 0  // Reset on successful frame
+    } catch (e) {
+      this.consecutiveErrors++
+      console.warn(`[IC] update() error (${this.consecutiveErrors} consecutive):`, e)
+      // Only hard-crash after 100 consecutive errors — transient entity nulls are expected
+      if (this.consecutiveErrors > 100) {
+        this.gameOver = true
+        this.add.text(100, 150, `UPDATE CRASH: ${e}`, {
+          fontFamily: 'monospace', fontSize: '14px', color: '#ff4444',
+          wordWrap: { width: this.scale.width - 200 }
+        }).setScrollFactor(0).setDepth(9999)
+      }
     }
   }
 

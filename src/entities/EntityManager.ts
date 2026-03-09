@@ -430,10 +430,10 @@ export class EntityManager extends Phaser.Events.EventEmitter {
 
   update(delta: number): void {
     for (const unit of this.units.values()) {
-      unit.update(delta)
+      try { unit.update(delta) } catch (e) { /* entity destroyed mid-tick */ }
     }
     for (const building of this.buildings.values()) {
-      building.update(delta)
+      try { building.update(delta) } catch (e) { /* entity destroyed mid-tick */ }
     }
 
     // Unit separation — nudge overlapping units apart (run every 3 frames for perf)

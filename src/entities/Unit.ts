@@ -79,6 +79,11 @@ export class Unit extends Phaser.GameObjects.Container {
   private target: IEntityRef | null
   private autoAcquireScanCooldownMs = 0
 
+  /** Check if a target entity ref is still valid (not destroyed/nulled by Phaser) */
+  private isTargetValid(t: IEntityRef | null): t is IEntityRef {
+    return !!t && typeof t.x === 'number' && typeof t.y === 'number' && !isNaN(t.x) && !isNaN(t.y)
+  }
+
   // RA2 Veterancy: 0 = rookie, 1 = veteran (3 kills), 2 = elite (7 kills)
   kills = 0
   veterancy = 0
@@ -950,7 +955,7 @@ export class Unit extends Phaser.GameObjects.Container {
     if (!this.def.attack) return
 
     // Preserve user intent on explicit attack orders: keep firing only that target.
-    if (this.currentOrder?.type === 'attack' && this.target && this.target.hp > 0 && this.canAttackTarget(this.target)) {
+    if (this.currentOrder?.type === 'attack' && this.isTargetValid(this.target) && this.target.hp > 0 && this.canAttackTarget(this.target)) {
       const targetDist = Phaser.Math.Distance.Between(this.x, this.y, this.target.x, this.target.y)
       if (targetDist <= this.getEffectiveAttackRangePixels()) {
         this.fireAtTarget(this.target)
@@ -1065,8 +1070,8 @@ export class Unit extends Phaser.GameObjects.Container {
       return
     }
 
-    // Validate target still alive
-    if (!this.target || this.target.hp <= 0) {
+    // Validate target still alive and valid (entity may have been destroyed by Phaser)
+    if (!this.isTargetValid(this.target) || this.target.hp <= 0) {
       if (this.currentOrder?.type === 'attackMove' && this.updateAttackMove()) {
         return
       }
