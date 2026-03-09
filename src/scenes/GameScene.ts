@@ -19,6 +19,14 @@ import { TILE_SIZE, STARTING_CREDITS, TerrainType, FogState, DamageType, NEUTRAL
 import { cartToScreen, screenToCart, getIsoWorldBounds } from '../engine/IsoUtils'
 import { FACTIONS } from '../data/factions'
 import type { SkirmishConfig } from './SetupScene'
+import {
+  HOME_BASE_RADIUS_TILES,
+  isInAnyEnemyBase,
+  relocateTileFromEnemyBases,
+  validateSpawnSeparation,
+  enforceEnemySpawnSeparation,
+  type SpawnInfo,
+} from '../engine/spawnValidation'
 
 // Unit acknowledgment lines
 const ACK_LINES: Record<string, string[]> = {
@@ -1145,58 +1153,113 @@ export class GameScene extends Phaser.Scene {
     const { startPositions } = this.gameMap.data
     const { tiles, width, height } = this.gameMap.data
     const players = this.gameState.players
-    const spawnAssignment = this.computeSpawnAssignment(players.length, startPositions.length)
+
+    // ── 1. Compute spawn assignments and enforce cross-team separation ───────
+    const baseAssignment = this.computeSpawnAssignment(players.length, startPositions.length)
+
+    // Convert start positions to tile coords for separation checks
+    const spawnTiles = startPositions.map(sp => this.gameMap.worldToTile(sp.x, sp.y))
+
+    // Attempt to move any enemy-pair spawns that are dangerously close together
+    const spawnAssignment = enforceEnemySpawnSeparation(
+      players.map(p => p.id),
+      spawnTiles,
+      baseAssignment,
+      (a, b) => this.entityMgr.isEnemy(a, b),
+    )
+
+    // Persist final assignment so other systems (e.g. paratroopers) can look up bases
+    players.forEach((player, i) => {
+      this.playerSpawnIndexById.set(player.id, spawnAssignment[i] ?? 0)
+    })
+
+    // ── 2. Validate and warn if any violations remain (e.g. map too small) ──
+    const spawnInfos: SpawnInfo[] = players.map((p, i) => {
+      const sp = startPositions[spawnAssignment[i] ?? 0] ?? startPositions[0]
+      const t = this.gameMap.worldToTile(sp.x, sp.y)
+      return { col: t.col, row: t.row, playerId: p.id }
+    })
+    const violations = validateSpawnSeparation(spawnInfos, (a, b) => this.entityMgr.isEnemy(a, b))
+    if (violations.length > 0) {
+      console.warn('[IC] Spawn separation violations (map may be too small):', violations)
+    }
 
     console.log('[IC] spawnStartingEntities:', players.length, 'players,',
       startPositions.length, 'start positions')
 
     players.forEach((player, i) => {
       const spawnIdx = spawnAssignment[i] ?? 0
-      this.playerSpawnIndexById.set(player.id, spawnIdx)
       const spawnWorld = startPositions[spawnIdx] ?? startPositions[0]
       const st = this.gameMap.worldToTile(spawnWorld.x, spawnWorld.y)
       const side: FactionSide = FACTIONS[player.faction].side
       console.log(`[IC] Player ${player.id} (${player.faction}/${side}) spawn[${spawnIdx}]: tile(${st.col},${st.row}) world(${spawnWorld.x},${spawnWorld.y})`)
 
+      // ── 3. Collect enemy base tiles for home-base protection checks ────────
+      // A tile is "in an enemy base" if it falls inside any other player's
+      // protected home-base zone AND that player is an enemy of this player.
+      const enemySpawnTiles = players
+        .filter((_, j) => j !== i && this.entityMgr.isEnemy(player.id, players[j].id))
+        .map(ep => {
+          const epIdx = spawnAssignment[players.indexOf(ep)] ?? 0
+          const epSp = startPositions[epIdx] ?? startPositions[0]
+          return this.gameMap.worldToTile(epSp.x, epSp.y)
+        })
+
+      /**
+       * Ensure a building tile doesn't land inside an enemy home base.
+       * If it does, relocate outward from this player's own spawn.
+       */
+      const safeTile = (col: number, row: number): { col: number; row: number } =>
+        relocateTileFromEnemyBases(col, row, st.col, st.row, enemySpawnTiles, width, height)
+
+      // ── 4. Place starting buildings with home-base protection ──────────────
+
       // Construction Yard — start active
+      const cyTile = safeTile(st.col - 1, st.row - 1)
       const cy = this.entityMgr.createBuilding(player.id, 'construction_yard',
-        st.col - 1, st.row - 1)
+        cyTile.col, cyTile.row)
       if (cy) {
         cy.state = 'active'
         this.onBuildingActivated(cy)
       }
       else console.error(`[IC] FAILED to create Construction Yard for player ${player.id}`)
 
+      if (cyTile.col !== st.col - 1 || cyTile.row !== st.row - 1) {
+        console.warn(`[IC] Player ${player.id} CY relocated from enemy base zone: (${st.col - 1},${st.row - 1}) → (${cyTile.col},${cyTile.row})`)
+      }
+
       // Side-appropriate Power Building — start active
       const powerDefId = getPowerBuildingDefId(side)
-      const pp = this.entityMgr.createBuilding(player.id, powerDefId,
-        st.col + 3, st.row - 1)
+      const ppTile = safeTile(st.col + 3, st.row - 1)
+      const pp = this.entityMgr.createBuilding(player.id, powerDefId, ppTile.col, ppTile.row)
       if (pp) {
         pp.state = 'active'
         this.onBuildingActivated(pp)
       }
 
       // Ore Refinery — start active
+      const refTile = safeTile(st.col - 1, st.row + 3)
       const ref = this.entityMgr.createBuilding(player.id, 'ore_refinery',
-        st.col - 1, st.row + 3)
+        refTile.col, refTile.row)
       if (ref) {
         ref.state = 'active'
         this.onBuildingActivated(ref)
       }
 
-      // Side-appropriate Harvester — find nearest ore and auto-send
+      // ── 5. Harvester: place near own spawn (not in enemy base) ────────────
       const harvesterDefId = getHarvesterDefId(side)
+      const hvBaseTile = safeTile(st.col + 2, st.row + 3)
       const hv = this.entityMgr.createUnit(player.id, harvesterDefId,
-        spawnWorld.x + TILE_SIZE * 2, spawnWorld.y + TILE_SIZE * 3)
+        hvBaseTile.col * TILE_SIZE, hvBaseTile.row * TILE_SIZE)
       if (hv) {
         if (ref) hv.setRefineryId(ref.id)
         // Find nearest ore tile and send harvester there immediately
         const origin = this.gameMap.worldToTile(hv.x, hv.y)
         let sent = false
-        for (let radius = 1; radius <= 40 && !sent; radius++) {
-          for (let dr = -radius; dr <= radius && !sent; dr++) {
-            for (let dc = -radius; dc <= radius && !sent; dc++) {
-              if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue
+        for (let searchRadius = 1; searchRadius <= 40 && !sent; searchRadius++) {
+          for (let dr = -searchRadius; dr <= searchRadius && !sent; dr++) {
+            for (let dc = -searchRadius; dc <= searchRadius && !sent; dc++) {
+              if (Math.abs(dr) !== searchRadius && Math.abs(dc) !== searchRadius) continue
               const tc = origin.col + dc, tr = origin.row + dr
               if (tc < 0 || tc >= width || tr < 0 || tr >= height) continue
               if ((tiles[tr]?.[tc]?.oreAmount ?? 0) > 0) {
@@ -1208,12 +1271,12 @@ export class GameScene extends Phaser.Scene {
         }
       }
 
-      // 2 basic infantry flanking the base (side-appropriate)
+      // ── 6. 2 basic infantry flanking the base ─────────────────────────────
       const infantryDefId = getBasicInfantryDefId(side)
       for (let j = 0; j < 2; j++) {
+        const infTile = safeTile(st.col - 3 + j * 2, st.row + 1)
         this.entityMgr.createUnit(player.id, infantryDefId,
-          spawnWorld.x - TILE_SIZE * 3 + j * TILE_SIZE * 2,
-          spawnWorld.y + TILE_SIZE)
+          infTile.col * TILE_SIZE, infTile.row * TILE_SIZE)
       }
     })
   }
@@ -2555,9 +2618,27 @@ export class GameScene extends Phaser.Scene {
       cx = t.x + Phaser.Math.Between(-TILE_SIZE * 2, TILE_SIZE * 2)
       cy = t.y + Phaser.Math.Between(-TILE_SIZE * 2, TILE_SIZE * 2)
     } else {
-      const spawn = this.getSpawnPositionForPlayer(playerId) ?? this.gameMap.data.startPositions[0]
-      cx = spawn.x + TILE_SIZE * 4
-      cy = spawn.y + TILE_SIZE * 2
+      // No enemy buildings yet — drop near an ENEMY player's start zone instead
+      // of own base. This prevents paratroopers from spawning inside the human
+      // player's home base when the enemy has no established buildings.
+      const players = this.gameState.players
+      const enemyPlayers = players.filter(p => p.id !== playerId && this.entityMgr.isEnemy(playerId, p.id))
+      const targetPlayer = enemyPlayers.length > 0
+        ? Phaser.Utils.Array.GetRandom(enemyPlayers)
+        : null
+      const targetSpawn = targetPlayer
+        ? this.getSpawnPositionForPlayer(targetPlayer.id)
+        : null
+
+      if (targetSpawn) {
+        cx = targetSpawn.x + Phaser.Math.Between(-TILE_SIZE * 3, TILE_SIZE * 3)
+        cy = targetSpawn.y + Phaser.Math.Between(-TILE_SIZE * 3, TILE_SIZE * 3)
+      } else {
+        // Last resort: centre of map (no enemies exist — this case shouldn't occur in practice)
+        const { width, height } = this.gameMap.data
+        cx = (width / 2) * TILE_SIZE
+        cy = (height / 2) * TILE_SIZE
+      }
     }
 
     const count = 5
