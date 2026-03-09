@@ -64,7 +64,7 @@ type EnemyMacroIntel = {
 const TICK_INTERVAL: Record<AIDifficulty, number> = {
   easy: 3000,
   medium: 1200,
-  hard: 1200,
+  hard: 500,
   smart_hard: 800,   // Rhizome ticks faster — metabolic loop needs fine-grained updates
 }
 
@@ -86,14 +86,14 @@ const ATTACK_INTERVAL_MS: Record<AIDifficulty, { min: number; max: number }> = {
 const FIRST_ATTACK_MS: Record<AIDifficulty, number> = {
   easy: 300000,
   medium: 120000,
-  hard: 120000,
+  hard: 60000,
   smart_hard: 90000,  // 90s — Rhizome's metabolic loop builds efficiently enough for early pressure
 }
 
 const ATTACK_WAVE_SIZE: Record<AIDifficulty, { min: number; max: number }> = {
   easy: { min: 4, max: 8 },
   medium: { min: 8, max: 20 },
-  hard: { min: 8, max: 20 },
+  hard: { min: 20, max: 50 },
   smart_hard: { min: 10, max: 25 },  // large waves; Rhizome density logic prevents suicidal small groups
 }
 
@@ -102,7 +102,7 @@ const STAGING_HOLD_MS = 5000
 const HARASS_INTERVAL_MS: Record<AIDifficulty, number> = {
   easy: 100000,
   medium: 25000,
-  hard: 25000,
+  hard: 20000,
   smart_hard: 15000,                     // relentless harassment every 15s
 }
 
@@ -126,14 +126,14 @@ const TECH_CREDIT_THRESHOLD: Record<AIDifficulty, number> = {
   easy: 3000,
   medium: 2000,
   hard: 1500,
-  smart_hard: 1200,
+  smart_hard: 500,
 }
 
 const MAX_ARMY: Record<AIDifficulty, number> = {
   easy: 18,
-  medium: 50,
-  hard: 50,
-  smart_hard: 65,                        // Rhizome density logic keeps large groups coherent
+  medium: 100,
+  hard: 200,
+  smart_hard: 500,                       // Rhizome density logic keeps large groups coherent
 }
 
 const BASE_DEFENSE_RADIUS: Record<AIDifficulty, number> = {
