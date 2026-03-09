@@ -280,7 +280,7 @@ export class GameScene extends Phaser.Scene {
     )
     for (const p of aiPlayers) {
       this.economy.setAIDifficulty(p.id, cfg.aiDifficulty)
-      const buildSpeed = cfg.aiDifficulty === 'hard' ? 1.3 : 1.0
+      const buildSpeed = cfg.aiDifficulty === 'smart_hard' ? 1.4 : cfg.aiDifficulty === 'hard' ? 1.3 : 1.0
       this.production.setPlayerBuildSpeedMultiplier(p.id, buildSpeed)
     }
     } catch (e) { console.error('[IC] CRASH in section 8 (AI):', e); throw e }

@@ -20,7 +20,7 @@ export interface SkirmishConfig {
   mapSeed: number
   playerSpawn: number           // -1 = random, 0-7 = specific spawn index
   aiCount: number
-  aiDifficulty: 'easy' | 'medium' | 'hard'
+  aiDifficulty: 'easy' | 'medium' | 'hard' | 'smart_hard'
   startingCredits: number
   allyPlayerIds: number[] // AI player IDs allied with human player (player 0)
 }
@@ -48,9 +48,10 @@ const MAP_SIZES: Array<{ label: string; value: SkirmishConfig['mapSize']; tiles:
 ]
 
 const DIFFICULTIES: Array<{ label: string; value: SkirmishConfig['aiDifficulty'] }> = [
-  { label: 'EASY',   value: 'easy' },
-  { label: 'MEDIUM', value: 'medium' },
-  { label: 'HARD',   value: 'hard' },
+  { label: 'EASY',       value: 'easy' },
+  { label: 'MEDIUM',     value: 'medium' },
+  { label: 'HARD',       value: 'hard' },
+  { label: 'SMART HARD', value: 'smart_hard' },
 ]
 
 const CREDIT_OPTIONS = [5000, 10000, 20000]

@@ -14,12 +14,13 @@ interface PowerState {
   isLow: boolean
 }
 
-type Difficulty = 'easy' | 'medium' | 'hard'
+type Difficulty = 'easy' | 'medium' | 'hard' | 'smart_hard'
 
 const AI_INCOME_MULT: Record<Difficulty, number> = {
   easy: 0.85,
   medium: 1.0,
   hard: 1.25,
+  smart_hard: 1.35,   // Rhizome's metabolic refinery priority means income needs a slight edge
 }
 
 export class Economy extends Phaser.Events.EventEmitter {
