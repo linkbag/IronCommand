@@ -204,6 +204,19 @@ export class Building extends Phaser.GameObjects.Container {
       return
     }
 
+    // State was externally promoted to 'active' (e.g. GameScene sets building.state = 'active'
+    // right after creation). The construction mask was never cleared, so bodyGraphic is invisible.
+    // Finalize construction visuals now.
+    if (this.constructionProgress < 1) {
+      this.constructionProgress = 1
+      this.setAlpha(1)
+      this.visualRoot.y = 0
+      this.bodyGraphic.clearMask(false)
+      this.constructionOverlay.clear()
+      this.constructionMaskShape.clear()
+      this.drawBody()
+    }
+
     this.attackCooldown = Math.max(0, this.attackCooldown - delta / 1000)
 
     // Damage smoke when below 50% HP
