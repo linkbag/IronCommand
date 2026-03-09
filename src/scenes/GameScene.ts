@@ -2185,11 +2185,12 @@ export class GameScene extends Phaser.Scene {
     const bg = this.add.rectangle(0, 0, 260, 46, baseColor, 1)
       .setStrokeStyle(2, borderColor, 0.82)
       .setInteractive({ useHandCursor: true })
+      .setScrollFactor(0)  // Must be 0: input hit-test reads this directly (not via container)
     const txt = this.add.text(0, 0, label, {
       fontFamily: 'monospace',
       fontSize: '23px',
       color: '#ffffff',
-    }).setOrigin(0.5)
+    }).setOrigin(0.5).setScrollFactor(0)
 
     bg.on('pointerover', () => bg.setFillStyle(hoverColor, 1))
     bg.on('pointerout', () => bg.setFillStyle(baseColor, 1))
@@ -2199,7 +2200,7 @@ export class GameScene extends Phaser.Scene {
       onClick()
     })
 
-    return this.add.container(0, 0, [bg, txt])
+    return this.add.container(0, 0, [bg, txt]).setScrollFactor(0)
   }
 
   private openPauseQuitConfirmation(target: PauseExitTarget): void {
