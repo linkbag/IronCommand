@@ -39,9 +39,10 @@ const MAP_SIZES: Array<{ label: string; value: SkirmishConfig['mapSize']; tiles:
 ]
 
 const DIFFICULTIES: Array<{ label: string; value: SkirmishConfig['aiDifficulty'] }> = [
-  { label: 'EASY',   value: 'easy' },
-  { label: 'MEDIUM', value: 'medium' },
-  { label: 'HARD',   value: 'hard' },
+  { label: 'EASY',       value: 'easy' },
+  { label: 'MEDIUM',     value: 'medium' },
+  { label: 'HARD',       value: 'hard' },
+  { label: 'SMART HARD', value: 'smart_hard' },
 ]
 
 const CREDIT_OPTIONS = [5000, 10000, 20000]

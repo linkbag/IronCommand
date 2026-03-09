@@ -15,8 +15,9 @@ import { FACTIONS } from '../data/factions'
 import { Unit } from '../entities/Unit'
 import type { Building } from '../entities/Building'
 import { buildUltimateGoalPlan, type AIUltimateGoalDirective, type AIUltimateGoalSignals } from './AIGoals'
+import { Rhizome } from './Rhizome'
 
-export type AIDifficulty = 'easy' | 'medium' | 'hard'
+export type AIDifficulty = 'easy' | 'medium' | 'hard' | 'smart_hard'
 
 type AIPhase = 'early' | 'mid' | 'late'
 
@@ -64,18 +65,21 @@ const TICK_INTERVAL: Record<AIDifficulty, number> = {
   easy: 3000,
   medium: 1200,
   hard: 1200,
+  smart_hard: 800,   // Rhizome ticks faster — metabolic loop needs fine-grained updates
 }
 
 const INFANTRY_BEFORE_WAR_FACTORY: Record<AIDifficulty, number> = {
   easy: 2,
   medium: 6,
   hard: 6,
+  smart_hard: 4,   // Rhizome manages early army composition; don't over-queue infantry
 }
 
 const ATTACK_INTERVAL_MS: Record<AIDifficulty, { min: number; max: number }> = {
   easy: { min: 120000, max: 170000 },
   medium: { min: 40000, max: 70000 },
   hard: { min: 40000, max: 70000 },
+  smart_hard: { min: 25000, max: 50000 }, // Rhizome overdrive can further compress this
 }
 
 // Hard/Medium: first attack comes at 2 minutes
@@ -83,12 +87,14 @@ const FIRST_ATTACK_MS: Record<AIDifficulty, number> = {
   easy: 300000,
   medium: 120000,
   hard: 120000,
+  smart_hard: 90000,  // 90s — Rhizome's metabolic loop builds efficiently enough for early pressure
 }
 
 const ATTACK_WAVE_SIZE: Record<AIDifficulty, { min: number; max: number }> = {
   easy: { min: 4, max: 8 },
   medium: { min: 8, max: 20 },
   hard: { min: 8, max: 20 },
+  smart_hard: { min: 10, max: 25 },  // large waves; Rhizome density logic prevents suicidal small groups
 }
 
 const STAGING_HOLD_MS = 5000
@@ -97,30 +103,35 @@ const HARASS_INTERVAL_MS: Record<AIDifficulty, number> = {
   easy: 100000,
   medium: 25000,
   hard: 25000,
+  smart_hard: 15000,                     // relentless harassment every 15s
 }
 
 const DEFENSE_TARGET: Record<AIDifficulty, number> = {
   easy: 1,
   medium: 3,
   hard: 3,
+  smart_hard: 4,   // heavier base defenses but spread (Rule-of-3 enforced by Rhizome)
 }
 
 const MAX_ARMY: Record<AIDifficulty, number> = {
   easy: 18,
   medium: 50,
   hard: 50,
+  smart_hard: 65,                        // Rhizome density logic keeps large groups coherent
 }
 
 const BASE_DEFENSE_RADIUS: Record<AIDifficulty, number> = {
   easy: 8,
   medium: 15,
   hard: 15,
+  smart_hard: 18,
 }
 
 const DEFENDER_RESPONSE_RADIUS: Record<AIDifficulty, number> = {
   easy: 15,
   medium: 40,
   hard: 40,
+  smart_hard: 55,
 }
 
 const RETREAT_HEALTH_PCT = 0.35
@@ -143,6 +154,7 @@ const REBUILD_RECOVERY_MS: Record<AIDifficulty, number> = {
   easy: 70000,
   medium: 40000,
   hard: 40000,
+  smart_hard: 25000,  // Rhizome organ-health priority ensures rapid rebuild
 }
 const DANGER_ZONE_RADIUS = 5 * TILE_SIZE
 const DANGER_ZONE_TTL_MS = 120000
@@ -247,6 +259,9 @@ export class AI {
   private scoutVisitMs: Map<string, number>
   private transportHookTimer: number
 
+  // ── Rhizome substrate (smart_hard only) ───────────────────────
+  private rhizome: Rhizome | null
+
   private static readonly SW_COOLDOWNS: Record<string, number> = {
     nuclear_silo: 300000,
     weather_device: 300000,
@@ -323,6 +338,11 @@ export class AI {
     this.lastEmergencySellMs = -EMERGENCY_SELL_COOLDOWN_MS
     this.scoutVisitMs = new Map()
     this.transportHookTimer = 0
+
+    // Rhizome substrate — only active at smart_hard difficulty
+    this.rhizome = difficulty === 'smart_hard'
+      ? new Rhizome(playerId, entityManager, economy)
+      : null
   }
 
   // ── Main update ──────────────────────────────────────────────
@@ -345,6 +365,9 @@ export class AI {
     this.matchTimer += delta
     this.transportHookTimer += delta
     this.updateEconomyTelemetry(delta)
+
+    // Update Rhizome substrate every frame (density + overdrive tracking)
+    this.rhizome?.update(delta, gameState)
 
     this.updatePendingWave(delta)
 
@@ -788,6 +811,27 @@ export class AI {
     const basicInfantry = getBasicInfantryDefId(this.side)
     const underEarlyPressure = this.isUnderEarlyPressure(gameState)
     const hardOpening = this.difficulty !== 'easy' && this.matchTimer < 210000
+
+    // ── Rhizome metabolic-loop organ priority (smart_hard only) ──
+    // Overrides normal tech-tree when a critical organ category is deficient.
+    if (this.rhizome) {
+      const organPriority = this.rhizome.getOrganPriority(gameState)
+      switch (organPriority) {
+        case 'power':
+          if (this.tryBuildBuilding(powerId)) return
+          break
+        case 'refinery':
+          if (this.tryBuildBuilding('ore_refinery')) return
+          break
+        case 'production':
+          if (!this.hasBuildingPlacedOrConstructing('barracks') && this.tryBuildBuilding('barracks')) return
+          if (!this.hasBuildingPlacedOrConstructing('war_factory') && this.tryBuildBuilding('war_factory')) return
+          break
+        case 'expansion':
+          // Fall through to normal tech tree for expansion decisions
+          break
+      }
+    }
 
     // 1. Power first
     if (!this.hasBuildingPlacedOrConstructing(powerId)) {
@@ -1459,7 +1503,11 @@ export class AI {
     const opportunistic = this.shouldLaunchOpportunisticAttack(combatUnits.length)
     if (!opportunistic && this.matchTimer < FIRST_ATTACK_MS[this.difficulty]) return
     if (!opportunistic && this.matchTimer < this.rebuildUntilMs) return
-    if (!opportunistic && this.attackTimer < this.nextAttackWindowMs) return
+    // Rhizome overdrive halves the attack cooldown — flood behaviour
+    const effectiveWindow = this.rhizome?.isOverdriveActive()
+      ? this.nextAttackWindowMs * 0.5
+      : this.nextAttackWindowMs
+    if (!opportunistic && this.attackTimer < effectiveWindow) return
 
     const target = this.findAttackTarget(gameState)
     if (!target) return
@@ -1956,9 +2004,23 @@ export class AI {
   private retreatDamagedUnits(): void {
     const fallback = this.getFallbackPosition()
     if (!fallback) return
+
+    // Rhizome overdrive suppresses all retreat logic — units flood forward
+    if (this.rhizome?.isOverdriveActive()) return
+
     for (const u of this.getCombatUnits()) {
       if (u.state === 'dying') continue
       if (this.isUnitInRetreatingGroup(u.id)) continue
+
+      // Rhizome: isolated units retreat regardless of HP (cellular logic)
+      if (this.rhizome) {
+        const densityState = this.rhizome.getDensityState(u.id)
+        if (densityState === 'isolated') {
+          u.giveOrder({ type: 'move', target: fallback })
+          continue
+        }
+      }
+
       const hpPct = u.hp / Math.max(1, u.def.stats.maxHp)
       const vetThreshold = u.veterancy >= 2 ? 0.62 : u.veterancy >= 1 ? 0.5 : RETREAT_HEALTH_PCT
       const localEnemy = this.findClosestEnemyEntity(u.x, u.y, 7 * TILE_SIZE)
@@ -3076,6 +3138,24 @@ export class AI {
 
   private tickSuperweapons(gameState: GameState): void {
     const interval = TICK_INTERVAL[this.difficulty]
+
+    // Notify Rhizome of the nearest enemy SW threat so overdrive can react
+    if (this.rhizome) {
+      let minEnemyCooldown = Infinity
+      for (const p of gameState.players) {
+        if (p.isDefeated || !this.isEnemyPlayer(p.id)) continue
+        for (const swId of AI.SW_IDS) {
+          for (const b of this.em.getBuildingsForPlayer(p.id)) {
+            if (b.def.id === swId && b.state === 'active') {
+              // Estimate enemy cooldown by checking if they have the building
+              // We don't have exact enemy timers — use a pessimistic estimate
+              minEnemyCooldown = Math.min(minEnemyCooldown, 0) // treat any active SW as near-ready
+            }
+          }
+        }
+      }
+      this.rhizome.notifyEnemySwCooldown(minEnemyCooldown)
+    }
 
     // Track superweapon buildings and countdown timers
     for (const swId of AI.SW_IDS) {

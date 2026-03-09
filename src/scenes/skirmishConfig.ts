@@ -16,7 +16,7 @@ export interface SkirmishConfig {
   mapSeed: number
   playerSpawn: number           // -1 = random, 0-7 = specific spawn index
   aiCount: number
-  aiDifficulty: 'easy' | 'medium' | 'hard'
+  aiDifficulty: 'easy' | 'medium' | 'hard' | 'smart_hard'
   startingCredits: number
   allyPlayerIds: number[]       // AI player IDs allied with human player (player 0)
   playerTeams?: TeamId[]        // team assignment per slot (0..7); if provided, overrides allyPlayerIds
