@@ -18,7 +18,7 @@ type Difficulty = 'easy' | 'medium' | 'hard'
 
 const AI_INCOME_MULT: Record<Difficulty, number> = {
   easy: 0.85,
-  medium: 1.0,
+  medium: 1.25,
   hard: 1.25,
 }
 
