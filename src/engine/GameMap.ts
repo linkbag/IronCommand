@@ -690,7 +690,7 @@ function generateMapData(
 }
 
 const SPAWN_EDGE_MARGIN = 6
-const SPAWN_MIN_DISTANCE_RATIO = 0.25
+const SPAWN_MIN_DISTANCE_RATIO = 0.20
 const SPAWN_ORE_RADIUS_TILES = 15
 const SPAWN_ORE_CLUSTER_RADIUS = 3
 
@@ -705,8 +705,7 @@ interface SpawnCandidate {
 
 function computeSpawnCountForSize(w: number, h: number): number {
   const maxDim = Math.max(w, h)
-  if (maxDim <= 64) return 4
-  if (maxDim <= 128) return 6
+  if (maxDim <= 64) return 6
   return 8
 }
 
@@ -1010,7 +1009,7 @@ function computeStartPositions(
 ): Position[] {
   const count = computeSpawnCountForSize(w, h)
   const rng = makePRNG((seed ^ spawnTemplateOffset(template) ^ spawnDistanceOffset(startDistanceMode) ^ (w << 16) ^ h) >>> 0)
-  // close_battle: spawns can be ~40% closer; long_range: standard 25% map-diagonal minimum
+  // close_battle: spawns can be ~40% closer; long_range: standard 20% map-diagonal minimum
   const minDistRatio = startDistanceMode === 'close_battle'
     ? SPAWN_MIN_DISTANCE_RATIO * 0.6
     : SPAWN_MIN_DISTANCE_RATIO
