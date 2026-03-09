@@ -114,8 +114,8 @@ function mockEntityManager(
 }
 
 /** Creates a minimal mock Economy */
-function mockEconomy() {
-  return {} as unknown as import('../economy/Economy').Economy
+function mockEconomy(credits = 0) {
+  return { getCredits: () => credits } as unknown as import('../economy/Economy').Economy
 }
 
 /** Creates a minimal GameState with a fog-of-war map */
@@ -195,11 +195,12 @@ describe('RHIZOME_PARAMS', () => {
     expect(RHIZOME_PARAMS.PRESSURE_ENEMY_RATIO).toBe(1.5)
   })
 
-  it('organ priority order is power→refinery→production→expansion', () => {
+  it('organ priority order is power→refinery→production→tech→expansion', () => {
     expect(RHIZOME_PARAMS.ORGAN_PRIORITY[0]).toBe('power')
     expect(RHIZOME_PARAMS.ORGAN_PRIORITY[1]).toBe('refinery')
     expect(RHIZOME_PARAMS.ORGAN_PRIORITY[2]).toBe('production')
-    expect(RHIZOME_PARAMS.ORGAN_PRIORITY[3]).toBe('expansion')
+    expect(RHIZOME_PARAMS.ORGAN_PRIORITY[3]).toBe('tech')
+    expect(RHIZOME_PARAMS.ORGAN_PRIORITY[4]).toBe('expansion')
   })
 })
 
@@ -245,7 +246,7 @@ describe('Rhizome.getOrganPriority', () => {
     expect(r.getOrganPriority(mockGameState())).toBe('production')
   })
 
-  it('returns "expansion" when all organ targets are met', () => {
+  it('returns "tech" when production targets are met, no tech buildings, and credits allow', () => {
     const buildings = [
       mockBuilding({ defId: 'power_plant', category: 'power', providespower: 200, state: 'active' }),
       mockBuilding({ id: 'b2', defId: 'ore_refinery', category: 'production', state: 'active' }),
@@ -254,7 +255,35 @@ describe('Rhizome.getOrganPriority', () => {
       mockBuilding({ id: 'b5', defId: 'war_factory', category: 'production', state: 'active' }),
     ]
     const em = mockEntityManager(buildings, [])
-    const r = new Rhizome(1, em, mockEconomy())
+    const r = new Rhizome(1, em, mockEconomy(RHIZOME_PARAMS.TECH_CREDIT_MIN))
+    expect(r.getOrganPriority(mockGameState())).toBe('tech')
+  })
+
+  it('returns "expansion" when all organ targets are met and tech building exists', () => {
+    const buildings = [
+      mockBuilding({ defId: 'power_plant', category: 'power', providespower: 200, state: 'active' }),
+      mockBuilding({ id: 'b2', defId: 'ore_refinery', category: 'production', state: 'active' }),
+      mockBuilding({ id: 'b3', defId: 'ore_refinery', category: 'production', state: 'active' }),
+      mockBuilding({ id: 'b4', defId: 'barracks', category: 'production', state: 'active' }),
+      mockBuilding({ id: 'b5', defId: 'war_factory', category: 'production', state: 'active' }),
+      mockBuilding({ id: 'b6', defId: 'air_force_command', category: 'tech', state: 'active' }),
+    ]
+    const em = mockEntityManager(buildings, [])
+    const r = new Rhizome(1, em, mockEconomy(5000))
+    expect(r.getOrganPriority(mockGameState())).toBe('expansion')
+  })
+
+  it('returns "expansion" when all organ targets are met and credits below tech threshold', () => {
+    const buildings = [
+      mockBuilding({ defId: 'power_plant', category: 'power', providespower: 200, state: 'active' }),
+      mockBuilding({ id: 'b2', defId: 'ore_refinery', category: 'production', state: 'active' }),
+      mockBuilding({ id: 'b3', defId: 'ore_refinery', category: 'production', state: 'active' }),
+      mockBuilding({ id: 'b4', defId: 'barracks', category: 'production', state: 'active' }),
+      mockBuilding({ id: 'b5', defId: 'war_factory', category: 'production', state: 'active' }),
+    ]
+    const em = mockEntityManager(buildings, [])
+    // 0 credits — below TECH_CREDIT_MIN — so tech is not triggered
+    const r = new Rhizome(1, em, mockEconomy(0))
     expect(r.getOrganPriority(mockGameState())).toBe('expansion')
   })
 })

@@ -18,8 +18,8 @@ export const RHIZOME_PARAMS = {
 
   // ── Metabolic Loop ─────────────────────────────────────────────────────────
 
-  /** Ordered build priority: power → refinery → production → expansion */
-  ORGAN_PRIORITY: ['power', 'refinery', 'production', 'expansion'] as const,
+  /** Ordered build priority: power → refinery → production → tech → expansion */
+  ORGAN_PRIORITY: ['power', 'refinery', 'production', 'tech', 'expansion'] as const,
 
   /**
    * Rule-of-3: minimum tile distance between buildings of the same def.
@@ -40,6 +40,12 @@ export const RHIZOME_PARAMS = {
 
   /** Target count of production buildings before switching to expansion. */
   PRODUCTION_COUNT_TARGET: 2,
+
+  /**
+   * Minimum credits before Rhizome will allocate to tech building construction.
+   * Prevents starving income by building expensive tech too early.
+   */
+  TECH_CREDIT_MIN: 1200,
 
   // ── Cellular Unit Logic (NC Density) ───────────────────────────────────────
 
@@ -248,7 +254,16 @@ export class Rhizome {
       return 'production'
     }
 
-    // 4. Expand tech/economy/territory
+    // 4. Tech advancement: if no tech buildings exist and economy allows, push toward tech ceiling
+    const techBuildings = active.filter(b => b.def.category === 'tech')
+    if (techBuildings.length === 0) {
+      const credits = this.economy.getCredits(this.playerId)
+      if (credits >= RHIZOME_PARAMS.TECH_CREDIT_MIN) {
+        return 'tech'
+      }
+    }
+
+    // 5. Expand tech/economy/territory
     return 'expansion'
   }
 
