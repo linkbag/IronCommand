@@ -41,8 +41,6 @@ export class Building extends Phaser.GameObjects.Container {
   private selectionOutline: Phaser.GameObjects.Graphics
   private rallyLine: Phaser.GameObjects.Graphics
   private constructionOverlay: Phaser.GameObjects.Graphics
-  private constructionMaskShape: Phaser.GameObjects.Graphics
-  private constructionMask: Phaser.Display.Masks.GeometryMask
   private labelText: Phaser.GameObjects.Text
   private isSelected: boolean
   private factionColor: number
@@ -86,7 +84,6 @@ export class Building extends Phaser.GameObjects.Container {
     this.selectionOutline = scene.add.graphics()
     this.rallyLine = scene.add.graphics()
     this.constructionOverlay = scene.add.graphics()
-    this.constructionMaskShape = scene.add.graphics().setAlpha(0)
     this.bodyGraphic = scene.add.graphics()
     this.healthBar = scene.add.graphics()
     this.labelText = scene.add.text(0, 0, '', {
@@ -102,7 +99,6 @@ export class Building extends Phaser.GameObjects.Container {
       this.selectionOutline,
       this.rallyLine,
       this.constructionOverlay,
-      this.constructionMaskShape,
       this.bodyGraphic,
       this.healthBar,
       this.labelText,
@@ -112,8 +108,6 @@ export class Building extends Phaser.GameObjects.Container {
     this.drawBody()
     this.drawHealthBar()
     this.drawSelectionOutline()
-    this.constructionMask = this.constructionMaskShape.createGeometryMask()
-    this.bodyGraphic.setMask(this.constructionMask)
 
     scene.add.existing(this)
     this.updateRenderTransform()
@@ -205,15 +199,12 @@ export class Building extends Phaser.GameObjects.Container {
     }
 
     // State was externally promoted to 'active' (e.g. GameScene sets building.state = 'active'
-    // right after creation). The construction mask was never cleared, so bodyGraphic is invisible.
-    // Finalize construction visuals now.
+    // right after creation). Finalize construction visuals now.
     if (this.constructionProgress < 1) {
       this.constructionProgress = 1
       this.setAlpha(1)
-      this.visualRoot.y = 0
-      this.bodyGraphic.clearMask(false)
+      this.bodyGraphic.setAlpha(1)
       this.constructionOverlay.clear()
-      this.constructionMaskShape.clear()
       this.drawBody()
     }
 
@@ -319,8 +310,7 @@ export class Building extends Phaser.GameObjects.Container {
   private playConstructionAnimation(): void {
     this.setAlpha(0.3)
     this.constructionProgress = 0
-    this.visualRoot.y = 14
-    this.updateConstructionMask()
+    this.bodyGraphic.setAlpha(0)
     this.drawConstructionOverlay()
   }
 
@@ -328,16 +318,17 @@ export class Building extends Phaser.GameObjects.Container {
     const buildTime = this.def.stats.buildTime * 1000 || 100
     this.constructionProgress = Math.min(1, this.constructionProgress + delta / buildTime)
     this.setAlpha(0.3 + this.constructionProgress * 0.7)
-    this.visualRoot.y = (1 - this.constructionProgress) * 14
-    this.updateConstructionMask()
+    // Fade body in as construction progresses (alpha 0→1)
+    this.bodyGraphic.setAlpha(this.constructionProgress)
+    // Slide-in effect: ADD downward offset on top of the iso base position set by updateRenderTransform()
+    this.visualRoot.y += (1 - this.constructionProgress) * 14
     this.drawConstructionOverlay()
 
     if (this.constructionProgress >= 1) {
       this.state = 'active'
-      this.visualRoot.y = 0
-      this.bodyGraphic.clearMask(false)
+      // updateRenderTransform() already set the correct base position; don't override y
+      this.bodyGraphic.setAlpha(1)
       this.constructionOverlay.clear()
-      this.constructionMaskShape.clear()
       this.drawBody()
       this.emit('construction_complete', this)
     }
@@ -355,17 +346,6 @@ export class Building extends Phaser.GameObjects.Container {
       dims.halfW * 2,
       fillH,
     )
-  }
-
-  private updateConstructionMask(): void {
-    const dims = this.getBoxDims()
-    const totalH = dims.wallH + dims.halfH * 2 + 10
-    const totalW = dims.halfW * 2 + 10
-    const revealH = totalH * this.constructionProgress
-    const bottomY = dims.baseY + dims.halfH + 5
-    this.constructionMaskShape.clear()
-    this.constructionMaskShape.fillStyle(0xffffff, 1)
-    this.constructionMaskShape.fillRect(-totalW / 2, bottomY - revealH, totalW, revealH)
   }
 
   // ── Private: simple 3D box rendering ────────────────────────
