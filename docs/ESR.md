@@ -1,5 +1,5 @@
 # IronCommand — Executive Summary Report (ESR)
-*Last updated: 2026-03-09 00:40*
+*Last updated: 2026-03-09 12:44*
 
 ## What We've Built
 <!-- High-level summary of what exists -->
@@ -219,3 +219,7 @@ Rhizome module clean: types pass, 29/29 tests pass, build passes. Fixed 14 AI.ts
 ### Integration Review — 2026-03-09 00:40
 **Subteams:** claude-ic-no-enemy-in-homebase-r3 claude-ic-difficulty-medium-to-hard-remap-r3 claude-ic-smart-hard-rhizome-protocol-r3
 **Result:** All 3 subteam branches integrated. 5 cherry-pick conflicts resolved: (1) AI.ts difficulty-remap vs rhizome — kept !=easy branches, merged Rhizome wiring, added smart_hard to 3 missing constant tables; (2) GameScene.ts homebase import conflict — kept skirmishConfig module, added spawnValidation imports; (3) GameScene.ts buildSpeed — smart_hard=1.4, medium/hard=1.3, easy=1.0; (4) SetupScene.ts — dropped inline SkirmishConfig redeclaration, added smart_hard to skirmishConfig.ts union; (5) vitest.config.ts pattern broadened to find Rhizome.test.ts and tests/ dir. Stale ore-regen test (2%) fixed to match invariant (1%). review-fix c0f16e1 skipped (all 17 changes redundant vs difficulty-remap). Build: tsc clean. Tests: 62/62 pass.
+
+### Update: 2026-03-09 12:44
+### claude-ic-setup-button-selection — 2026-03-09 12:44
+Fix is correct and minimal. Mutable `selected` closure variable properly initialized from `current`, updated on click, and used consistently in all hover/out/down handlers. Parameter rename (`selected` -> `isSelected` in drawState) correctly avoids shadowing. tsc clean.
