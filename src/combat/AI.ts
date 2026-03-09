@@ -408,6 +408,7 @@ export class AI {
 
   private tick(gameState: GameState): void {
     const buildings = this.em.getBuildingsForPlayer(this.playerId)
+      .filter(b => b && b.state !== 'dying')
     if (buildings.length === 0) return
     this.trackBaseLossState(buildings.length)
 

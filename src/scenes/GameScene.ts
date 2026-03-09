@@ -720,7 +720,11 @@ export class GameScene extends Phaser.Scene {
 
     // AI decision making
     for (const ai of this.aiCommanders) {
-      ai.update(delta, this.gameState)
+      try {
+        ai.update(delta, this.gameState)
+      } catch (e) {
+        console.warn(`[AI] tick error (non-fatal):`, e)
+      }
     }
     if (this.gameState.tick % 600 === 0 && this.aiCommanders.length > 0) {
       console.log(`[IC] AI updates running for ${this.aiCommanders.length} commander(s)`)
