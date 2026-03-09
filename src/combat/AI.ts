@@ -168,16 +168,19 @@ const OPPORTUNISTIC_MIN_ARMY: Record<AIDifficulty, number> = {
   easy: 8,
   medium: 7,
   hard: 6,
+  smart_hard: 5,  // Rhizome overdrive makes opportunistic attacks more aggressive
 }
 const MIN_HOME_GARRISON: Record<AIDifficulty, number> = {
   easy: 1,
   medium: 3,
   hard: 5,
+  smart_hard: 6,  // heavier garrison; Rhizome Rule-of-3 spreads turrets across base
 }
 const MAX_DEFENDER_COMMIT: Record<AIDifficulty, number> = {
   easy: 4,
   medium: 8,
   hard: 12,
+  smart_hard: 14, // can commit more defenders due to overdrive flood mode replenishing army
 }
 
 // ── Helpers ────────────────────────────────────────────────────
